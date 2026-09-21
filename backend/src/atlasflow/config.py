@@ -42,7 +42,9 @@ class Settings(BaseSettings):
     langsmith_api_key: str = Field(default="", repr=False)
     langsmith_project: str = "atlasflow-dev"
 
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/atlasflow"
+    database_url: str = (
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/atlasflow"
+    )
     redis_url: str = "redis://localhost:6379/0"
 
     max_research_tasks: int = Field(default=5, ge=2, le=5)

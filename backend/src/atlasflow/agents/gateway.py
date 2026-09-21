@@ -454,7 +454,9 @@ class OpenRouterModelGateway:
         if decision.plan_version != draft.plan_version:
             raise ValueError("revision decision must use the draft plan version")
         if decision.draft_version != draft.version:
-            raise ValueError("revision decision must reference the current draft version")
+            raise ValueError(
+                "revision decision must reference the current draft version"
+            )
 
         report = await self._request_text(
             operation="report revision",
@@ -526,7 +528,9 @@ class OpenRouterModelGateway:
                 },
             )
             try:
-                payload = self._parse_json_object(self._content(message), operation=operation)
+                payload = self._parse_json_object(
+                    self._content(message), operation=operation
+                )
                 return validator(payload)
             except ProviderRequestError as exc:
                 last_error = exc
@@ -575,14 +579,22 @@ class OpenRouterModelGateway:
             if result.task_id not in known_tasks:
                 raise ValueError(f"unknown research result task id: {result.task_id}")
             if result.task_id in seen:
-                raise ValueError(f"duplicate research result for task: {result.task_id}")
+                raise ValueError(
+                    f"duplicate research result for task: {result.task_id}"
+                )
             seen.add(result.task_id)
 
     @staticmethod
-    def _require_object_list(payload: dict[str, Any], field: str) -> list[dict[str, Any]]:
+    def _require_object_list(
+        payload: dict[str, Any], field: str
+    ) -> list[dict[str, Any]]:
         value = payload.get(field)
-        if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
-            raise ProviderRequestError(f"response field {field!r} must be an array of objects")
+        if not isinstance(value, list) or any(
+            not isinstance(item, dict) for item in value
+        ):
+            raise ProviderRequestError(
+                f"response field {field!r} must be an array of objects"
+            )
         return cast(list[dict[str, Any]], value)
 
     @staticmethod

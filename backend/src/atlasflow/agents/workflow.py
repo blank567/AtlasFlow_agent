@@ -156,7 +156,9 @@ class ResearchWorkflow:
         if not 1 <= max_supplement_tasks <= 2:
             raise ValueError("max_supplement_tasks must be between 1 and 2")
         if not max_initial_tasks <= max_tasks_per_plan <= 7:
-            raise ValueError("max_tasks_per_plan must be between max_initial_tasks and 7")
+            raise ValueError(
+                "max_tasks_per_plan must be between max_initial_tasks and 7"
+            )
         if not 0 <= max_replans <= 1:
             raise ValueError("max_replans must be 0 or 1")
         if not 0 <= max_revisions <= 2:
@@ -202,7 +204,9 @@ class ResearchWorkflow:
         graph.add_edge(START, "supervisor")
         graph.add_edge("supervisor", "planner")
         graph.add_conditional_edges(
-            "planner", self._after_planner, {"approval": "approval", "finalizer": "finalizer"}
+            "planner",
+            self._after_planner,
+            {"approval": "approval", "finalizer": "finalizer"},
         )
         graph.add_conditional_edges(
             "approval",
@@ -237,7 +241,11 @@ class ResearchWorkflow:
         graph.add_conditional_edges(
             "quality_gate",
             self._after_quality_gate,
-            {"planner": "planner", "synthesizer": "synthesizer", "finalizer": "finalizer"},
+            {
+                "planner": "planner",
+                "synthesizer": "synthesizer",
+                "finalizer": "finalizer",
+            },
         )
         graph.add_edge("finalizer", END)
         return graph.compile(checkpointer=self.checkpointer)
@@ -291,7 +299,9 @@ class ResearchWorkflow:
         action: ApprovalAction | str,
         edited_plan: ResearchPlan | Mapping[str, Any] | None = None,
     ) -> WorkflowExecution:
-        action_value = action.value if isinstance(action, ApprovalAction) else str(action)
+        action_value = (
+            action.value if isinstance(action, ApprovalAction) else str(action)
+        )
         if action_value not in {item.value for item in ApprovalAction}:
             raise ValueError(f"unsupported approval action: {action_value}")
         if action_value == ApprovalAction.EDIT.value and edited_plan is None:
@@ -417,11 +427,15 @@ class ResearchWorkflow:
     def _current_results(state: Mapping[str, Any]) -> list[ResearchResult]:
         version = ResearchWorkflow._plan_version(state)
         return [
-            item for item in state.get("research_results", []) if item.plan_version == version
+            item
+            for item in state.get("research_results", [])
+            if item.plan_version == version
         ]
 
     @staticmethod
-    def _replace_plan(plans: list[ResearchPlan], plan: ResearchPlan) -> list[ResearchPlan]:
+    def _replace_plan(
+        plans: list[ResearchPlan], plan: ResearchPlan
+    ) -> list[ResearchPlan]:
         updated = [item for item in plans if item.plan_version != plan.plan_version]
         updated.append(plan)
         return sorted(updated, key=lambda item: item.plan_version)
@@ -629,7 +643,9 @@ class ResearchWorkflow:
                 raise ValueError("edited_plan is required for action='edit'")
             edited = ResearchPlan.model_validate(edited_payload)
             if edited.plan_version != plan.plan_version:
-                raise ValueError("an edited plan must preserve the current plan version")
+                raise ValueError(
+                    "an edited plan must preserve the current plan version"
+                )
             if not 2 <= len(edited.tasks) <= self.max_initial_tasks:
                 raise ValueError(
                     "an edited initial plan must contain between 2 and "
@@ -637,7 +653,9 @@ class ResearchWorkflow:
                 )
             plan = edited
         target = (
-            "finalizer" if action_value == ApprovalAction.CANCEL.value else "schedule_wave"
+            "finalizer"
+            if action_value == ApprovalAction.CANCEL.value
+            else "schedule_wave"
         )
         reason = {
             ApprovalAction.APPROVE.value: "计划已获批准",
@@ -783,7 +801,9 @@ class ResearchWorkflow:
                     try:
                         result = ResearchResult.model_validate(
                             await self.model.analyze_task(
-                                state["query"], task, state.get("dependency_results", [])
+                                state["query"],
+                                task,
+                                state.get("dependency_results", []),
                             )
                         )
                         if result.task_id != task.task_id:
@@ -800,7 +820,9 @@ class ResearchWorkflow:
                             result = result.model_copy(update={"attempt": attempt})
                         duration_ms = int((perf_counter() - started) * 1000)
                         if result.duration_ms == 0:
-                            result = result.model_copy(update={"duration_ms": duration_ms})
+                            result = result.model_copy(
+                                update={"duration_ms": duration_ms}
+                            )
                         await self._emit(
                             state,
                             RunEventType.NODE_SUCCEEDED,
@@ -1000,10 +1022,14 @@ class ResearchWorkflow:
             elif decision.decision is CritiqueRoute.SUPPLEMENT:
                 if state.get("supplement_rounds", 0) < self.max_supplement_rounds:
                     if len(decision.supplemental_tasks) > self.max_supplement_tasks:
-                        raise ValueError("Critic supplement exceeds the configured task budget")
+                        raise ValueError(
+                            "Critic supplement exceeds the configured task budget"
+                        )
                     expanded = plan.with_supplemental_tasks(decision.supplemental_tasks)
                     if len(expanded.tasks) > self.max_tasks_per_plan:
-                        raise ValueError("supplement exceeds the configured per-plan task budget")
+                        raise ValueError(
+                            "supplement exceeds the configured per-plan task budget"
+                        )
                     target, reason = "schedule_wave", decision.rationale
                     update.update(
                         {
@@ -1170,9 +1196,13 @@ class ResearchWorkflow:
                 await self.model.evaluate_report(state["query"], draft, results)
             )
             if decision.plan_version != plan.plan_version:
-                raise ValueError("QualityGate decision references the wrong plan version")
+                raise ValueError(
+                    "QualityGate decision references the wrong plan version"
+                )
             if decision.draft_version != draft.version:
-                raise ValueError("QualityGate decision references the wrong draft version")
+                raise ValueError(
+                    "QualityGate decision references the wrong draft version"
+                )
             update: dict[str, Any] = {"quality_history": [decision], "model_calls": 1}
             if decision.decision is QualityRoute.ACCEPT:
                 if decision.score < self.quality_threshold:
@@ -1194,8 +1224,7 @@ class ResearchWorkflow:
                 else:
                     target = "finalizer"
                     reason = (
-                        "报告仍需修订，但 "
-                        f"{self.max_revisions} 次修订预算已耗尽"
+                        "报告仍需修订，但 " f"{self.max_revisions} 次修订预算已耗尽"
                     )
                     update.update(
                         {

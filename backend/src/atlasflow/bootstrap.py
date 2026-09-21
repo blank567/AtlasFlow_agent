@@ -15,7 +15,11 @@ from atlasflow.providers.openrouter import (
 from atlasflow.rag import HybridRetriever
 from atlasflow.service import InMemoryRunStore, RunService
 from atlasflow.tools import BaseTool, ToolRegistry
-from atlasflow.tools.builtin import CalculatorTool, KnowledgeSearchTool, OpenRouterWebSearchTool
+from atlasflow.tools.builtin import (
+    CalculatorTool,
+    KnowledgeSearchTool,
+    OpenRouterWebSearchTool,
+)
 
 
 @dataclass(slots=True)
@@ -34,7 +38,9 @@ class ProviderBundle:
     web_search_tool: BaseTool | None = None
 
 
-def build_container(settings: Settings, providers: ProviderBundle | None = None) -> Container:
+def build_container(
+    settings: Settings, providers: ProviderBundle | None = None
+) -> Container:
     providers = providers or build_openrouter_providers(settings)
     retriever = HybridRetriever(
         embedding_provider=providers.embedding,
@@ -117,12 +123,16 @@ def build_openrouter_providers(settings: Settings) -> ProviderBundle:
     if not settings.embedding_model:
         raise ProviderConfigurationError("EMBEDDING_MODEL is required")
     if not settings.rerank_model or settings.rerank_model.startswith("http"):
-        raise ProviderConfigurationError("RERANK_MODEL must be an OpenRouter model slug")
+        raise ProviderConfigurationError(
+            "RERANK_MODEL must be an OpenRouter model slug"
+        )
 
     search_model = settings.search_model or settings.llm_model
     return ProviderBundle(
         model=OpenRouterModelGateway(llm_client, settings.llm_model),
-        embedding=OpenRouterEmbeddingProvider(embedding_client, settings.embedding_model),
+        embedding=OpenRouterEmbeddingProvider(
+            embedding_client, settings.embedding_model
+        ),
         reranker=OpenRouterRerankProvider(rerank_client, settings.rerank_model),
         web_search_tool=OpenRouterWebSearchTool(search_client, search_model),
     )

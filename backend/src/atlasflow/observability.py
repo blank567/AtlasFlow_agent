@@ -8,7 +8,9 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 try:
     from langsmith import traceable as _langsmith_traceable
-except ImportError:  # Allows core unit tests to run before optional dependencies are installed.
+except (
+    ImportError
+):  # Allows core unit tests to run before optional dependencies are installed.
     _langsmith_traceable = None
 
 
@@ -24,7 +26,9 @@ def traced(*, name: str, run_type: str = "chain") -> Callable[[F], F]:
             # Bound instances may own API clients. Never serialize `self` or secret-like inputs.
             process_inputs=_sanitize_trace_inputs,
             process_outputs=_sanitize_trace_outputs,
-        )(func)  # type: ignore[return-value]
+        )(
+            func
+        )  # type: ignore[return-value]
 
     return decorator
 
@@ -63,7 +67,9 @@ def configure_langsmith(settings: Settings) -> None:
     """Expose validated settings to the LangSmith SDK without logging secrets."""
 
     os.environ["LANGSMITH_TRACING"] = str(settings.langsmith_tracing).lower()
-    os.environ["LANGSMITH_TRACE_CONTENT"] = str(settings.langsmith_trace_content).lower()
+    os.environ["LANGSMITH_TRACE_CONTENT"] = str(
+        settings.langsmith_trace_content
+    ).lower()
     os.environ["LANGSMITH_ENDPOINT"] = settings.langsmith_endpoint
     os.environ["LANGSMITH_PROJECT"] = settings.langsmith_project
     if settings.langsmith_api_key:

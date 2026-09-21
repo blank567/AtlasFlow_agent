@@ -38,7 +38,9 @@ class QualityRoute(StrEnum):
 
 
 class ResearchTask(ContractModel):
-    task_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    task_id: str = Field(
+        min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    )
     title: str = Field(min_length=1, max_length=200)
     objective: str = Field(min_length=1, max_length=2_000)
     success_criteria: list[str] = Field(min_length=1, max_length=10)
@@ -149,7 +151,9 @@ class ResearchResult(ContractModel):
 
 class ReviewIssue(ContractModel):
     severity: Severity
-    code: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    code: str = Field(
+        min_length=1, max_length=80, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    )
     message: str = Field(min_length=1, max_length=2_000)
     task_id: str | None = Field(default=None, max_length=64)
     recommendation: str = Field(min_length=1, max_length=2_000)
@@ -168,12 +172,16 @@ class CritiqueDecision(ContractModel):
             if not self.supplemental_tasks:
                 raise ValueError("supplement decisions must include one or two tasks")
         elif self.supplemental_tasks:
-            raise ValueError("only a supplement decision may include supplemental tasks")
+            raise ValueError(
+                "only a supplement decision may include supplemental tasks"
+            )
 
         task_ids = [task.task_id for task in self.supplemental_tasks]
         if len(task_ids) != len(set(task_ids)):
             raise ValueError("supplemental task ids must be unique")
-        if any(task.plan_version != self.plan_version for task in self.supplemental_tasks):
+        if any(
+            task.plan_version != self.plan_version for task in self.supplemental_tasks
+        ):
             raise ValueError("supplemental tasks must use the reviewed plan version")
         return self
 

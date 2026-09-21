@@ -23,7 +23,9 @@ class InvalidRunStateError(RuntimeError):
 
 
 _ALLOWED_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
-    RunStatus.PENDING: frozenset({RunStatus.RUNNING, RunStatus.FAILED, RunStatus.CANCELLED}),
+    RunStatus.PENDING: frozenset(
+        {RunStatus.RUNNING, RunStatus.FAILED, RunStatus.CANCELLED}
+    ),
     RunStatus.RUNNING: frozenset(
         {
             RunStatus.WAITING_APPROVAL,
@@ -86,14 +88,19 @@ class InMemoryRunStore:
 
         async with self._lock:
             record = self._get(run_id)
-            if status is not record.status and status not in _ALLOWED_TRANSITIONS[record.status]:
+            if (
+                status is not record.status
+                and status not in _ALLOWED_TRANSITIONS[record.status]
+            ):
                 raise InvalidRunStateError(
                     f"Cannot transition run {run_id} from {record.status.value} to {status.value}"
                 )
             events = list(record.events)
             if event is not None:
                 events.append(event.model_copy(update={"sequence": len(events) + 1}))
-            updated = self._validated_update(record, status=status, events=events, **changes)
+            updated = self._validated_update(
+                record, status=status, events=events, **changes
+            )
             self._runs[run_id] = updated
             return updated.model_copy(deep=True)
 
@@ -191,9 +198,7 @@ class RunService:
         except Exception as exc:  # noqa: BLE001
             await self._fail(run_id, exc)
 
-    async def _apply_execution(
-        self, run_id: str, execution: WorkflowExecution
-    ) -> None:
+    async def _apply_execution(self, run_id: str, execution: WorkflowExecution) -> None:
         changes = self._artifact_changes(execution.state)
         if execution.paused:
             await self.store.transition(
@@ -203,7 +208,9 @@ class RunService:
             )
             return
         if not execution.final:
-            raise RuntimeError("Workflow returned without pausing or reaching a terminal state")
+            raise RuntimeError(
+                "Workflow returned without pausing or reaching a terminal state"
+            )
 
         status = RunStatus(execution.status)
         event_type, message = {

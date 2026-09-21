@@ -165,7 +165,9 @@ class RunRecord(BaseModel):
         } and (not self.report or not self.report.strip()):
             raise ValueError(f"{self.status.value} runs require a non-empty report")
         if self.status is RunStatus.COMPLETED_WITH_WARNINGS and not self.warnings:
-            raise ValueError("completed_with_warnings runs require at least one warning")
+            raise ValueError(
+                "completed_with_warnings runs require at least one warning"
+            )
         if self.status is RunStatus.FAILED and not self.error:
             raise ValueError("failed runs require an error")
         return self
