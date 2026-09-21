@@ -77,7 +77,9 @@ async def resolve_run_approval(
     run_id: str, payload: ApprovalRequest, request: Request
 ) -> RunRecord:
     try:
-        return await container_from(request).run_service.resolve_approval(run_id, payload)
+        return await container_from(request).run_service.resolve_approval(
+            run_id, payload
+        )
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Run not found") from exc
     except InvalidRunStateError as exc:
