@@ -40,7 +40,10 @@ async def main() -> None:
     print(
         json.dumps(
             {
-                "chat_ok": len(plan) >= 3,
+                "chat_ok": 2 <= len(plan.tasks) <= 5,
+                "plan_version": plan.plan_version,
+                "plan_tasks": len(plan.tasks),
+                "plan_is_dag": len(plan.task_ids) == len(set(plan.task_ids)),
                 "embedding_ok": len(vectors) == 1,
                 "embedding_dimensions": len(vectors[0]),
                 "rerank_ok": len(ranked) == 1,
@@ -55,4 +58,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-

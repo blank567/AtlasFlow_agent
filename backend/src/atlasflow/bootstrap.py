@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from atlasflow.agents import ModelGateway, OpenRouterModelGateway, ResearchWorkflow
+from atlasflow.agents.gateway import ModelGateway, OpenRouterModelGateway
+from atlasflow.agents.workflow import ResearchWorkflow
 from atlasflow.config import Settings
 from atlasflow.providers import EmbeddingProvider, RerankProvider
 from atlasflow.providers.openrouter import (
@@ -52,11 +53,18 @@ def build_container(settings: Settings, providers: ProviderBundle | None = None)
 
     store = InMemoryRunStore()
     workflow = ResearchWorkflow(
-        registry=registry,
         model=providers.model,
         event_sink=store.append_event,
-        top_k=settings.rag_top_k,
-        max_iterations=settings.max_agent_iterations,
+        max_concurrency=settings.max_research_concurrency,
+        max_initial_tasks=settings.max_research_tasks,
+        max_research_attempts=settings.max_research_attempts,
+        quorum_ratio=settings.research_quorum_ratio,
+        max_supplement_rounds=settings.max_supplement_rounds,
+        max_supplement_tasks=settings.max_supplement_tasks,
+        max_tasks_per_plan=settings.max_tasks_per_plan,
+        max_replans=settings.max_replans,
+        max_revisions=settings.max_report_revisions,
+        quality_threshold=settings.quality_threshold,
     )
     return Container(
         retriever=retriever,

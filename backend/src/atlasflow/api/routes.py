@@ -9,13 +9,14 @@ from fastapi.responses import StreamingResponse
 
 from atlasflow.bootstrap import Container
 from atlasflow.schemas import (
+    ApprovalRequest,
     CreateRunRequest,
     IngestDocumentRequest,
     IngestDocumentResponse,
     RunRecord,
     RunStatus,
 )
-from atlasflow.service import RunNotFoundError
+from atlasflow.service import InvalidRunStateError, RunNotFoundError
 
 router = APIRouter(prefix="/api/v1")
 
@@ -54,7 +55,9 @@ async def ingest_document(
 
 @router.post("/runs", response_model=RunRecord, status_code=status.HTTP_202_ACCEPTED)
 async def create_run(payload: CreateRunRequest, request: Request) -> RunRecord:
-    return await container_from(request).run_service.create(payload.query)
+    return await container_from(request).run_service.create(
+        payload.query, auto_approve=payload.auto_approve
+    )
 
 
 @router.get("/runs/{run_id}", response_model=RunRecord)
@@ -63,6 +66,22 @@ async def get_run(run_id: str, request: Request) -> RunRecord:
         return await container_from(request).store.get(run_id)
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Run not found") from exc
+
+
+@router.post(
+    "/runs/{run_id}/approval",
+    response_model=RunRecord,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def resolve_run_approval(
+    run_id: str, payload: ApprovalRequest, request: Request
+) -> RunRecord:
+    try:
+        return await container_from(request).run_service.resolve_approval(run_id, payload)
+    except RunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Run not found") from exc
+    except InvalidRunStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/runs/{run_id}/events")
@@ -82,8 +101,12 @@ async def stream_run_events(run_id: str, request: Request) -> StreamingResponse:
             while cursor < len(run.events):
                 event = run.events[cursor]
                 cursor += 1
-                yield f"event: {event.type}\ndata: {json.dumps(event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
-            if run.status in {RunStatus.COMPLETED, RunStatus.FAILED}:
+                yield (
+                    f"event: {event.event_type.value}\n"
+                    f"id: {event.sequence}\n"
+                    f"data: {json.dumps(event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+                )
+            if run.status in RunStatus.terminal():
                 yield f"event: done\ndata: {json.dumps({'status': run.status.value})}\n\n"
                 break
             await asyncio.sleep(0.25)
@@ -93,4 +116,3 @@ async def stream_run_events(run_id: str, request: Request) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-

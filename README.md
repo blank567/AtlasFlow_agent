@@ -433,3 +433,204 @@ Search 可以复用 LLM Key。
 - Human-in-the-loop 审批、容器化代码沙箱和更细粒度 RBAC。
 - LangSmith Dataset、成本/延迟指标、Prompt 版本和 PII 策略。
 - 多租户、限流、配额、OpenTelemetry/Prometheus/Grafana 与报告导出。
+
+---
+
+## v0.2.0 — Agent 编排重构（2026-09-20）
+
+> 本节按版本追加，前面的 v0.1 内容作为历史记录保留。若旧说明与本节冲突，以 v0.2 为准。
+
+### 本版本目标
+
+v0.2 先稳定 Agent 之间的逻辑、协议、并发和质量闭环，暂不把 Tool/RAG 接回研究主图。这样可以
+单独验证“计划是否可执行、分支是否有界、失败是否可解释、人工是否能接管”。运行时仍没有 Mock
+模式；离线测试使用依赖注入的 test doubles，生产容器只创建真实 OpenRouter provider。
+
+这是一次有意的 Schema 升级，不保留 v0.1 Run 字段兼容层。`/tools`、`/documents` 和现有
+Tool/RAG 实现继续保留，但它们不是 v0.2 Agent 工作流的隐含依赖。
+
+### 六个逻辑 Agent
+
+| Agent | 责任 | 输入/输出 | 是否调用 LLM |
+|---|---|---|---|
+| Supervisor | 初始化、预算控制、确定性路由、审计 | Run state / `RouteRecord` | 否 |
+| Planner | 把问题拆成 2–5 个任务的 DAG | `ResearchPlan` | 是，严格 JSON Schema |
+| Researcher Pool | 按拓扑波次并行完成单个研究任务 | `ResearchTask` / `ResearchResult` | 是，严格 JSON Schema |
+| Critic | 在写报告前检查覆盖、冲突和缺口 | `CritiqueDecision` | 是，严格 JSON Schema |
+| Synthesizer | 生成或修订完整 Markdown 报告 | `DraftVersion` | 是，纯文本 |
+| QualityGate | 对报告打分并选择验收、修订或重规划 | `QualityDecision` | 是，严格 JSON Schema |
+
+Finalizer 只负责确定性地计算终态、报告和指标，不算第七个 Agent。
+
+### 完整执行流程
+
+```text
+START
+  → Supervisor
+  → Planner（2-5 个任务，校验 ID / 依赖 / 版本 / 无环）
+  → Approval
+      ├─ auto_approve=true：自动通过
+      └─ auto_approve=false：interrupt，等待 approve / edit / cancel
+  → Schedule Wave
+  → Researcher Pool（LangGraph Send 动态 fan-out，最大并发 3）
+  → Fan-in → Research Gate（成功率至少 60%）
+  → Critic
+      ├─ accept → Synthesizer
+      ├─ supplement → 最多补 2 个任务，再研究一次
+      └─ replan → Planner
+  → Synthesizer
+  → QualityGate
+      ├─ accept（分数至少 80 且无 critical issue）→ Finalizer
+      ├─ revise → Synthesizer
+      └─ replan → Planner
+  → END
+```
+
+Researcher 任务按依赖分波执行。无依赖任务可以真正并行；每个分支异常会被转换成结构化
+`AgentError`，不会取消同一波的其他任务。单任务最多尝试 2 次，峰值并发和成功/失败数写入
+`ExecutionMetrics`。
+
+### 硬预算与终态语义
+
+| 预算 | 默认上限 |
+|---|---:|
+| 初始研究任务 | 5（最少 2） |
+| Researcher 并发 | 3 |
+| 单任务尝试 | 2 |
+| 研究 Quorum | 60% |
+| 补充研究 | 1 轮，每轮最多 2 个任务 |
+| 单计划累计任务 | 7 |
+| 全局重规划 | 1 次 |
+| 报告修订 | 2 次 |
+| QualityGate 验收分 | 80 |
+
+- 达到 Quorum 且全部成功、质量通过：`completed`；
+- 达到 Quorum 但有部分任务失败，或质量预算耗尽且已有报告：
+  `completed_with_warnings`；
+- 首次低于 Quorum：使用一次全局 replan；第二版仍低于 Quorum：`failed`；
+- Planner、Critic、Synthesizer、QualityGate 的不可恢复错误：`failed`；
+- 用户在审批节点取消：`cancelled`。
+
+所有循环都有硬上限，不会无限“反思”。成功终态必须有报告，降级终态必须有报告和 warning，
+失败终态必须有 error，Run schema 会再次检查这些不变量。
+
+### 新增 Agent 契约与 ModelGateway
+
+`backend/src/atlasflow/agents/contracts.py` 新增：
+
+- `ResearchTask`、`ResearchPlan`：版本化 DAG；
+- `ResearchResult`：摘要、发现、局限、置信度、attempt、耗时；
+- `CritiqueDecision`、`QualityDecision`：受约束的语义路由；
+- `DraftVersion`：报告版本与依据任务；
+- `AgentError`、`RouteRecord`、`ExecutionMetrics`：失败、路由和运行指标。
+
+`ModelGateway` 现在只有六个稳定方法：
+
+```python
+create_plan(...)
+analyze_task(...)
+review_research(...)
+synthesize_report(...)
+evaluate_report(...)
+revise_report(...)
+```
+
+计划、研究、Critic 和 QualityGate 输出使用严格 JSON Schema，并在解析/契约失败时只做一次格式
+重试；生成与修订报告使用纯文本。全部方法保留 LangSmith trace。Researcher 会把依赖结果视为
+不可信输入，当前阶段不声称执行过网页检索或 RAG。
+
+### Human-in-the-loop
+
+创建需要审批的 Run：
+
+```bash
+curl -X POST http://localhost:8000/api/v1/runs \
+  -H "Content-Type: application/json" \
+  -d '{"query":"评估多 Agent 系统架构","auto_approve":false}'
+```
+
+图会使用 LangGraph `interrupt()` 和内存 checkpointer 停在 `waiting_approval`。继续执行：
+
+```bash
+curl -X POST http://localhost:8000/api/v1/runs/{run_id}/approval \
+  -H "Content-Type: application/json" \
+  -d '{"action":"approve"}'
+```
+
+也可提交 `edit` 和完整 `edited_plan`；编辑后的 ID、依赖和无环性会重新校验。`cancel` 会进入
+`cancelled`。当前恢复仅在同一进程内有效，持久恢复留到数据库阶段。
+
+### Run、事件与 SSE
+
+Run 状态扩展为：
+
+```text
+pending / running / waiting_approval /
+completed / completed_with_warnings / failed / cancelled
+```
+
+审计事件包含连续 `sequence`、`event_id`、`run_id`、`event_type`、Agent、节点、task ID、计划
+版本、attempt、状态、耗时、决策原因、时间和扩展数据。重要事件包括计划创建、审批、任务调度与
+完成、Critic 决策、条件路由、质量评分和四类终态。
+
+RunStore 在同一把锁内写入最终工件、状态与终态事件。SSE 会先按 sequence 发送所有事件，最后
+只发送一次 `done`，修复了 v0.1 的终态竞态。
+
+### 前端变化
+
+演示页保留原视觉风格，并新增：
+
+- 自动批准开关；
+- 计划 DAG、依赖、优先级和各 Researcher 状态；
+- 最新 Critic 路由、QualityGate 分数、模型调用和峰值并发；
+- `approve` / JSON 编辑 / `cancel` 审批面板；
+- `completed_with_warnings`、失败原因和 warning 展示；
+- 全部 v0.2 SSE 事件类型。
+
+### 配置项
+
+`.env.example` 新增以下编排预算；默认值就是上表中的硬上限：
+
+```dotenv
+MAX_RESEARCH_TASKS=5
+MAX_RESEARCH_CONCURRENCY=3
+MAX_RESEARCH_ATTEMPTS=2
+RESEARCH_QUORUM_RATIO=0.6
+MAX_SUPPLEMENT_ROUNDS=1
+MAX_SUPPLEMENT_TASKS=2
+MAX_TASKS_PER_PLAN=7
+MAX_REPLANS=1
+MAX_REPORT_REVISIONS=2
+QUALITY_THRESHOLD=80
+```
+
+LangSmith 仍通过 `LANGSMITH_TRACING`、`LANGSMITH_API_KEY`、`LANGSMITH_PROJECT` 控制；默认
+`LANGSMITH_TRACE_CONTENT=false`，避免意外上传查询、任务结果和报告正文。
+
+### v0.2 验证结果
+
+本版本使用 `E:\conda_envs\langchain\python.exe` 完成离线验证：
+
+```powershell
+$env:TEMP='E:\codex\tmp'
+$env:TMP='E:\codex\tmp'
+
+python -m ruff check .
+python -m pytest -q
+
+Set-Location frontend
+npm run build
+```
+
+结果：Ruff 通过；33 个后端测试通过；Next.js 生产构建通过。测试覆盖直接通过、真实并发上限、
+重试、Quorum 降级/失败、Critic supplement/replan、QualityGate revise/replan、预算耗尽、核心
+Agent 故障、人工审批三种操作、SSE 顺序与完整 API 生命周期。没有执行真实联网冒烟，避免在未
+确认费用时消耗 Provider 额度。
+
+### 下一版本顺序
+
+1. PostgreSQL Run/Event Repository 与持久 LangGraph checkpointer；
+2. 定义 Context Provider，在不破坏 Agent 契约的前提下重新接入 RAG；
+3. 引入模型驱动但受策略约束的 Tool selection、权限与审批；
+4. Evidence/Citation 契约、检索与引用质量门；
+5. LangSmith Dataset、成本/延迟基线和真实在线回归。

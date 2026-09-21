@@ -10,7 +10,7 @@ from atlasflow.config import Settings
 async def main() -> None:
     """Exercise every runtime Agent and provider without printing sensitive content."""
 
-    settings = Settings(max_agent_iterations=1)
+    settings = Settings()
     container = build_container(settings)
     run = await container.run_service.execute_and_wait(
         "AtlasFlow 如何通过工具调用和 RAG 提升多 Agent 结果可信度？"
@@ -19,18 +19,23 @@ async def main() -> None:
         json.dumps(
             {
                 "status": run.status.value,
-                "plan_steps": len(run.plan),
-                "tools": [call.tool_name for call in run.tool_calls],
-                "successful_tools": sum(call.success for call in run.tool_calls),
-                "evidence_count": len(run.evidence),
+                "plan_version": run.plan.plan_version if run.plan else None,
+                "plan_tasks": len(run.plan.tasks) if run.plan else 0,
+                "plan_versions": len(run.plans),
+                "research_results": len(run.research_results),
+                "critic_reviews": len(run.critique_history),
+                "draft_versions": len(run.draft_versions),
+                "quality_scores": [item.score for item in run.quality_history],
+                "routes": len(run.route_history),
                 "report_characters": len(run.report or ""),
-                "critic_issues": len(run.critiques),
+                "warnings": run.warnings,
+                "metrics": run.metrics.model_dump(mode="json"),
                 "error": run.error,
             },
             ensure_ascii=False,
         )
     )
-    if run.status.value != "completed":
+    if run.status.value not in {"completed", "completed_with_warnings"}:
         raise SystemExit(1)
 
 

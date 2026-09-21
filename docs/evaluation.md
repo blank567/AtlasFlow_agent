@@ -2,83 +2,81 @@
 
 ## 测试层次
 
-### 1. 离线单元与工作流测试
+### 1. 离线契约与工作流测试
 
-`backend/tests` 覆盖切块、混合检索元数据、工具 schema/权限、OpenRouter 请求契约、工作流
-路由和 API。测试通过 `ProviderBundle` 注入仅供测试使用的 doubles，并用进程内 HTTP transport
-模拟 provider 响应；因此运行 `pytest` 不需要 API key，也不会产生 OpenRouter 或 Web Search
-费用。这种隔离只存在于测试，不是应用可选择的运行模式。
+`backend/tests` 通过依赖注入使用 test doubles，不读取 API key、不访问网络，也不是运行时模式。
+场景化 `FakeModelGateway` 实现与生产网关相同的六方法协议，并记录并发和调用次数。
 
 ```powershell
 conda activate langchain
 python -m pytest
 ```
 
+v0.2 的核心分支包括：
+
+- 直接通过与终态不变量；
+- 真实异步 fan-out，峰值并发不超过 3；
+- Researcher 重试、达到 Quorum 的部分失败降级；
+- 低于 Quorum 后重规划，第二次仍不足则失败；
+- Critic 的 supplement、replan 与预算耗尽；
+- QualityGate 的 revise、replan 与两次修订预算；
+- Planner、Synthesizer、QualityGate 等核心故障；
+- 人工 approve、edit、cancel；
+- SSE sequence、终态事件顺序和唯一 `done`；
+- 健康检查、保留的 Tool/Document API 与完整 Run API 生命周期。
+
 ### 2. 真实 Provider 冒烟测试
 
-`scripts/live_provider_smoke.py` 会读取 `.env`，实际调用 OpenRouter Chat、Embedding、Rerank
-和 Web Search。它只输出布尔状态、向量维度、网页证据数量和错误，不输出密钥或完整内容。
+`scripts/live_workflow_smoke.py` 读取 `.env`，真实调用六个 Agent 路径，只输出状态、数量、质量分、
+路由数、耗时与警告，不打印密钥、研究正文或报告正文：
 
 ```powershell
-conda activate langchain
-python scripts/live_provider_smoke.py
+python scripts/live_workflow_smoke.py
 ```
 
-该命令会联网，可能消耗模型额度或产生 Web Search 费用；执行前应确认模型、区域、余额和密钥
-权限。任何 provider 失败都会如实失败，没有 Mock fallback。
+`scripts/live_provider_smoke.py` 额外检查保留的 Embedding、Rerank 和 Web Search provider。两类
+冒烟都会联网并可能产生费用；任何调用失败都如实失败，不启用 Mock fallback。
 
-### 3. 在线回归集
+### 3. LangSmith 评测
 
-`evals/run_local.py` 虽保留历史文件名，但现在使用真实 provider。必须显式传入 `--live`，以
-避免误触发远程调用：
+设置 `LANGSMITH_TRACING=true`、`LANGSMITH_API_KEY` 和 `LANGSMITH_PROJECT` 后，可按 run 查看
+Planner、Researcher、Critic、Synthesizer、QualityGate 与 provider span。默认的
+`LANGSMITH_TRACE_CONTENT=false` 会隐藏正文；只有对评测数据完成脱敏后才应开启内容记录。
 
-```powershell
-conda activate langchain
-python evals/run_local.py --live
-```
+下一阶段将稳定样本沉淀到 LangSmith Dataset，对不同 prompt、模型和重新接入后的 RAG/Tool
+策略做对比，而不是让在线结果进入离线单元测试。
 
-当前 JSONL 数据集检查 required source IDs、expected tool names 和最终 run status。真实模型与
-Web 内容可能变化，因此结果不应被误解为完全确定性的单元测试；失败样本应结合 LangSmith trace
-和原始 evidence 分析。
+## v0.2 指标
 
-### 4. LangSmith 评测（可选）
-
-设置 `LANGSMITH_TRACING=true`、`LANGSMITH_API_KEY` 和 `LANGSMITH_PROJECT` 后，workflow、
-Agent、LLM 与 tool span 会上传到项目。默认的 `LANGSMITH_TRACE_CONTENT=false` 会用占位信息
-替代输入与输出正文；只有使用已脱敏的演示数据并确实需要调试内容时，才设置为 `true`。当前
-仓库已接入 tracing，但 LangSmith Dataset evaluator 仍属于下一阶段：计划把线上失败脱敏后
-沉淀为固定数据集，用于比较 prompt、模型和 RAG 版本。
-
-## 指标
-
-| 指标 | 计算方法 | v0.2 目标 |
+| 指标 | 计算方法 | 目标 |
 |---|---|---|
-| 工具调用覆盖 | expected vs actual tool names | ≥ 90% |
-| 工具参数有效率 | schema-valid calls / all calls | ≥ 98% |
-| Retrieval hit rate@5 | gold source 是否出现在前五条 | ≥ 85% |
-| Citation coverage | 有引用的事实性结论 / 全部事实性结论 | ≥ 90% |
-| Citation correctness | 引用确实支持结论 / 全部引用 | ≥ 85% |
-| Completion rate | completed runs / started runs | ≥ 99% |
-| P95 latency | trace 端到端耗时 | 按场景设基线 |
-| Cost per successful run | provider usage / completed runs | 持续记录，不隐藏 |
+| DAG 有效率 | 通过 ID、依赖、版本、无环校验的计划 / 全部计划 | 100% 进入执行图 |
+| Research success ratio | 成功任务 / 当前计划任务 | 正常路径 ≥ 60% |
+| Peak concurrency | 同时活跃 Researcher 数 | 1–3，绝不超过 3 |
+| Retry exhaustion | 耗尽两次尝试的任务数 | 全部显式记录 |
+| Route audit coverage | 条件路由是否有 `RouteRecord` 与事件 | 100% |
+| Quality acceptance | score ≥ 80 且无 critical issue | 100% |
+| Terminal invariant rate | 成功有报告、降级有警告、失败有错误 | 100% |
+| SSE ordering | sequence 连续、终态事件后唯一 `done` | 100% |
+| Completion/degraded/failure rate | 按固定数据集分组统计 | 建立基线后持续比较 |
+| P95 latency / model calls | LangSmith 或 ExecutionMetrics | 按场景设基线 |
 
-“工具调用覆盖”是当前固定 Researcher 策略的回归指标，不等同于 LLM 自主选择工具的准确率。
-若后续将工具选择交给模型，应另外建立 gold tool-selection 数据集。
+Tool 选择准确率、Retrieval hit rate、Citation coverage/correctness 暂不作为 v0.2 主图指标；它们
+将在 RAG/Tool 重新接入时恢复，并与 Agent 编排指标分开报告。
 
-## 回归工作流
+## 回归流程
 
-1. 从失败 run 或 LangSmith trace 选择代表性样本；
-2. 删除密钥、个人信息和机密文档内容；
-3. 增加参考答案、必需来源、预期工具和失败类别；
-4. 先运行离线测试，确认协议与路由没有回归；
-5. 经人工确认后运行 `python evals/run_local.py --live`；
-6. 比较总分、单样本结果、延迟和费用，再决定是否合并。
+1. 从失败 Run 或 LangSmith trace 选择代表性样本；
+2. 删除密钥、个人信息、机密查询和模型正文；
+3. 标注预期计划特征、允许路由、终态和质量底线；
+4. 先把路由与预算问题固化为离线场景测试；
+5. 再显式运行真实 provider 冒烟或 Dataset 评测；
+6. 比较正确性、延迟、模型调用次数与降级比例后决定是否合并。
 
-## 结果解释与数据安全
+## 结果解释
 
-- Free 或动态路由模型的可用性、区域限制、速率限制和输出可能变化；记录实际模型与时间。
-- 第一次知识库查询会为所有未向量化 chunk 调用 Embedding，延迟通常高于后续查询。
-- Web Search 必须返回 URL citation 才计为成功；只有自然语言摘要而没有 URL 不能通过。
-- 仅当 `LANGSMITH_TRACE_CONTENT=true` 时，查询、证据片段和模型输出才会进入 trace；启用前
-  必须先脱敏评测数据。
-- 使用第三方免费模型时不要提交敏感或保密数据，并遵守对应 provider 的数据政策。
+- 真实模型的任务拆分、Critic 路由和 QualityGate 分数会波动；预算与终态不变量不能波动。
+- `completed_with_warnings` 是显式降级，不等同于完全成功，也不应在 UI 中隐藏。
+- 一次分支异常不应取消同一波的其他 Researcher；低于 Quorum 才决定是否整体重规划。
+- RunStore 和 checkpointer 当前都在内存中，进程重启不属于本阶段恢复测试范围。
+- 第三方模型与 LangSmith trace 不应接收未脱敏的敏感数据。

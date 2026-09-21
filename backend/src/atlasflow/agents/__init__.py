@@ -1,4 +1,5 @@
-from atlasflow.agents.gateway import ModelGateway, OpenRouterModelGateway
-from atlasflow.agents.workflow import ResearchWorkflow
+"""Multi-agent orchestration package.
 
-__all__ = ["ModelGateway", "OpenRouterModelGateway", "ResearchWorkflow"]
+Import concrete gateways and workflows from their modules. Keeping this package initializer
+side-effect free prevents the shared contract models from creating circular imports.
+"""

@@ -45,7 +45,16 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/atlasflow"
     redis_url: str = "redis://localhost:6379/0"
 
-    max_agent_iterations: int = 2
+    max_research_tasks: int = Field(default=5, ge=2, le=5)
+    max_research_concurrency: int = Field(default=3, ge=1, le=3)
+    max_research_attempts: int = Field(default=2, ge=1, le=2)
+    research_quorum_ratio: float = Field(default=0.6, gt=0.0, le=1.0)
+    max_supplement_rounds: int = Field(default=1, ge=0, le=1)
+    max_supplement_tasks: int = Field(default=2, ge=1, le=2)
+    max_tasks_per_plan: int = Field(default=7, ge=5, le=7)
+    max_replans: int = Field(default=1, ge=0, le=1)
+    max_report_revisions: int = Field(default=2, ge=0, le=2)
+    quality_threshold: int = Field(default=80, ge=80, le=100)
     max_tool_retries: int = 2
     tool_timeout_seconds: float = 120.0
     provider_timeout_seconds: float = 90.0

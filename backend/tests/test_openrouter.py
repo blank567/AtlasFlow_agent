@@ -136,16 +136,51 @@ async def test_structured_output_uses_supported_routes_and_healing() -> None:
 @pytest.mark.asyncio
 async def test_planner_retries_a_malformed_structured_response() -> None:
     class FlakyClient:
-        calls = 0
+        def __init__(self) -> None:
+            self.calls = 0
+            self.requests: list[dict[str, Any]] = []
 
         async def chat(self, **kwargs: Any) -> dict[str, str]:
             self.calls += 1
+            self.requests.append(kwargs)
             if self.calls == 1:
                 return {"content": "not-json"}
-            return {"content": '{"steps":["检索","分析","报告"]}'}
+            return {
+                "content": json.dumps(
+                    {
+                        "rationale": "先分析现状，再形成建议",
+                        "tasks": [
+                            {
+                                "task_id": "T1",
+                                "title": "分析现状",
+                                "objective": "识别问题的关键约束",
+                                "success_criteria": ["列出关键约束"],
+                                "priority": 1,
+                                "dependencies": [],
+                            },
+                            {
+                                "task_id": "T2",
+                                "title": "形成建议",
+                                "objective": "基于约束给出建议",
+                                "success_criteria": ["给出可执行建议"],
+                                "priority": 2,
+                                "dependencies": ["T1"],
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+            }
 
     client = FlakyClient()
     gateway = OpenRouterModelGateway(client, "openrouter/free")  # type: ignore[arg-type]
 
-    assert await gateway.create_plan("测试问题") == ["检索", "分析", "报告"]
+    plan = await gateway.create_plan("测试问题")
+
+    assert plan.plan_version == 1
+    assert plan.task_ids == ("T1", "T2")
     assert client.calls == 2
+    assert all(
+        request["response_format"]["json_schema"]["strict"] is True
+        for request in client.requests
+    )

@@ -2,97 +2,99 @@
 
 ## 演示目标
 
-面试时建议使用这一问题：
+v0.2 的面试演示重点是“多 Agent 如何被可靠地编排”，不是 Tool 或 RAG 的数量。推荐问题：
 
-> AtlasFlow 如何通过工具调用和 RAG 提升多 Agent 结果可信度？
+> 评估一个多 Agent 研究系统的架构、主要风险与分阶段改进方案。
 
-这条路径会同时展示 LangGraph 条件路由、真实 OpenRouter 模型、混合 RAG、Rerank、Web
-Search URL citations、SSE 事件和可选 LangSmith trace。
+它能展示结构化计划、DAG 并行、Critic 路由、QualityGate、失败预算、SSE 审计和可选人工审批。
 
 ## 演示前准备
 
-1. 激活已有环境并安装项目依赖：
+1. 使用已有环境安装项目：
 
    ```powershell
    conda activate langchain
    python -m pip install -e ".[dev]"
    ```
 
-2. 在仓库根目录 `.env` 配置 `LLM_*`、`EMBEDDING_*`、`RERANK_*` 和 `SEARCH_*`。
-   所有 provider 都必须是 `openrouter`。`SEARCH_API_KEY` 可留空以复用 `LLM_API_KEY`，但
-   模型名和其他真实调用所需的密钥必须有效。
+2. 在根目录 `.env` 填写真实 `LLM_*` 配置。运行时没有 Mock 或离线回退。Embedding、Rerank
+   与 Search 配置仍供保留的 RAG/Tool API 使用，但当前 Agent 主图只调用 LLM。
 
 3. 可选启用 LangSmith：填写 `LANGSMITH_API_KEY`，设置 `LANGSMITH_TRACING=true` 和
-   `LANGSMITH_PROJECT=atlasflow-demo`。默认保持 `LANGSMITH_TRACE_CONTENT=false`，这样仍可
-   展示 span 结构、状态和耗时，但不会上传正文。只有数据已脱敏且需要检查 prompt/output 时才
-   将它设为 `true`；不演示 trace 时保持 tracing 为 `false`。
+   `LANGSMITH_PROJECT=atlasflow-demo`。默认保持 `LANGSMITH_TRACE_CONTENT=false`，只展示 span
+   结构、状态和耗时。
 
-4. 建议先运行最小真实调用检查：
+4. 真实联网前先执行离线测试，再按需执行冒烟：
 
    ```powershell
-   python scripts/live_provider_smoke.py
+   pytest
+   python scripts/live_workflow_smoke.py
    ```
 
-   该检查会真实联网并可能产生费用，尤其是 Web Search。失败时先处理认证、模型可用性、区域
-   或配额问题；系统不会用假数据继续。
+   第二条命令会真实联网并可能产生费用。
 
 ## 启动
-
-后端使用 app factory：
 
 ```powershell
 conda activate langchain
 python -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --host 127.0.0.1 --port 8000 --reload
 ```
 
-另开终端启动前端：
+另开终端：
 
 ```powershell
-cd frontend
-npm install
+Set-Location frontend
 npm run dev
 ```
 
-打开前端显示的本地地址。也可以先通过 `/api/v1/health` 验证后端，再从 UI 发起 run。
+## 自动批准路径
 
-## 预期流程
+1. 保持“自动批准”勾选并提交问题。
+2. Planner 返回 2–5 个结构化任务；在“任务 DAG”区域解释任务 ID、目标、成功标准和依赖。
+3. 无依赖的任务被同一波调度；SSE 中可看到多个 `task_scheduled` 与 Researcher 事件。
+4. Researcher 结果 fan-in 后，Critic 选择 `accept`、`supplement` 或 `replan`。
+5. Synthesizer 生成报告，QualityGate 给出分数并选择 `accept`、`revise` 或 `replan`。
+6. 最后一个审计事件是 `run_completed` 或 `run_degraded`，随后 SSE 只发送一次 `done`。
 
-1. Supervisor 接收任务并初始化 run state。
-2. Planner 调用真实 OpenRouter LLM，按 JSON Schema 生成研究计划；步骤数由模型决定，不应
-   在演示词中硬编码。
-3. Researcher 通过 ToolRegistry 调用 `knowledge_search`。首次检索会为尚未向量化的 chunk
-   调用真实 Embedding API，然后执行 BM25、向量余弦相似度、RRF 和真实 Rerank。
-4. Researcher 调用 `web_search`，OpenRouter server tool 返回 URL citation annotations；
-   没有 URL citation 时该工具会明确失败。
-5. Writer 基于计划与 evidence 生成带 `[S1]` 风格引用的 Markdown 草稿。
-6. Critic 调用真实 LLM 检查证据与引用。若发现问题且仍有预算，图会回到 Researcher，并将
-   critique 加入新一轮检索；否则进入 Reporter。
-7. Reporter 输出最终报告；若达到预算仍有问题，会附上“质量检查备注”。
-8. 浏览器通过 SSE 持续显示 Agent、工具调用、成功/失败和最终状态。
-9. 如果开启 LangSmith，可在项目中查看 workflow、Agent、LLM 和 tool 的嵌套 span。
+真实模型的计划和路由可能变化，但循环预算是固定的：单任务最多 2 次尝试、补充研究最多 1 轮、
+全局重规划最多 1 次、报告修订最多 2 次。
 
-真实模型和网页内容具有波动性，因此计划步骤、引用数量和是否触发第二轮可能每次不同。
+## Human-in-the-loop 路径
 
-## 面试时重点展示
+1. 取消“自动批准”并提交任务。
+2. Run 进入 `waiting_approval`，LangGraph 已通过内存 checkpointer 暂停。
+3. 展示三种操作：
 
-- 展开一条知识库 evidence，说明 lexical、vector、fusion、rerank 四阶段分数如何形成；
-- 展开一条网页 evidence，验证 URI 来自 OpenRouter 的 URL citation，而不是模型编造链接；
-- 展示 ToolRegistry 的 schema、low-risk 授权、超时和重试边界；
-- 展示 Critic 条件边和最大迭代次数，解释为什么不会无限循环；
-- 若启用 LangSmith，沿父子 span 定位一次慢调用或失败 provider；
-- 说明当前持久化仍是内存实现，进程重启后 run、上传文档和向量会丢失。
+   - 批准：继续原 DAG；
+   - 编辑：修改 JSON 后提交，系统重新检查 ID、依赖和环；
+   - 取消：Run 进入 `cancelled`，不生成报告。
+
+当前恢复只保证同一进程内有效；进程重启后的恢复将在数据库与持久 checkpointer 阶段完成。
+
+## 建议讲解顺序
+
+1. 先讲 `contracts.py`：所有 Agent 边界都有明确、可验证的数据模型。
+2. 再讲 `gateway.py`：控制输出使用严格 JSON Schema，报告使用纯文本，全部接入 LangSmith。
+3. 展示 `workflow.py`：确定性 Supervisor、`Send` 动态并行、Quorum、Critic 和 QualityGate。
+4. 展示 `service.py`：状态机、原子终态事件和后台执行。
+5. 展示 UI 与 SSE：计划、任务状态、决策、质量分和降级原因都能被观察。
+6. 最后运行离线分支测试，说明并发上限和失败分支不是口头设计。
+
+## Tool/RAG 的当前边界
+
+`/tools`、`/documents`、HybridRetriever、Web Search 和 Calculator 仍保留，可单独演示接口与
+实现；v0.2 主图不会自动调用它们。面试时应明确说明这是分阶段重构：先稳定 Agent 协议，下一版
+再通过 Context Provider 接回工具选择、风险审批、证据引用与 RAG 质量评测。
 
 ## 常见失败
 
 | 现象 | 检查项 |
 |---|---|
-| 启动即报 API key/model 配置错误 | `.env` 中四类 provider、key 与 model slug |
-| 401/403 | 密钥权限、模型区域可用性和 provider 账户状态 |
-| 429/5xx | 速率限制或 provider 故障；客户端只做有限重试 |
-| Web Search 标记失败 | 模型是否支持 server tool、响应是否含 URL citation |
-| RAG 报维度或索引错误 | Embedding/Rerank 模型响应是否与配置匹配 |
-| LangSmith 没有 trace | `LANGSMITH_TRACING`、key、endpoint、project 与网络 |
-| Trace 有 span 但没有正文 | 这是 `LANGSMITH_TRACE_CONTENT=false` 的预期脱敏行为 |
+| 启动即报 API key/model 配置错误 | `.env` 中真实 provider、key 与 model slug |
+| Planner/决策输出契约失败 | 模型是否支持严格 JSON Schema；网关只做一次格式重试 |
+| Run 为 `completed_with_warnings` | 展开 warnings、失败任务、Critic 和 QualityGate 决策 |
+| Run 为 `failed` | 检查 Quorum、核心 Agent 错误和最后一个 route |
+| 一直 `waiting_approval` | 在 UI 或审批 API 提交 approve/edit/cancel |
+| LangSmith 没有 trace | tracing、key、endpoint、project 与网络配置 |
 
-不要把 provider 失败包装成成功演示：真实失败、结构化错误和可追踪诊断本身就是该项目的工程
-亮点。
+真实 provider 失败本身也是可观测性演示的一部分，不应包装成伪成功。

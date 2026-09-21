@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 from pathlib import Path
 
 from atlasflow.bootstrap import build_container
@@ -39,18 +40,30 @@ async def main() -> None:
 
     for case in cases:
         run = await container.run_service.execute_and_wait(case["query"])
-        actual_sources = {item.source_id for item in run.evidence}
-        actual_tools = {item.tool_name for item in run.tool_calls}
-        source_ok = set(case["required_source_ids"]).issubset(actual_sources)
-        tools_ok = set(case["expected_tools"]).issubset(actual_tools)
-        passed += int(source_ok and tools_ok)
+        plan_size = len(run.plan.tasks) if run.plan else 0
+        status_ok = run.status.value in case["accepted_statuses"]
+        plan_ok = case["min_tasks"] <= plan_size <= case["max_tasks"]
+        quorum_ok = len(run.research_results) >= math.ceil(
+            plan_size * case["min_research_ratio"]
+        )
+        report_ok = bool(run.report and run.report.strip())
+        audit_ok = bool(run.route_history and run.events)
+        case_passed = status_ok and plan_ok and quorum_ok and report_ok and audit_ok
+        passed += int(case_passed)
         print(
             json.dumps(
                 {
                     "query": case["query"],
-                    "source_ok": source_ok,
-                    "tools_ok": tools_ok,
                     "status": run.status.value,
+                    "status_ok": status_ok,
+                    "plan_ok": plan_ok,
+                    "quorum_ok": quorum_ok,
+                    "report_ok": report_ok,
+                    "audit_ok": audit_ok,
+                    "plan_tasks": plan_size,
+                    "research_results": len(run.research_results),
+                    "quality_scores": [item.score for item in run.quality_history],
+                    "passed": case_passed,
                 },
                 ensure_ascii=False,
             )

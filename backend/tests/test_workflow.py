@@ -1,20 +1,293 @@
-import pytest
-from atlasflow.schemas import RunStatus
+from __future__ import annotations
 
-from backend.tests.fakes import make_test_container
+import asyncio
+
+import pytest
+from atlasflow.agents.contracts import (
+    CritiqueRoute,
+    QualityRoute,
+    ResearchPlan,
+    ResearchTask,
+)
+from atlasflow.schemas import ApprovalAction, ApprovalRequest, RunEventType, RunStatus
+
+from backend.tests.fakes import (
+    FakeModelGateway,
+    GatewayScenario,
+    make_test_container,
+)
+
+
+async def _wait_for_terminal(container, run_id: str):
+    for _ in range(200):
+        run = await container.store.get(run_id)
+        if run.status in RunStatus.terminal():
+            return run
+        await asyncio.sleep(0.01)
+    raise AssertionError("run did not reach a terminal state")
 
 
 @pytest.mark.asyncio
-async def test_workflow_completes_with_tools_evidence_and_report() -> None:
+async def test_direct_path_is_auditable_and_has_one_terminal_event() -> None:
     container = make_test_container()
 
-    run = await container.run_service.execute_and_wait(
-        "AtlasFlow 的 RAG 与工具调用是怎样设计的？"
+    run = await container.run_service.execute_and_wait("分析多 Agent 编排设计")
+
+    assert run.status is RunStatus.COMPLETED
+    assert run.plan is not None
+    assert len(run.plan.tasks) == 3
+    assert len(run.research_results) == 3
+    assert run.report and "[task:p1-t1]" in run.report
+    assert run.metrics.total_tasks == 3
+    assert run.metrics.successful_tasks == 3
+    assert run.metrics.failed_tasks == 0
+    assert [event.sequence for event in run.events] == list(
+        range(1, len(run.events) + 1)
+    )
+    assert sum(
+        event.event_type is RunEventType.RUN_STARTED for event in run.events
+    ) == 1
+    terminal = [
+        event
+        for event in run.events
+        if event.event_type
+        in {
+            RunEventType.RUN_COMPLETED,
+            RunEventType.RUN_DEGRADED,
+            RunEventType.RUN_FAILED,
+            RunEventType.RUN_CANCELLED,
+        }
+    ]
+    assert len(terminal) == 1
+    assert terminal[0] is run.events[-1]
+    assert {route.from_node for route in run.route_history} >= {
+        "supervisor",
+        "planner",
+        "research_gate",
+        "critic",
+        "synthesizer",
+        "quality_gate",
+        "finalizer",
+    }
+
+
+@pytest.mark.asyncio
+async def test_researchers_really_run_concurrently_with_cap_three() -> None:
+    gateway = FakeModelGateway(
+        GatewayScenario(initial_task_count=5, research_delay_seconds=0.05)
+    )
+    container = make_test_container(model=gateway)
+
+    run = await container.run_service.execute_and_wait("验证动态并行")
+
+    assert run.status is RunStatus.COMPLETED
+    assert 2 <= gateway.peak_researchers <= 3
+    assert run.metrics.peak_concurrency == gateway.peak_researchers == 3
+
+
+@pytest.mark.asyncio
+async def test_research_retry_succeeds_on_second_attempt() -> None:
+    scenario = GatewayScenario(transient_research_failures={"p1-t1": 1})
+    container = make_test_container(scenario=scenario)
+
+    run = await container.run_service.execute_and_wait("验证研究重试")
+
+    assert run.status is RunStatus.COMPLETED
+    assert any(
+        error.task_id == "p1-t1" and error.retryable for error in run.errors
+    )
+    result = next(item for item in run.research_results if item.task_id == "p1-t1")
+    assert result.attempt == 2
+
+
+@pytest.mark.asyncio
+async def test_partial_failure_above_quorum_is_degraded() -> None:
+    scenario = GatewayScenario(permanent_research_failures={"p1-t3"})
+    container = make_test_container(scenario=scenario)
+
+    run = await container.run_service.execute_and_wait("验证 Quorum 降级")
+
+    assert run.status is RunStatus.COMPLETED_WITH_WARNINGS
+    assert len(run.research_results) == 2
+    assert run.metrics.successful_tasks == 2
+    assert run.metrics.failed_tasks == 1
+    assert run.warnings
+    assert run.events[-1].event_type is RunEventType.RUN_DEGRADED
+
+
+@pytest.mark.asyncio
+async def test_below_quorum_replans_once_then_fails() -> None:
+    failures = {"p1-t2", "p1-t3", "p2-t2", "p2-t3"}
+    scenario = GatewayScenario(permanent_research_failures=failures)
+    container = make_test_container(scenario=scenario)
+
+    run = await container.run_service.execute_and_wait("验证低于 Quorum")
+
+    assert run.status is RunStatus.FAILED
+    assert len(run.plans) == 2
+    assert run.metrics.replan_count == 1
+    assert run.error and "Quorum" in run.error
+    assert run.events[-1].event_type is RunEventType.RUN_FAILED
+
+
+@pytest.mark.asyncio
+async def test_critic_can_add_one_bounded_supplement_round() -> None:
+    scenario = GatewayScenario(
+        critique_routes=[CritiqueRoute.SUPPLEMENT, CritiqueRoute.ACCEPT]
+    )
+    container = make_test_container(scenario=scenario)
+
+    run = await container.run_service.execute_and_wait("验证补充研究")
+
+    assert run.status is RunStatus.COMPLETED
+    assert run.plan is not None and len(run.plan.tasks) == 4
+    assert len(run.research_results) == 4
+    assert len(run.critique_history) == 2
+    assert run.metrics.supplement_rounds == 1
+
+
+@pytest.mark.asyncio
+async def test_critic_replan_is_global_and_versioned() -> None:
+    scenario = GatewayScenario(
+        critique_routes=[CritiqueRoute.REPLAN, CritiqueRoute.ACCEPT]
+    )
+    container = make_test_container(scenario=scenario)
+
+    run = await container.run_service.execute_and_wait("验证 Critic 重规划")
+
+    assert run.status is RunStatus.COMPLETED
+    assert [plan.plan_version for plan in run.plans] == [1, 2]
+    assert run.plan is not None and run.plan.plan_version == 2
+    assert run.metrics.replan_count == 1
+
+
+@pytest.mark.asyncio
+async def test_quality_gate_revises_then_accepts() -> None:
+    scenario = GatewayScenario(
+        quality_routes=[QualityRoute.REVISE, QualityRoute.ACCEPT]
+    )
+    container = make_test_container(scenario=scenario)
+
+    run = await container.run_service.execute_and_wait("验证报告修订")
+
+    assert run.status is RunStatus.COMPLETED
+    assert len(run.draft_versions) == 2
+    assert [item.version for item in run.draft_versions] == [1, 2]
+    assert run.metrics.revision_count == 1
+
+
+@pytest.mark.asyncio
+async def test_quality_gate_can_trigger_replan() -> None:
+    scenario = GatewayScenario(
+        quality_routes=[QualityRoute.REPLAN, QualityRoute.ACCEPT]
+    )
+    container = make_test_container(scenario=scenario)
+
+    run = await container.run_service.execute_and_wait("验证质量重规划")
+
+    assert run.status is RunStatus.COMPLETED
+    assert len(run.plans) == 2
+    assert run.plan is not None and run.plan.plan_version == 2
+    assert run.metrics.replan_count == 1
+
+
+@pytest.mark.asyncio
+async def test_revision_budget_exhaustion_keeps_report_with_warning() -> None:
+    scenario = GatewayScenario(
+        quality_routes=[
+            QualityRoute.REVISE,
+            QualityRoute.REVISE,
+            QualityRoute.REVISE,
+        ]
+    )
+    container = make_test_container(scenario=scenario)
+
+    run = await container.run_service.execute_and_wait("验证质量预算")
+
+    assert run.status is RunStatus.COMPLETED_WITH_WARNINGS
+    assert len(run.draft_versions) == 3
+    assert run.metrics.revision_count == 2
+    assert run.report == run.draft_versions[-1].content
+    assert run.warnings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method",
+    ["create_plan", "synthesize_report", "evaluate_report"],
+)
+async def test_core_agent_failure_ends_run_as_failed(method: str) -> None:
+    container = make_test_container(
+        scenario=GatewayScenario(method_failures={method: 1})
     )
 
-    assert run.status == RunStatus.COMPLETED
-    assert {call.tool_name for call in run.tool_calls} == {"knowledge_search", "web_search"}
-    assert run.evidence
-    assert run.report is not None
-    assert "[S1]" in run.report
-    assert any(event.agent == "critic" for event in run.events)
+    run = await container.run_service.execute_and_wait(f"验证 {method} 失败")
+
+    assert run.status is RunStatus.FAILED
+    assert run.error and method in run.error
+    assert run.events[-1].event_type is RunEventType.RUN_FAILED
+
+
+@pytest.mark.asyncio
+async def test_human_approval_can_approve_edit_and_cancel() -> None:
+    approve_container = make_test_container()
+    waiting = await approve_container.run_service.execute_and_wait(
+        "等待批准", auto_approve=False
+    )
+    assert waiting.status is RunStatus.WAITING_APPROVAL
+    assert waiting.plan is not None
+    await approve_container.run_service.resolve_approval(
+        waiting.id, ApprovalRequest(action=ApprovalAction.APPROVE)
+    )
+    approved = await _wait_for_terminal(approve_container, waiting.id)
+    assert approved.status is RunStatus.COMPLETED
+
+    edit_container = make_test_container()
+    waiting = await edit_container.run_service.execute_and_wait(
+        "等待编辑", auto_approve=False
+    )
+    assert waiting.plan is not None
+    edited = ResearchPlan(
+        plan_version=waiting.plan.plan_version,
+        rationale="人工编辑后的两任务计划",
+        tasks=[
+            ResearchTask(
+                task_id="human-1",
+                title="人工任务一",
+                objective="检查第一维度",
+                success_criteria=["完成第一维度"],
+                priority=1,
+                dependencies=[],
+                plan_version=waiting.plan.plan_version,
+            ),
+            ResearchTask(
+                task_id="human-2",
+                title="人工任务二",
+                objective="检查第二维度",
+                success_criteria=["完成第二维度"],
+                priority=2,
+                dependencies=["human-1"],
+                plan_version=waiting.plan.plan_version,
+            ),
+        ],
+    )
+    await edit_container.run_service.resolve_approval(
+        waiting.id,
+        ApprovalRequest(action=ApprovalAction.EDIT, edited_plan=edited),
+    )
+    edited_run = await _wait_for_terminal(edit_container, waiting.id)
+    assert edited_run.status is RunStatus.COMPLETED
+    assert edited_run.plan is not None
+    assert edited_run.plan.task_ids == ("human-1", "human-2")
+
+    cancel_container = make_test_container()
+    waiting = await cancel_container.run_service.execute_and_wait(
+        "等待取消", auto_approve=False
+    )
+    await cancel_container.run_service.resolve_approval(
+        waiting.id, ApprovalRequest(action=ApprovalAction.CANCEL)
+    )
+    cancelled = await _wait_for_terminal(cancel_container, waiting.id)
+    assert cancelled.status is RunStatus.CANCELLED
+    assert cancelled.report is None
+    assert cancelled.events[-1].event_type is RunEventType.RUN_CANCELLED
