@@ -63,7 +63,6 @@ class ResearchTask(ContractModel):
 
 class ResearchPlan(ContractModel):
     """A validated task DAG.
-
     Seven tasks deliberately accommodates the largest allowed initial plan (five)
     plus one Critic supplement round (two).
     """
