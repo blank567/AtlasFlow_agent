@@ -19,12 +19,15 @@ from atlasflow.agents.contracts import (
     CritiqueRoute,
     DraftVersion,
     ExecutionMetrics,
+    PlanLineage,
     QualityDecision,
     QualityRoute,
     ResearchPlan,
     ResearchResult,
     ResearchTask,
+    ReviewContext,
     RouteRecord,
+    RunPolicy,
 )
 from atlasflow.agents.gateway import ModelGateway
 from atlasflow.schemas import ApprovalAction, RunEvent, RunEventType, RunStatus
@@ -49,14 +52,19 @@ _CHECKPOINT_TYPES = [
         "CritiqueRoute",
         "DraftVersion",
         "ExecutionMetrics",
+        "PlanLineage",
         "QualityDecision",
         "QualityRoute",
+        "ReplanReason",
         "ResearchPlan",
         "ResearchResult",
         "ResearchTask",
+        "ReviewContext",
         "ReviewIssue",
         "RouteRecord",
+        "RunPolicy",
         "Severity",
+        "SupplementBatch",
     )
 ]
 
@@ -80,11 +88,15 @@ class AgentState(TypedDict, total=False):
     run_id: str
     query: str
     auto_approve: bool
+    policy: RunPolicy
     started_at: datetime
     plan: ResearchPlan
     plans: list[ResearchPlan]
+    plan_lineage: PlanLineage
+    plan_lineages: list[PlanLineage]
     research_results: Annotated[list[ResearchResult], _merge_results]
     critique_history: Annotated[list[CritiqueDecision], operator.add]
+    review_contexts: Annotated[list[ReviewContext], operator.add]
     draft_versions: Annotated[list[DraftVersion], operator.add]
     quality_history: Annotated[list[QualityDecision], operator.add]
     route_history: Annotated[list[RouteRecord], operator.add]
@@ -258,16 +270,43 @@ class ResearchWorkflow:
         }
 
     async def start(
-        self, *, run_id: str, query: str, auto_approve: bool = True
+        self,
+        *,
+        run_id: str,
+        query: str,
+        auto_approve: bool = True,
+        policy: RunPolicy | None = None,
     ) -> WorkflowExecution:
+        resolved_policy = policy or RunPolicy()
+        if (
+            resolved_policy.initial_task_count is not None
+            and resolved_policy.initial_task_count > self.max_initial_tasks
+        ):
+            raise ValueError(
+                "policy initial_task_count exceeds the configured initial-task budget"
+            )
+        if resolved_policy.required_supplement_rounds > self.max_supplement_rounds:
+            raise ValueError(
+                "policy required_supplement_rounds exceeds the configured supplement budget"
+            )
+        if (
+            resolved_policy.supplement_task_count is not None
+            and resolved_policy.supplement_task_count > self.max_supplement_tasks
+        ):
+            raise ValueError(
+                "policy supplement_task_count exceeds the configured supplement-task budget"
+            )
         initial: AgentState = {
             "run_id": run_id,
             "query": query,
             "auto_approve": auto_approve,
+            "policy": resolved_policy,
             "started_at": datetime.now(UTC),
             "plans": [],
+            "plan_lineages": [],
             "research_results": [],
             "critique_history": [],
+            "review_contexts": [],
             "draft_versions": [],
             "quality_history": [],
             "route_history": [],
@@ -288,9 +327,19 @@ class ResearchWorkflow:
         return await self._invoke(initial, run_id=run_id)
 
     async def run(
-        self, *, run_id: str, query: str, auto_approve: bool = True
+        self,
+        *,
+        run_id: str,
+        query: str,
+        auto_approve: bool = True,
+        policy: RunPolicy | None = None,
     ) -> WorkflowExecution:
-        return await self.start(run_id=run_id, query=query, auto_approve=auto_approve)
+        return await self.start(
+            run_id=run_id,
+            query=query,
+            auto_approve=auto_approve,
+            policy=policy,
+        )
 
     async def resume(
         self,
@@ -441,6 +490,50 @@ class ResearchWorkflow:
         return sorted(updated, key=lambda item: item.plan_version)
 
     @staticmethod
+    def _replace_lineage(
+        lineages: list[PlanLineage], lineage: PlanLineage
+    ) -> list[PlanLineage]:
+        updated = [
+            item for item in lineages if item.plan_version != lineage.plan_version
+        ]
+        updated.append(lineage)
+        return sorted(updated, key=lambda item: item.plan_version)
+
+    def _review_context(self, state: AgentState) -> ReviewContext:
+        plan = state["plan"]
+        lineage = state.get("plan_lineage")
+        if not isinstance(lineage, PlanLineage):
+            lineage = PlanLineage(plan_version=plan.plan_version, base_plan=plan)
+        results = self._current_results(state)
+        completed = {item.task_id for item in results}
+        failed = {
+            error.task_id
+            for error in state.get("errors", [])
+            if error.plan_version == plan.plan_version
+            and error.code == "research_failed"
+            and error.task_id is not None
+            and error.task_id not in completed
+        }
+        task_order = list(plan.task_ids)
+        used = int(state.get("supplement_rounds", 0))
+        return ReviewContext(
+            review_round=len(state.get("critique_history", [])) + 1,
+            plan_version=plan.plan_version,
+            plan_revision=lineage.revision,
+            initial_task_ids=list(lineage.initial_task_ids),
+            supplemental_task_ids=list(lineage.supplemental_task_ids),
+            completed_task_ids=[item for item in task_order if item in completed],
+            failed_task_ids=[item for item in task_order if item in failed],
+            supplement_rounds_used=used,
+            supplement_rounds_remaining=max(self.max_supplement_rounds - used, 0),
+            current_task_count=len(plan.tasks),
+            expected_task_count=(
+                len(lineage.initial_task_ids) + len(lineage.supplemental_task_ids)
+            ),
+            policy=state.get("policy", RunPolicy()),
+        )
+
+    @staticmethod
     def _agent_error(
         *,
         agent: str,
@@ -548,7 +641,11 @@ class ResearchWorkflow:
         )
         try:
             plan = ResearchPlan.model_validate(
-                await self.model.create_plan(state["query"], plan_version=version)
+                await self.model.create_plan(
+                    state["query"],
+                    plan_version=version,
+                    policy=state.get("policy", RunPolicy()),
+                )
             )
             if plan.plan_version != version:
                 raise ValueError(
@@ -558,6 +655,20 @@ class ResearchWorkflow:
                 raise ValueError(
                     f"Planner must create between 2 and {self.max_initial_tasks} initial tasks"
                 )
+            policy = state.get("policy", RunPolicy())
+            if (
+                version == 1
+                and policy.initial_task_count is not None
+                and len(plan.tasks) != policy.initial_task_count
+            ):
+                raise ValueError(
+                    "Planner must create exactly "
+                    f"{policy.initial_task_count} tasks for the initial plan"
+                )
+            lineage = PlanLineage(
+                plan_version=plan.plan_version,
+                base_plan=plan,
+            )
             route = await self._record_route(
                 {**state, "plan": plan},
                 from_node="planner",
@@ -601,6 +712,10 @@ class ResearchWorkflow:
             return {
                 "plan": plan,
                 "plans": self._replace_plan(list(state.get("plans", [])), plan),
+                "plan_lineage": lineage,
+                "plan_lineages": self._replace_lineage(
+                    list(state.get("plan_lineages", [])), lineage
+                ),
                 "ready_tasks": [],
                 "synthesis_mode": "fresh",
                 "final_status": final_status,
@@ -651,7 +766,21 @@ class ResearchWorkflow:
                     "an edited initial plan must contain between 2 and "
                     f"{self.max_initial_tasks} tasks"
                 )
+            policy = state.get("policy", RunPolicy())
+            if (
+                edited.plan_version == 1
+                and policy.initial_task_count is not None
+                and len(edited.tasks) != policy.initial_task_count
+            ):
+                raise ValueError(
+                    "the edited initial plan must contain exactly "
+                    f"{policy.initial_task_count} tasks"
+                )
             plan = edited
+        lineage = PlanLineage(
+            plan_version=plan.plan_version,
+            base_plan=plan,
+        )
         target = (
             "finalizer"
             if action_value == ApprovalAction.CANCEL.value
@@ -683,6 +812,10 @@ class ResearchWorkflow:
         return {
             "plan": plan,
             "plans": self._replace_plan(list(state.get("plans", [])), plan),
+            "plan_lineage": lineage,
+            "plan_lineages": self._replace_lineage(
+                list(state.get("plan_lineages", [])), lineage
+            ),
             "ready_tasks": [],
             "final_status": None,
             "requested_final_status": (
@@ -1010,12 +1143,23 @@ class ResearchWorkflow:
             status="running",
         )
         try:
+            context = self._review_context(state)
             decision = CritiqueDecision.model_validate(
-                await self.model.review_research(state["query"], plan, results)
+                await self.model.review_research(
+                    state["query"],
+                    plan,
+                    results,
+                    context=context,
+                )
             )
+            decision.validate_for(context)
             if decision.plan_version != plan.plan_version:
                 raise ValueError("Critic decision references the wrong plan version")
-            update: dict[str, Any] = {"critique_history": [decision], "model_calls": 1}
+            update: dict[str, Any] = {
+                "critique_history": [decision],
+                "review_contexts": [context],
+                "model_calls": 1,
+            }
             if decision.decision is CritiqueRoute.ACCEPT:
                 target, reason = "synthesizer", decision.rationale
                 update["synthesis_mode"] = "fresh"
@@ -1025,7 +1169,17 @@ class ResearchWorkflow:
                         raise ValueError(
                             "Critic supplement exceeds the configured task budget"
                         )
-                    expanded = plan.with_supplemental_tasks(decision.supplemental_tasks)
+                    lineage = state.get("plan_lineage")
+                    if not isinstance(lineage, PlanLineage):
+                        lineage = PlanLineage(
+                            plan_version=plan.plan_version,
+                            base_plan=plan,
+                        )
+                    expanded_lineage = lineage.with_supplement(
+                        decision.supplemental_tasks,
+                        rationale=decision.rationale,
+                    )
+                    expanded = expanded_lineage.active_plan()
                     if len(expanded.tasks) > self.max_tasks_per_plan:
                         raise ValueError(
                             "supplement exceeds the configured per-plan task budget"
@@ -1036,6 +1190,11 @@ class ResearchWorkflow:
                             "plan": expanded,
                             "plans": self._replace_plan(
                                 list(state.get("plans", [])), expanded
+                            ),
+                            "plan_lineage": expanded_lineage,
+                            "plan_lineages": self._replace_lineage(
+                                list(state.get("plan_lineages", [])),
+                                expanded_lineage,
                             ),
                             "supplement_rounds": state.get("supplement_rounds", 0) + 1,
                             "ready_tasks": [],
@@ -1075,6 +1234,12 @@ class ResearchWorkflow:
                 duration_ms=int((perf_counter() - started) * 1000),
                 decision_reason=reason,
                 decision=decision.decision.value,
+                review_context=context.model_dump(mode="json"),
+                replan_reason=(
+                    decision.replan_reason.value
+                    if decision.replan_reason is not None
+                    else None
+                ),
                 issues=[item.model_dump(mode="json") for item in decision.issues],
             )
             update["route_history"] = [route]
@@ -1083,6 +1248,8 @@ class ResearchWorkflow:
             update = await self._fatal_update(
                 state, agent="critic", node="critic", exc=exc, started=started
             )
+            if "context" in locals():
+                update["review_contexts"] = [context]
             update["model_calls"] = 1
             return update
 

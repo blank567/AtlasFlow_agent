@@ -17,7 +17,7 @@ def create_app(
 
     app = FastAPI(
         title=settings.app_name,
-        version="0.2.0",
+        version="0.3.0",
         description="Observable multi-agent research and decision platform",
     )
     app.add_middleware(

@@ -8,6 +8,7 @@ from atlasflow.agents.contracts import (
     QualityRoute,
     ResearchPlan,
     ResearchTask,
+    RunPolicy,
 )
 from atlasflow.schemas import ApprovalAction, ApprovalRequest, RunEventType, RunStatus
 
@@ -131,19 +132,80 @@ async def test_below_quorum_replans_once_then_fails() -> None:
 
 
 @pytest.mark.asyncio
-async def test_critic_can_add_one_bounded_supplement_round() -> None:
-    scenario = GatewayScenario(
-        critique_routes=[CritiqueRoute.SUPPLEMENT, CritiqueRoute.ACCEPT]
+async def test_policy_drives_exact_two_to_three_to_accept_flow() -> None:
+    policy = RunPolicy(
+        initial_task_count=2,
+        required_supplement_rounds=1,
+        supplement_task_count=1,
     )
-    container = make_test_container(scenario=scenario)
+    gateway = FakeModelGateway(
+        GatewayScenario(
+            critique_routes=[CritiqueRoute.SUPPLEMENT, CritiqueRoute.ACCEPT]
+        )
+    )
+    container = make_test_container(model=gateway)
 
-    run = await container.run_service.execute_and_wait("验证补充研究")
+    run = await container.run_service.execute_and_wait(
+        "黄山风景介绍",
+        policy=policy,
+    )
 
     assert run.status is RunStatus.COMPLETED
-    assert run.plan is not None and len(run.plan.tasks) == 4
-    assert len(run.research_results) == 4
+    assert run.policy == policy
+    assert gateway.plan_policies == [policy]
+    assert run.plan_lineage is not None
+    assert run.plan_lineage.base_plan.task_ids == ("p1-t1", "p1-t2")
+    assert run.plan_lineage.active_plan().task_ids == (
+        "p1-t1",
+        "p1-t2",
+        "p1-t3",
+    )
+    assert len(run.plan_lineage.supplements) == 1
+    assert run.plan_lineage.supplements[0].round == 1
+    assert run.plan_lineage.supplements[0].tasks[0].task_id == "p1-t3"
+    assert run.plan_lineage.plan_version == 1
+    assert run.plan_lineage.revision == 1
+    assert run.plan is not None and run.plan.task_ids == (
+        "p1-t1",
+        "p1-t2",
+        "p1-t3",
+    )
+    assert [plan.task_ids for plan in gateway.review_plans] == [
+        ("p1-t1", "p1-t2"),
+        ("p1-t1", "p1-t2", "p1-t3"),
+    ]
+    assert len(run.research_results) == 3
     assert len(run.critique_history) == 2
+    assert [item.decision for item in run.critique_history] == [
+        CritiqueRoute.SUPPLEMENT,
+        CritiqueRoute.ACCEPT,
+    ]
+    assert run.review_contexts == gateway.review_contexts
+    assert len(run.review_contexts) == 2
+    first_review, second_review = run.review_contexts
+    assert first_review.review_round == 1
+    assert first_review.plan_version == 1
+    assert first_review.plan_revision == 0
+    assert first_review.initial_task_ids == ["p1-t1", "p1-t2"]
+    assert first_review.supplemental_task_ids == []
+    assert first_review.completed_task_ids == ["p1-t1", "p1-t2"]
+    assert first_review.current_task_count == first_review.expected_task_count == 2
+    assert second_review.review_round == 2
+    assert second_review.plan_version == 1
+    assert second_review.plan_revision == 1
+    assert second_review.initial_task_ids == ["p1-t1", "p1-t2"]
+    assert second_review.supplemental_task_ids == ["p1-t3"]
+    assert second_review.completed_task_ids == ["p1-t1", "p1-t2", "p1-t3"]
+    assert second_review.current_task_count == second_review.expected_task_count == 3
+    assert second_review.supplement_rounds_used == 1
+    assert second_review.supplement_rounds_remaining == 0
+    assert gateway.research_attempts == {
+        "p1-t1": 1,
+        "p1-t2": 1,
+        "p1-t3": 1,
+    }
     assert run.metrics.supplement_rounds == 1
+    assert run.metrics.replan_count == 0
 
 
 @pytest.mark.asyncio
@@ -159,6 +221,28 @@ async def test_critic_replan_is_global_and_versioned() -> None:
     assert [plan.plan_version for plan in run.plans] == [1, 2]
     assert run.plan is not None and run.plan.plan_version == 2
     assert run.metrics.replan_count == 1
+
+
+@pytest.mark.asyncio
+async def test_critic_replan_without_critical_issue_is_rejected() -> None:
+    gateway = FakeModelGateway(
+        GatewayScenario(
+            critique_routes=[CritiqueRoute.REPLAN],
+            invalid_replan_without_critical_issue=True,
+        )
+    )
+    container = make_test_container(model=gateway)
+
+    run = await container.run_service.execute_and_wait("验证无效 Critic 重规划")
+
+    assert run.status is RunStatus.FAILED
+    assert run.metrics.replan_count == 0
+    assert gateway.call_counts["create_plan"] == 1
+    assert run.error and "critical issue" in run.error
+    assert not any(
+        route.from_node == "critic" and route.to_node == "planner"
+        for route in run.route_history
+    )
 
 
 @pytest.mark.asyncio
@@ -188,6 +272,49 @@ async def test_quality_gate_can_trigger_replan() -> None:
     assert run.status is RunStatus.COMPLETED
     assert len(run.plans) == 2
     assert run.plan is not None and run.plan.plan_version == 2
+    assert run.metrics.replan_count == 1
+
+
+@pytest.mark.asyncio
+async def test_supplement_history_does_not_become_a_revision_of_replanned_plan() -> None:
+    policy = RunPolicy(
+        initial_task_count=2,
+        required_supplement_rounds=1,
+        supplement_task_count=1,
+    )
+    gateway = FakeModelGateway(
+        GatewayScenario(
+            critique_routes=[
+                CritiqueRoute.SUPPLEMENT,
+                CritiqueRoute.ACCEPT,
+                CritiqueRoute.ACCEPT,
+            ],
+            quality_routes=[QualityRoute.REPLAN, QualityRoute.ACCEPT],
+        )
+    )
+    container = make_test_container(model=gateway)
+
+    run = await container.run_service.execute_and_wait(
+        "验证跨计划版本的补充来源",
+        policy=policy,
+    )
+
+    assert run.status is RunStatus.COMPLETED
+    assert [lineage.plan_version for lineage in run.plan_lineages] == [1, 2]
+    assert [lineage.revision for lineage in run.plan_lineages] == [1, 0]
+    assert run.plan is not None and run.plan.plan_version == 2
+    assert run.plan.task_ids == ("p2-t1", "p2-t2")
+    replanned_review = run.review_contexts[-1]
+    assert replanned_review.review_round == 3
+    assert replanned_review.plan_version == 2
+    assert replanned_review.plan_revision == 0
+    assert replanned_review.initial_task_ids == ["p2-t1", "p2-t2"]
+    assert replanned_review.supplemental_task_ids == []
+    assert replanned_review.supplement_rounds_used == 1
+    assert replanned_review.supplement_rounds_remaining == 0
+    assert replanned_review.current_task_count == 2
+    assert replanned_review.expected_task_count == 2
+    assert run.metrics.supplement_rounds == 1
     assert run.metrics.replan_count == 1
 
 

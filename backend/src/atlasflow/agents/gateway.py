@@ -11,9 +11,12 @@ from atlasflow.agents.contracts import (
     CritiqueDecision,
     DraftVersion,
     QualityDecision,
+    ReplanReason,
     ResearchPlan,
     ResearchResult,
     ResearchTask,
+    ReviewContext,
+    RunPolicy,
     task_ids,
 )
 from atlasflow.observability import traced
@@ -21,7 +24,13 @@ from atlasflow.providers.openrouter import OpenRouterClient, ProviderRequestErro
 
 
 class ModelGateway(Protocol):
-    async def create_plan(self, query: str, plan_version: int = 1) -> ResearchPlan: ...
+    async def create_plan(
+        self,
+        query: str,
+        plan_version: int = 1,
+        *,
+        policy: RunPolicy | None = None,
+    ) -> ResearchPlan: ...
 
     async def analyze_task(
         self,
@@ -35,6 +44,8 @@ class ModelGateway(Protocol):
         query: str,
         plan: ResearchPlan,
         results: Sequence[ResearchResult],
+        *,
+        context: ReviewContext,
     ) -> CritiqueDecision: ...
 
     async def synthesize_report(
@@ -125,12 +136,39 @@ class OpenRouterModelGateway:
         self.model = model
 
     @traced(name="model.openrouter.plan", run_type="llm")
-    async def create_plan(self, query: str, plan_version: int = 1) -> ResearchPlan:
+    async def create_plan(
+        self,
+        query: str,
+        plan_version: int = 1,
+        *,
+        policy: RunPolicy | None = None,
+    ) -> ResearchPlan:
         if plan_version < 1:
             raise ValueError("plan_version must be at least one")
+        resolved_policy = policy or RunPolicy()
+        if plan_version == 1 and resolved_policy.initial_task_count is not None:
+            min_tasks = max_tasks = resolved_policy.initial_task_count
+            task_count_instruction = (
+                f"把用户问题拆成恰好 {resolved_policy.initial_task_count} 个可独立调度的"
+                "研究任务，并构造无环依赖图。"
+            )
+        else:
+            min_tasks, max_tasks = 2, 5
+            task_count_instruction = (
+                "把用户问题拆成严格 2 到 5 个可独立调度的研究任务，"
+                "并构造无环依赖图。"
+            )
 
         def validate(payload: dict[str, Any]) -> ResearchPlan:
             raw_tasks = self._require_object_list(payload, "tasks")
+            if not min_tasks <= len(raw_tasks) <= max_tasks:
+                if min_tasks == max_tasks:
+                    raise ValueError(
+                        f"initial plan must contain exactly {min_tasks} tasks"
+                    )
+                raise ValueError(
+                    f"replanned plan must contain between {min_tasks} and {max_tasks} tasks"
+                )
             return ResearchPlan.model_validate(
                 {
                     "plan_version": plan_version,
@@ -148,16 +186,22 @@ class OpenRouterModelGateway:
                 {
                     "role": "system",
                     "content": (
-                        "你是研究任务规划 Agent。把用户问题拆成严格 2 到 5 个可独立调度的"
-                        "研究任务，并构造无环依赖图。每项要有明确成功标准和 1 到 5 的优先级。"
+                        "你是研究任务规划 Agent。"
+                        f"{task_count_instruction}"
+                        "每项要有明确成功标准和 1 到 5 的优先级。"
                         "task_id 必须简短稳定，例如 T1、T2；"
                         "dependencies 只能引用本计划中的 task_id。不要执行研究，不要调用工具。"
                         "只返回符合给定 JSON Schema 的对象。"
+                        "当前是测试阶段，只要求简单的任务回答来节省agent回复时间和token消耗。"
                     ),
                 },
                 {
                     "role": "user",
-                    "content": f"计划版本：{plan_version}\n研究问题：\n{query}",
+                    "content": (
+                        f"计划版本：{plan_version}\n"
+                        "运行策略（工作流事实，不属于研究问题）：\n"
+                        f"{resolved_policy.model_dump_json()}\n\n研究问题：\n{query}"
+                    ),
                 },
             ],
             temperature=0.1,
@@ -170,8 +214,8 @@ class OpenRouterModelGateway:
                     "tasks": {
                         "type": "array",
                         "items": _TASK_SCHEMA,
-                        "minItems": 2,
-                        "maxItems": 5,
+                        "minItems": min_tasks,
+                        "maxItems": max_tasks,
                     },
                 },
                 "required": ["rationale", "tasks"],
@@ -261,12 +305,55 @@ class OpenRouterModelGateway:
         query: str,
         plan: ResearchPlan,
         results: Sequence[ResearchResult],
+        *,
+        context: ReviewContext,
     ) -> CritiqueDecision:
         self._validate_results(plan, results)
+        if context.plan_version != plan.plan_version:
+            raise ValueError("review context must use the reviewed plan version")
+
+        replan_reasons = [reason.value for reason in ReplanReason]
+        initial_count = len(context.initial_task_ids)
+        supplemental_count = len(context.supplemental_task_ids)
+        composition = (
+            f"{initial_count} 个初始任务 + "
+            f"{supplemental_count} 个审查合法追加任务"
+        )
+        count_assessment = (
+            "符合当前计划修订的预期，不是 Planner 超量生成"
+            if context.current_task_count == context.expected_task_count
+            else "与当前计划修订的预期不一致"
+        )
+        supplement_task_count = context.policy.supplement_task_count
+        supplement_instruction = (
+            f"恰好 {supplement_task_count} 个新增任务"
+            if supplement_task_count is not None
+            else "最多 2 个新增任务"
+        )
+        if context.supplement_rounds_remaining == 0:
+            supplement_budget_instruction = (
+                "补充轮次预算已耗尽，本轮不得选择 supplement。"
+            )
+        elif (
+            context.supplement_rounds_used
+            < context.policy.required_supplement_rounds
+        ):
+            supplement_budget_instruction = (
+                "RunPolicy 要求先完成补充轮次，本轮必须选择 supplement。"
+            )
+        else:
+            supplement_budget_instruction = (
+                "当且仅当存在可由局部新增任务弥补的缺口时选择 supplement。"
+            )
+        critical_requirement = (
+            "replan 还必须至少对应一个 critical issue。"
+            if context.policy.replan_requires_critical_issue
+            else "replan 应只用于无法靠补充研究或报告修订解决的全局问题。"
+        )
 
         def validate(payload: dict[str, Any]) -> CritiqueDecision:
             supplemental = self._require_object_list(payload, "supplemental_tasks")
-            return CritiqueDecision.model_validate(
+            decision = CritiqueDecision.model_validate(
                 {
                     **payload,
                     "plan_version": plan.plan_version,
@@ -276,6 +363,8 @@ class OpenRouterModelGateway:
                     ],
                 }
             )
+            decision.validate_for(context)
+            return decision
 
         return await self._request_json(
             operation="research review",
@@ -285,15 +374,42 @@ class OpenRouterModelGateway:
                     "content": (
                         "你是 Critic Agent，只审查研究阶段：检查任务覆盖、依赖完成、结果冲突、"
                         "缺失维度与明显无依据推断。选择 accept、supplement 或 replan。仅当可由"
-                        "最多 2 个新增任务弥补时选择 supplement；新增任务不得重复现有任务，"
+                        f"{supplement_instruction}弥补时选择 supplement；"
+                        "新增任务不得重复现有任务，"
                         "dependencies 可引用现有或同批新增 task_id。若无需补充，"
-                        "supplemental_tasks 必须为空。只返回符合 JSON Schema 的对象。"
+                        "supplemental_tasks 必须为空。"
+                        f"{supplement_budget_instruction}"
+                        "工作流提供的 ReviewContext 是权威事实：当前任务数等于"
+                        " expected_task_count 时，不得因任务总数、任务数增加或初始任务数"
+                        "要求而选择 replan。任务数量本身不能成为 replan 理由。"
+                        "只有全局计划结构问题才允许 replan；replan 时必须给出有效的"
+                        " replan_reason，其他决策的 replan_reason 必须为 null。"
+                        "当策略要求 critical issue 时，至少一个 critical issue 的 code "
+                        "必须与 replan_reason 完全一致。"
+                        f"{critical_requirement}"
+                        "只返回符合 JSON Schema 与语义约束的对象。"
                     ),
                 },
                 {
                     "role": "user",
                     "content": (
-                        f"研究问题：\n{query}\n\n计划：\n{plan.model_dump_json()}"
+                        f"研究问题：\n{query}\n\n"
+                        "当前审查事实（由工作流生成）：\n"
+                        f"- 当前是第 {context.review_round} 次审查\n"
+                        f"- 计划版本/修订：v{context.plan_version}.r{context.plan_revision}\n"
+                        f"- 任务来源构成：{composition}，合计 "
+                        f"{context.current_task_count} 个；{count_assessment}\n"
+                        f"- 当前/预期任务数：{context.current_task_count}/"
+                        f"{context.expected_task_count}\n"
+                        f"- 已完成任务：{list(context.completed_task_ids)}\n"
+                        f"- 失败任务：{list(context.failed_task_ids)}\n"
+                        f"- 补充轮次已用/剩余：{context.supplement_rounds_used}/"
+                        f"{context.supplement_rounds_remaining}\n"
+                        f"- 策略要求的补充轮次："
+                        f"{context.policy.required_supplement_rounds}\n"
+                        f"- 允许的 replan_reason：{replan_reasons}\n"
+                        f"- 完整 ReviewContext：{context.model_dump_json()}\n\n"
+                        f"计划：\n{plan.model_dump_json()}"
                         f"\n\n研究结果：\n{self._models_json(results)}"
                     ),
                 },
@@ -309,6 +425,16 @@ class OpenRouterModelGateway:
                         "enum": ["accept", "supplement", "replan"],
                     },
                     "rationale": {"type": "string", "minLength": 1, "maxLength": 4000},
+                    "replan_reason": {
+                        "description": (
+                            "decision 为 replan 时必须选择一个原因；"
+                            "decision 为 accept 或 supplement 时必须为 null"
+                        ),
+                        "anyOf": [
+                            {"type": "string", "enum": replan_reasons},
+                            {"type": "null"},
+                        ],
+                    },
                     "issues": {
                         "type": "array",
                         "items": _ISSUE_SCHEMA,
@@ -317,10 +443,16 @@ class OpenRouterModelGateway:
                     "supplemental_tasks": {
                         "type": "array",
                         "items": _TASK_SCHEMA,
-                        "maxItems": 2,
+                        "maxItems": supplement_task_count or 2,
                     },
                 },
-                "required": ["decision", "rationale", "issues", "supplemental_tasks"],
+                "required": [
+                    "decision",
+                    "rationale",
+                    "replan_reason",
+                    "issues",
+                    "supplemental_tasks",
+                ],
                 "additionalProperties": False,
             },
             validator=validate,
@@ -504,12 +636,15 @@ class OpenRouterModelGateway:
         for attempt in range(2):
             request_messages = list(messages)
             if attempt:
+                error_detail = str(last_error)[:1_000] if last_error else "未知契约错误"
                 request_messages.append(
                     {
                         "role": "user",
                         "content": (
-                            "上次输出未通过格式或契约校验。重试：只能返回严格符合给定 "
-                            "JSON Schema 与语义约束的 JSON 对象。"
+                            "上次输出未通过格式或契约校验。"
+                            f"校验错误：{error_detail}。"
+                            "重试：只能返回严格符合给定 JSON Schema "
+                            "与语义约束的 JSON 对象。"
                         ),
                     }
                 )

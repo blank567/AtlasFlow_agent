@@ -5,17 +5,20 @@ from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from atlasflow.agents.contracts import (
     AgentError,
     CritiqueDecision,
     DraftVersion,
     ExecutionMetrics,
+    PlanLineage,
     QualityDecision,
     ResearchPlan,
     ResearchResult,
+    ReviewContext,
     RouteRecord,
+    RunPolicy,
 )
 
 
@@ -107,8 +110,11 @@ class RunEvent(BaseModel):
 
 
 class CreateRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, strict=True)
+
     query: str = Field(min_length=3, max_length=4000)
     auto_approve: bool = True
+    policy: RunPolicy = Field(default_factory=RunPolicy)
 
 
 class ApprovalRequest(BaseModel):
@@ -137,14 +143,20 @@ class IngestDocumentResponse(BaseModel):
 
 
 class RunRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, strict=True)
+
     id: str = Field(default_factory=lambda: str(uuid4()))
     query: str
     auto_approve: bool = True
+    policy: RunPolicy = Field(default_factory=RunPolicy)
     status: RunStatus = RunStatus.PENDING
     plan: ResearchPlan | None = None
     plans: list[ResearchPlan] = Field(default_factory=list)
+    plan_lineage: PlanLineage | None = None
+    plan_lineages: list[PlanLineage] = Field(default_factory=list)
     research_results: list[ResearchResult] = Field(default_factory=list)
     critique_history: list[CritiqueDecision] = Field(default_factory=list)
+    review_contexts: list[ReviewContext] = Field(default_factory=list)
     draft_versions: list[DraftVersion] = Field(default_factory=list)
     quality_history: list[QualityDecision] = Field(default_factory=list)
     route_history: list[RouteRecord] = Field(default_factory=list)

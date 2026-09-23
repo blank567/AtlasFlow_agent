@@ -634,3 +634,127 @@ Agent 故障、人工审批三种操作、SSE 顺序与完整 API 生命周期�
 3. 引入模型驱动但受策略约束的 Tool selection、权限与审批；
 4. Evidence/Citation 契约、检索与引用质量门；
 5. LangSmith Dataset、成本/延迟基线和真实在线回归。
+
+---
+
+## v0.3.0 — 结构化运行策略与审查上下文（2026-09-23）
+
+> 本节只追加 v0.3 的增量说明；前面的 v0.1/v0.2 内容作为历史记录保留。若旧说明与本节冲突，
+> 以本节为准。
+
+### 本版本解决的问题
+
+过去如果把“第一次 Planner 只生成 2 个任务，第一次 Critic 再追加 1 个任务”写进 query，第二次
+Critic 只会看到当前计划已有 3 个任务，却不知道第三个任务来自上一轮合法 supplement。它可能把
+“初始 2 个任务”的要求重复应用到当前 active plan，错误选择 replan。
+
+v0.3 把职责拆开：
+
+- query 只描述研究内容，例如“黄山风景介绍”；
+- `RunPolicy` 保存初始任务数、必需补充轮次、每轮补充数量和 replan 门槛；
+- `PlanLineage` 分别保存初始计划与 Critic 的补充增量；
+- `ReviewContext` 由 Workflow 生成，明确当前是第几轮、任务来源、版本/修订和剩余预算；
+- `CritiqueDecision.validate_for()` 在 LLM 输出通过 JSON 校验后，再按工作流事实做语义校验。
+
+部署配置仍是硬上限，单次 RunPolicy 只能在上限内收紧行为。当前策略字段为：
+
+| 字段 | 范围/默认值 | 作用 |
+|---|---|---|
+| `initial_task_count` | `null` 或 2–5 | 指定 v1 初始计划的精确任务数 |
+| `required_supplement_rounds` | 0–1，默认 0 | 在 accept/replan 前必须完成的 supplement 轮次 |
+| `supplement_task_count` | `null` 或 1–2 | 指定一次 supplement 的精确新增任务数 |
+| `replan_requires_critical_issue` | 默认 `true` | Critic replan 必须至少包含一个 critical issue |
+
+### API 示例：黄山 2 → 3 → Accept
+
+流程约束不再写进 query，而是作为 `policy` 单独提交：
+
+```bash
+curl -X POST http://localhost:8000/api/v1/runs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "黄山风景介绍",
+    "auto_approve": true,
+    "policy": {
+      "initial_task_count": 2,
+      "required_supplement_rounds": 1,
+      "supplement_task_count": 1,
+      "replan_requires_critical_issue": true
+    }
+  }'
+```
+
+该策略对应的预期路径是：
+
+```text
+Planner
+  → v1.r0：base_plan = [T1, T2]
+  → 执行 T1、T2
+  → Critic #1：ReviewContext 当前/预期任务数 = 2/2
+  → required_supplement_rounds 尚未满足，只允许 supplement
+  → SupplementBatch #1 = [T3]
+  → v1.r1：active_plan = [T1, T2, T3]
+  → 只执行新增的 T3，不重复执行 T1、T2
+  → Critic #2：ReviewContext 当前/预期任务数 = 3/3，来源 = 初始 2 + 补充 1
+  → accept
+  → Synthesizer → QualityGate → Finalizer
+```
+
+这里的 `plan_version` 与 `plan_revision` 含义不同：
+
+- supplement 是同一计划的追加修订：`v1.r0 → v1.r1`；
+- replan 才会丢弃当前 active plan 并创建新版本：`v1.* → v2.r0`；
+- v1 的补充历史保留在 v1 lineage 中，不会变成 v2 的 revision；
+- API 终态会返回 `policy`、`plan_lineage`、`plan_lineages` 和每轮 `review_contexts`，便于审计。
+
+### Replan 语义
+
+Critic 的 replan 现在受以下边界约束：
+
+1. 必须提供 `ReplanReason` 枚举值：`invalid_decomposition`、
+   `unresolved_critical_gap`、`irreconcilable_conflict` 或 `dependency_dead_end`；
+2. `replan_requires_critical_issue=true` 时，issues 中必须至少有一个 `critical`；
+3. policy 要求的 supplement 尚未发生时，accept 和 replan 都会被拒绝；
+4. ReviewContext 的计划版本、补充预算、任务 ID、当前数量和预期数量必须自洽；
+5. Critic Prompt 明确规定：当 `current_task_count == expected_task_count` 时，任务总数、任务数增加或
+   “首版只能有 2 个任务”本身都不能成为 replan 理由。
+
+OpenRouter Gateway 会对格式或上述契约校验失败的结构化输出做一次修复重试。例如第二轮把合法的
+`2 + 1` 错报为任务超量、却只给出 warning issue 的 replan，会因缺少 critical issue 被拒绝并要求
+模型重新决策。若修复后仍无效，Workflow 进入可审计的失败路径，不会执行该 replan。
+
+### 本版本修改文件
+
+生产后端：
+
+- `backend/src/atlasflow/agents/contracts.py`：RunPolicy、SupplementBatch、PlanLineage、
+  ReviewContext、ReplanReason 和 Critic 语义校验；
+- `backend/src/atlasflow/agents/gateway.py`：Planner policy、Critic context、严格 Schema 和修复重试；
+- `backend/src/atlasflow/agents/workflow.py`：policy 预算校验、lineage/context 状态及 supplement/replan
+  生命周期；
+- `backend/src/atlasflow/schemas.py`：创建请求和 RunRecord 暴露 policy、lineage 与 review contexts；
+- `backend/src/atlasflow/service.py`、`backend/src/atlasflow/api/routes.py`：policy 全链路透传与工件持久化。
+
+测试与文档：
+
+- `backend/tests/fakes.py`：记录 policy/context/审查计划的确定性 Gateway；
+- `backend/tests/test_agent_contracts.py`：lineage 与无 critical issue replan 契约测试；
+- `backend/tests/test_openrouter.py`：精确 Planner Schema 和第二轮错误 replan 修复测试；
+- `backend/tests/test_workflow.py`：2 → 3 → Accept、不重复研究、跨版本 lineage 和 replan 语义测试；
+- `backend/tests/test_api.py`：policy 从 HTTP 请求传播到终态工件的集成测试；
+- `README.md`、`docs/code-reference.md`：v0.3 使用说明与后端代码参考。
+
+### 验证结果
+
+离线套件共 38 个测试函数，参数化展开后为 40 个用例，全部通过。新增的确定性断言包括：
+
+- 初始计划恰好 2 个任务，补充后 active plan 恰好 3 个任务；
+- Critic 决策历史严格为 `[supplement, accept]`，`replan_count == 0`；
+- T1、T2、T3 各执行一次，补充研究不会重跑初始任务；
+- 第二轮 context 是 `v1.r1`，并明确记录 2 个初始 IDs 和 1 个补充 ID；
+- 无 critical issue 的 replan 不会路由回 Planner；
+- 真正 replan 后得到独立的 `v2.r0`，不会继承 v1 的 supplement revision；
+- API 请求中的 policy 与终态返回的 policy、lineage、review contexts 一致。
+
+这些测试全部使用依赖注入的 FakeModelGateway，不访问网络，也不改变生产环境仍使用真实 OpenRouter
+Provider 的边界。

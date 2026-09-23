@@ -3,10 +3,16 @@ from __future__ import annotations
 import json
 import time
 
+from atlasflow.agents.contracts import CritiqueRoute
 from atlasflow.main import create_app
 from fastapi.testclient import TestClient
 
-from backend.tests.fakes import make_test_container, make_test_settings
+from backend.tests.fakes import (
+    FakeModelGateway,
+    GatewayScenario,
+    make_test_container,
+    make_test_settings,
+)
 
 
 def test_health_tools_and_document_ingestion() -> None:
@@ -75,6 +81,55 @@ def test_run_api_and_sse_have_ordered_single_done_event() -> None:
     assert [item["sequence"] for item in event_payloads] == list(
         range(1, len(event_payloads) + 1)
     )
+
+
+def test_run_api_propagates_structured_policy_to_the_workflow() -> None:
+    policy = {
+        "initial_task_count": 2,
+        "required_supplement_rounds": 1,
+        "supplement_task_count": 1,
+        "replan_requires_critical_issue": True,
+    }
+    gateway = FakeModelGateway(
+        GatewayScenario(
+            critique_routes=[CritiqueRoute.SUPPLEMENT, CritiqueRoute.ACCEPT]
+        )
+    )
+    app = create_app(
+        settings=make_test_settings(),
+        container=make_test_container(model=gateway),
+    )
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/runs",
+            json={
+                "query": "黄山风景介绍",
+                "auto_approve": True,
+                "policy": policy,
+            },
+        )
+        assert created.status_code == 202
+        assert created.json()["policy"] == policy
+        final = _wait_for_status(
+            client,
+            created.json()["id"],
+            {"completed", "failed"},
+        )
+
+    assert final["status"] == "completed"
+    assert final["policy"] == policy
+    assert final["plan_lineage"]["base_plan"]["tasks"][0]["task_id"] == "p1-t1"
+    assert len(final["plan_lineage"]["base_plan"]["tasks"]) == 2
+    assert len(final["plan_lineage"]["supplements"][0]["tasks"]) == 1
+    assert len(final["plan"]["tasks"]) == 3
+    assert final["review_contexts"][1]["review_round"] == 2
+    assert final["review_contexts"][1]["current_task_count"] == 3
+    assert final["review_contexts"][1]["expected_task_count"] == 3
+    assert gateway.plan_policies[0] is not None
+    assert gateway.plan_policies[0].model_dump(mode="json") == policy
+    assert gateway.review_contexts[-1].current_task_count == 3
+    assert gateway.review_contexts[-1].expected_task_count == 3
 
 
 def test_manual_approval_api_and_conflict_semantics() -> None:

@@ -3,6 +3,14 @@ from typing import Any
 
 import httpx
 import pytest
+from atlasflow.agents.contracts import (
+    CritiqueRoute,
+    ResearchPlan,
+    ResearchResult,
+    ResearchTask,
+    ReviewContext,
+    RunPolicy,
+)
 from atlasflow.agents.gateway import OpenRouterModelGateway
 from atlasflow.providers.openrouter import OpenRouterClient, ProviderRequestError
 
@@ -184,3 +192,144 @@ async def test_planner_retries_a_malformed_structured_response() -> None:
         request["response_format"]["json_schema"]["strict"] is True
         for request in client.requests
     )
+    task_schema = client.requests[-1]["response_format"]["json_schema"]["schema"]
+    assert task_schema["properties"]["tasks"]["minItems"] == 2
+    assert task_schema["properties"]["tasks"]["maxItems"] == 5
+
+
+@pytest.mark.asyncio
+async def test_planner_policy_sets_an_exact_initial_task_schema() -> None:
+    class RecordingClient:
+        def __init__(self) -> None:
+            self.request: dict[str, Any] = {}
+
+        async def chat(self, **kwargs: Any) -> dict[str, str]:
+            self.request = kwargs
+            return {
+                "content": json.dumps(
+                    {
+                        "rationale": "按策略生成两个初始任务",
+                        "tasks": [
+                            {
+                                "task_id": f"T{index}",
+                                "title": f"任务 {index}",
+                                "objective": f"完成研究维度 {index}",
+                                "success_criteria": [f"完成维度 {index}"],
+                                "priority": index,
+                                "dependencies": [],
+                            }
+                            for index in (1, 2)
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+            }
+
+    client = RecordingClient()
+    gateway = OpenRouterModelGateway(client, "openrouter/free")  # type: ignore[arg-type]
+
+    plan = await gateway.create_plan(
+        "黄山风景介绍",
+        policy=RunPolicy(initial_task_count=2),
+    )
+
+    schema = client.request["response_format"]["json_schema"]["schema"]
+    assert plan.task_ids == ("T1", "T2")
+    assert schema["properties"]["tasks"]["minItems"] == 2
+    assert schema["properties"]["tasks"]["maxItems"] == 2
+
+
+@pytest.mark.asyncio
+async def test_critic_repairs_a_task_count_based_replan_on_second_review() -> None:
+    class RepairingClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.requests: list[dict[str, Any]] = []
+
+        async def chat(self, **kwargs: Any) -> dict[str, str]:
+            self.calls += 1
+            self.requests.append(kwargs)
+            if self.calls == 1:
+                payload = {
+                    "decision": "replan",
+                    "rationale": "当前计划有三个任务，超过初始两个任务",
+                    "replan_reason": "invalid_decomposition",
+                    "issues": [
+                        {
+                            "severity": "warning",
+                            "code": "task_count_mismatch",
+                            "message": "当前有三个任务",
+                            "task_id": None,
+                            "recommendation": "重新规划为两个任务",
+                        }
+                    ],
+                    "supplemental_tasks": [],
+                }
+            else:
+                payload = {
+                    "decision": "accept",
+                    "rationale": "两个初始任务和一个补充任务均已完成",
+                    "replan_reason": None,
+                    "issues": [],
+                    "supplemental_tasks": [],
+                }
+            return {"content": json.dumps(payload, ensure_ascii=False)}
+
+    tasks = [
+        ResearchTask(
+            task_id=f"T{index}",
+            title=f"任务 {index}",
+            objective=f"完成研究维度 {index}",
+            success_criteria=[f"完成维度 {index}"],
+            priority=min(index, 5),
+            dependencies=[],
+            plan_version=1,
+        )
+        for index in (1, 2, 3)
+    ]
+    plan = ResearchPlan(plan_version=1, rationale="2+1 任务计划", tasks=tasks)
+    results = [
+        ResearchResult(
+            task_id=task.task_id,
+            plan_version=1,
+            summary=f"{task.task_id} 完成",
+            findings=[f"{task.task_id} 发现"],
+            confidence=0.9,
+        )
+        for task in tasks
+    ]
+    context = ReviewContext(
+        review_round=2,
+        plan_version=1,
+        plan_revision=1,
+        initial_task_ids=["T1", "T2"],
+        supplemental_task_ids=["T3"],
+        completed_task_ids=["T1", "T2", "T3"],
+        failed_task_ids=[],
+        supplement_rounds_used=1,
+        supplement_rounds_remaining=0,
+        current_task_count=3,
+        expected_task_count=3,
+        policy=RunPolicy(
+            initial_task_count=2,
+            required_supplement_rounds=1,
+            supplement_task_count=1,
+        ),
+    )
+    client = RepairingClient()
+    gateway = OpenRouterModelGateway(client, "openrouter/free")  # type: ignore[arg-type]
+
+    decision = await gateway.review_research(
+        "黄山风景介绍",
+        plan,
+        results,
+        context=context,
+    )
+
+    assert decision.decision is CritiqueRoute.ACCEPT
+    assert client.calls == 2
+    assert "第 2 次审查" in client.requests[0]["messages"][1]["content"]
+    assert "本轮不得选择 supplement" in client.requests[0]["messages"][0]["content"]
+    repair_prompt = client.requests[1]["messages"][-1]["content"]
+    assert "上次输出未通过格式或契约校验" in repair_prompt
+    assert "replan decisions require a critical issue" in repair_prompt

@@ -13,10 +13,13 @@ from atlasflow.agents.contracts import (
     DraftVersion,
     QualityDecision,
     QualityRoute,
+    ReplanReason,
     ResearchPlan,
     ResearchResult,
     ResearchTask,
+    ReviewContext,
     ReviewIssue,
+    RunPolicy,
     Severity,
 )
 from atlasflow.bootstrap import ProviderBundle, build_container
@@ -71,6 +74,7 @@ class GatewayScenario:
     quality_routes: list[QualityRoute] = field(default_factory=list)
     quality_scores: list[int] = field(default_factory=list)
     supplement_task_count: int = 1
+    invalid_replan_without_critical_issue: bool = False
     method_failures: dict[str, int] = field(default_factory=dict)
 
 
@@ -81,16 +85,30 @@ class FakeModelGateway:
         self.scenario = scenario or GatewayScenario()
         self.call_counts: dict[str, int] = {}
         self.research_attempts: dict[str, int] = {}
+        self.plan_policies: list[RunPolicy | None] = []
+        self.review_contexts: list[ReviewContext] = []
+        self.review_plans: list[ResearchPlan] = []
         self.active_researchers = 0
         self.peak_researchers = 0
         self._concurrency_lock = asyncio.Lock()
 
-    async def create_plan(self, query: str, plan_version: int = 1) -> ResearchPlan:
+    async def create_plan(
+        self,
+        query: str,
+        plan_version: int = 1,
+        *,
+        policy: RunPolicy | None = None,
+    ) -> ResearchPlan:
         del query
         self._called("create_plan")
         self._maybe_fail("create_plan")
+        self.plan_policies.append(
+            policy.model_copy(deep=True) if policy is not None else None
+        )
+        policy_count = policy.initial_task_count if policy is not None else None
         count = self.scenario.plan_task_counts.get(
-            plan_version, self.scenario.initial_task_count
+            plan_version,
+            policy_count or self.scenario.initial_task_count,
         )
         tasks: list[ResearchTask] = []
         for index in range(1, count + 1):
@@ -168,17 +186,25 @@ class FakeModelGateway:
         query: str,
         plan: ResearchPlan,
         results: Sequence[ResearchResult],
+        *,
+        context: ReviewContext,
     ) -> CritiqueDecision:
         del query, results
         index = self._called("review_research") - 1
         self._maybe_fail("review_research")
+        self.review_contexts.append(context.model_copy(deep=True))
+        self.review_plans.append(plan.model_copy(deep=True))
         route = self._sequence_value(
             self.scenario.critique_routes, index, CritiqueRoute.ACCEPT
         )
         supplemental_tasks: list[ResearchTask] = []
         if route is CritiqueRoute.SUPPLEMENT:
             start = len(plan.tasks) + 1
-            for offset in range(self.scenario.supplement_task_count):
+            supplement_count = (
+                context.policy.supplement_task_count
+                or self.scenario.supplement_task_count
+            )
+            for offset in range(supplement_count):
                 number = start + offset
                 supplemental_tasks.append(
                     ResearchTask(
@@ -191,8 +217,8 @@ class FakeModelGateway:
                         plan_version=plan.plan_version,
                     )
                 )
-        issues = []
-        if route is not CritiqueRoute.ACCEPT:
+        issues: list[ReviewIssue] = []
+        if route is CritiqueRoute.SUPPLEMENT:
             issues = [
                 ReviewIssue(
                     severity=Severity.WARNING,
@@ -202,12 +228,31 @@ class FakeModelGateway:
                     recommendation="补充研究或重新规划",
                 )
             ]
+        elif route is CritiqueRoute.REPLAN:
+            issues = [
+                ReviewIssue(
+                    severity=(
+                        Severity.WARNING
+                        if self.scenario.invalid_replan_without_critical_issue
+                        else Severity.CRITICAL
+                    ),
+                    code="invalid_decomposition",
+                    message="当前任务拆分无法覆盖核心问题",
+                    task_id=None,
+                    recommendation="重新拆分全局研究计划",
+                )
+            ]
         return CritiqueDecision(
             decision=route,
             plan_version=plan.plan_version,
             rationale=f"Critic 选择 {route.value}",
             issues=issues,
             supplemental_tasks=supplemental_tasks,
+            replan_reason=(
+                ReplanReason.INVALID_DECOMPOSITION
+                if route is CritiqueRoute.REPLAN
+                else None
+            ),
         )
 
     async def synthesize_report(

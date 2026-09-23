@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from atlasflow.agents.contracts import RunPolicy
 from atlasflow.agents.workflow import ResearchWorkflow, WorkflowExecution
 from atlasflow.schemas import (
     ApprovalRequest,
@@ -52,8 +53,18 @@ class InMemoryRunStore:
         self._runs: dict[str, RunRecord] = {}
         self._lock = asyncio.Lock()
 
-    async def create(self, query: str, *, auto_approve: bool = True) -> RunRecord:
-        record = RunRecord(query=query, auto_approve=auto_approve)
+    async def create(
+        self,
+        query: str,
+        *,
+        auto_approve: bool = True,
+        policy: RunPolicy | None = None,
+    ) -> RunRecord:
+        record = RunRecord(
+            query=query,
+            auto_approve=auto_approve,
+            policy=policy or RunPolicy(),
+        )
         async with self._lock:
             self._runs[record.id] = record
         return record.model_copy(deep=True)
@@ -124,16 +135,48 @@ class RunService:
         self.workflow = workflow
         self._tasks: set[asyncio.Task[None]] = set()
 
-    async def create(self, query: str, *, auto_approve: bool = True) -> RunRecord:
-        run = await self.store.create(query, auto_approve=auto_approve)
-        self._track(self._execute_start(run.id, query, auto_approve=auto_approve))
+    async def create(
+        self,
+        query: str,
+        *,
+        auto_approve: bool = True,
+        policy: RunPolicy | None = None,
+    ) -> RunRecord:
+        resolved_policy = policy or RunPolicy()
+        run = await self.store.create(
+            query,
+            auto_approve=auto_approve,
+            policy=resolved_policy,
+        )
+        self._track(
+            self._execute_start(
+                run.id,
+                query,
+                auto_approve=auto_approve,
+                policy=resolved_policy,
+            )
+        )
         return run
 
     async def execute_and_wait(
-        self, query: str, *, auto_approve: bool = True
+        self,
+        query: str,
+        *,
+        auto_approve: bool = True,
+        policy: RunPolicy | None = None,
     ) -> RunRecord:
-        run = await self.store.create(query, auto_approve=auto_approve)
-        await self._execute_start(run.id, query, auto_approve=auto_approve)
+        resolved_policy = policy or RunPolicy()
+        run = await self.store.create(
+            query,
+            auto_approve=auto_approve,
+            policy=resolved_policy,
+        )
+        await self._execute_start(
+            run.id,
+            query,
+            auto_approve=auto_approve,
+            policy=resolved_policy,
+        )
         return await self.store.get(run.id)
 
     async def resolve_approval(
@@ -163,7 +206,12 @@ class RunService:
         task.add_done_callback(self._tasks.discard)
 
     async def _execute_start(
-        self, run_id: str, query: str, *, auto_approve: bool
+        self,
+        run_id: str,
+        query: str,
+        *,
+        auto_approve: bool,
+        policy: RunPolicy,
     ) -> None:
         await self.store.transition(
             run_id,
@@ -180,6 +228,7 @@ class RunService:
                 run_id=run_id,
                 query=query,
                 auto_approve=auto_approve,
+                policy=policy,
             )
             await self._apply_execution(run_id, execution)
         except Exception as exc:  # noqa: BLE001
@@ -258,10 +307,14 @@ class RunService:
     @staticmethod
     def _artifact_changes(state: dict[str, Any]) -> dict[str, object]:
         keys = (
+            "policy",
             "plan",
             "plans",
+            "plan_lineage",
+            "plan_lineages",
             "research_results",
             "critique_history",
+            "review_contexts",
             "draft_versions",
             "quality_history",
             "route_history",

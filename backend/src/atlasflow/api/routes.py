@@ -56,7 +56,9 @@ async def ingest_document(
 @router.post("/runs", response_model=RunRecord, status_code=status.HTTP_202_ACCEPTED)
 async def create_run(payload: CreateRunRequest, request: Request) -> RunRecord:
     return await container_from(request).run_service.create(
-        payload.query, auto_approve=payload.auto_approve
+        payload.query,
+        auto_approve=payload.auto_approve,
+        policy=payload.policy,
     )
 
 
