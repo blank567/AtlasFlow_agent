@@ -30,6 +30,7 @@ from atlasflow.agents.contracts import (
     RunPolicy,
 )
 from atlasflow.agents.gateway import ModelGateway
+from atlasflow.observability import TraceSegmentSink, trace_segment
 from atlasflow.schemas import ApprovalAction, RunEvent, RunEventType, RunStatus
 
 EventSink = Callable[[str, RunEvent], Awaitable[None]]
@@ -152,6 +153,7 @@ class ResearchWorkflow:
         max_replans: int = MAX_REPLANS,
         max_revisions: int = MAX_REVISIONS,
         quality_threshold: int = QUALITY_THRESHOLD,
+        trace_segment_sink: TraceSegmentSink | None = None,
     ) -> None:
         if not 1 <= max_concurrency <= 3:
             raise ValueError("max_concurrency must be between 1 and 3")
@@ -190,6 +192,7 @@ class ResearchWorkflow:
         self.max_replans = max_replans
         self.max_revisions = max_revisions
         self.quality_threshold = quality_threshold
+        self.trace_segment_sink = trace_segment_sink
         self.checkpointer = checkpointer or MemorySaver(
             serde=JsonPlusSerializer(allowed_msgpack_modules=_CHECKPOINT_TYPES)
         )
@@ -377,21 +380,36 @@ class ResearchWorkflow:
 
     async def _invoke(self, graph_input: Any, *, run_id: str) -> WorkflowExecution:
         config = self._config(run_id)
-        await self.graph.ainvoke(graph_input, config=config)
-        snapshot = await self.graph.aget_state(config)
-        state = dict(snapshot.values)
-        paused = bool(snapshot.interrupts)
-        terminal = {
-            RunStatus.COMPLETED.value,
-            RunStatus.COMPLETED_WITH_WARNINGS.value,
-            RunStatus.FAILED.value,
-            RunStatus.CANCELLED.value,
-        }
-        final = state.get("final_status") in terminal
-        if final:
-            self._active_researchers.pop(run_id, None)
-            self._peak_researchers.pop(run_id, None)
-        return WorkflowExecution(state=state, paused=paused, final=final)
+        segment_kind = "approval_resume" if isinstance(graph_input, Command) else "initial"
+        async with trace_segment(
+            atlasflow_run_id=run_id,
+            name=f"atlasflow.workflow.{segment_kind}",
+            kind=segment_kind,
+            metadata={"workflow": "research", "entrypoint": segment_kind},
+            sink=self.trace_segment_sink,
+        ) as segment:
+            await self.graph.ainvoke(graph_input, config=config)
+            snapshot = await self.graph.aget_state(config)
+            state = dict(snapshot.values)
+            paused = bool(snapshot.interrupts)
+            terminal = {
+                RunStatus.COMPLETED.value,
+                RunStatus.COMPLETED_WITH_WARNINGS.value,
+                RunStatus.FAILED.value,
+                RunStatus.CANCELLED.value,
+            }
+            final = state.get("final_status") in terminal
+            if final:
+                self._active_researchers.pop(run_id, None)
+                self._peak_researchers.pop(run_id, None)
+            segment.set_outputs(
+                {
+                    "paused": paused,
+                    "final": final,
+                    "status": state.get("final_status") or RunStatus.RUNNING.value,
+                }
+            )
+            return WorkflowExecution(state=state, paused=paused, final=final)
 
     async def _emit(
         self,
@@ -684,6 +702,8 @@ class ResearchWorkflow:
                 node="planner",
                 plan_version=version,
                 status="succeeded",
+                rationale=plan.rationale,
+                plan=plan.model_dump(mode="json"),
                 tasks=[task.model_dump(mode="json") for task in plan.tasks],
             )
             final_status: str | None = None
@@ -978,7 +998,9 @@ class ResearchWorkflow:
                             plan_version=task.plan_version,
                             attempt=attempt,
                             status="succeeded",
+                            duration_ms=result.duration_ms,
                             confidence=result.confidence,
+                            result=result.model_dump(mode="json"),
                         )
                         route = await self._record_route(
                             state,
@@ -1033,6 +1055,7 @@ class ResearchWorkflow:
                             plan_version=task.plan_version,
                             attempt=attempt,
                             status="failed",
+                            duration_ms=int((perf_counter() - started) * 1000),
                             error=error.message,
                         )
                         route = await self._record_route(
@@ -1241,6 +1264,20 @@ class ResearchWorkflow:
                     else None
                 ),
                 issues=[item.model_dump(mode="json") for item in decision.issues],
+                supplemental_tasks=[
+                    task.model_dump(mode="json")
+                    for task in decision.supplemental_tasks
+                ],
+                active_plan=(
+                    update.get("plan", plan).model_dump(mode="json")
+                    if isinstance(update.get("plan", plan), ResearchPlan)
+                    else plan.model_dump(mode="json")
+                ),
+                plan_lineage=(
+                    update["plan_lineage"].model_dump(mode="json")
+                    if isinstance(update.get("plan_lineage"), PlanLineage)
+                    else None
+                ),
             )
             update["route_history"] = [route]
             return update
@@ -1438,6 +1475,7 @@ class ResearchWorkflow:
                 decision=decision.decision.value,
                 score=decision.score,
                 issues=[item.model_dump(mode="json") for item in decision.issues],
+                revision_instructions=decision.revision_instructions,
             )
             update["route_history"] = [route]
             return update

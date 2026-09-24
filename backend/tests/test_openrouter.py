@@ -142,6 +142,107 @@ async def test_structured_output_uses_supported_routes_and_healing() -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_preserves_only_real_provider_usage_and_identifiers() -> None:
+    request_payload: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_payload.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "req-openrouter-1"},
+            json={
+                "id": "gen-openrouter-1",
+                "model": "actual/provider-model",
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 7,
+                    "total_tokens": 19,
+                    "cost": 0.00125,
+                },
+            },
+        )
+
+    client = OpenRouterClient(
+        api_key="secret-test-key",
+        base_url="https://openrouter.test/api/v1",
+        transport=httpx.MockTransport(handler),
+    )
+
+    message = await client.chat(
+        model="requested/router-model",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    metadata = message["_atlasflow_provider"]
+    assert metadata["requested_model"] == "requested/router-model"
+    assert metadata["model"] == "actual/provider-model"
+    assert metadata["request_id"] == "req-openrouter-1"
+    assert metadata["generation_id"] == "gen-openrouter-1"
+    assert metadata["usage"] == {
+        "prompt_tokens": 12,
+        "completion_tokens": 7,
+        "total_tokens": 19,
+        "cost": 0.00125,
+    }
+    assert client.recent_calls[-1].usage is not None
+    assert client.recent_calls[-1].usage.total_tokens == 19
+    assert request_payload["usage"] == {"include": True}
+
+
+@pytest.mark.asyncio
+async def test_missing_provider_usage_is_not_estimated() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "a long response"}}]},
+        )
+
+    client = OpenRouterClient(
+        api_key="secret-test-key",
+        base_url="https://openrouter.test/api/v1",
+        transport=httpx.MockTransport(handler),
+    )
+
+    message = await client.chat(
+        model="requested/model",
+        messages=[{"role": "user", "content": "a long prompt"}],
+    )
+
+    metadata = message["_atlasflow_provider"]
+    assert metadata["requested_model"] == "requested/model"
+    assert "model" not in metadata
+    assert "request_id" not in metadata
+    assert "generation_id" not in metadata
+    assert "usage" not in metadata
+    assert client.recent_calls[-1].usage is None
+
+
+@pytest.mark.asyncio
+async def test_http_success_without_chat_message_is_recorded_as_failed() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(200, json={"choices": []})
+
+    client = OpenRouterClient(
+        api_key="secret-test-key",
+        base_url="https://openrouter.test/api/v1",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ProviderRequestError, match="contains no message"):
+        await client.chat(
+            model="requested/model",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+    assert len(client.recent_calls) == 1
+    assert client.recent_calls[0].status == "failed"
+    assert client.recent_calls[0].error_type == "InvalidChatResponse"
+
+
+@pytest.mark.asyncio
 async def test_planner_retries_a_malformed_structured_response() -> None:
     class FlakyClient:
         def __init__(self) -> None:

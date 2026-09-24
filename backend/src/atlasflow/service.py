@@ -1,16 +1,25 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta
+from typing import Any, Literal, Protocol
 
 from atlasflow.agents.contracts import RunPolicy
 from atlasflow.agents.workflow import ResearchWorkflow, WorkflowExecution
+from atlasflow.observability import TraceSegment
 from atlasflow.schemas import (
+    AnalyticsResponse,
+    AnalyticsSummary,
     ApprovalRequest,
+    DecisionCount,
+    DurationTrendPoint,
+    PlanVersionCount,
     RunEvent,
     RunEventType,
     RunRecord,
     RunStatus,
+    StatusCount,
     utc_now,
 )
 
@@ -46,8 +55,65 @@ _ALLOWED_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
 }
 
 
+def allowed_transitions(status: RunStatus) -> frozenset[RunStatus]:
+    return _ALLOWED_TRANSITIONS[status]
+
+
+class RunStore(Protocol):
+    async def create(
+        self,
+        query: str,
+        *,
+        auto_approve: bool = True,
+        policy: RunPolicy | None = None,
+        source_run_id: str | None = None,
+    ) -> RunRecord: ...
+
+    async def get(self, run_id: str) -> RunRecord: ...
+
+    async def append_event(self, run_id: str, event: RunEvent) -> None: ...
+
+    async def events_after(
+        self, run_id: str, after_sequence: int
+    ) -> list[RunEvent]: ...
+
+    async def event_batch(
+        self, run_id: str, after_sequence: int
+    ) -> tuple[list[RunEvent], RunStatus]: ...
+
+    async def update(self, run_id: str, **changes: object) -> RunRecord: ...
+
+    async def transition(
+        self,
+        run_id: str,
+        status: RunStatus,
+        *,
+        event: RunEvent | None = None,
+        **changes: object,
+    ) -> RunRecord: ...
+
+    async def list(
+        self,
+        *,
+        query: str | None = None,
+        status: RunStatus | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[RunRecord], int]: ...
+
+    async def records_since(self, since: datetime | None) -> list[RunRecord]: ...
+
+    async def delete(self, run_id: str) -> None: ...
+
+    async def upsert_trace_segment(
+        self, run_id: str, segment: TraceSegment
+    ) -> None: ...
+
+
 class InMemoryRunStore:
-    """Process-local repository used until the persistence phase of v0.2."""
+    """Backwards-compatible lightweight store; runtime uses SQLiteRunStore."""
 
     def __init__(self) -> None:
         self._runs: dict[str, RunRecord] = {}
@@ -59,11 +125,13 @@ class InMemoryRunStore:
         *,
         auto_approve: bool = True,
         policy: RunPolicy | None = None,
+        source_run_id: str | None = None,
     ) -> RunRecord:
         record = RunRecord(
             query=query,
             auto_approve=auto_approve,
             policy=policy or RunPolicy(),
+            source_run_id=source_run_id,
         )
         async with self._lock:
             self._runs[record.id] = record
@@ -74,11 +142,35 @@ class InMemoryRunStore:
             return self._get(run_id).model_copy(deep=True)
 
     async def append_event(self, run_id: str, event: RunEvent) -> None:
+        if event.run_id != run_id:
+            raise ValueError("event.run_id must match the target run")
         async with self._lock:
             record = self._get(run_id)
+            if any(item.event_id == event.event_id for item in record.events):
+                return
             sequenced = event.model_copy(update={"sequence": len(record.events) + 1})
             updated = self._validated_update(record, events=[*record.events, sequenced])
             self._runs[run_id] = updated
+
+    async def event_batch(
+        self, run_id: str, after_sequence: int
+    ) -> tuple[list[RunEvent], RunStatus]:
+        async with self._lock:
+            record = self._get(run_id)
+            return (
+                [
+                    event.model_copy(deep=True)
+                    for event in record.events
+                    if event.sequence > after_sequence
+                ],
+                record.status,
+            )
+
+    async def events_after(
+        self, run_id: str, after_sequence: int
+    ) -> list[RunEvent]:
+        events, _ = await self.event_batch(run_id, after_sequence)
+        return events
 
     async def update(self, run_id: str, **changes: object) -> RunRecord:
         async with self._lock:
@@ -97,6 +189,8 @@ class InMemoryRunStore:
     ) -> RunRecord:
         """Atomically persist artifacts, a status transition, and its terminal event."""
 
+        if event is not None and event.run_id != run_id:
+            raise ValueError("event.run_id must match the target run")
         async with self._lock:
             record = self._get(run_id)
             if (
@@ -115,6 +209,81 @@ class InMemoryRunStore:
             self._runs[run_id] = updated
             return updated.model_copy(deep=True)
 
+    async def upsert_trace_segment(
+        self, run_id: str, segment: TraceSegment
+    ) -> None:
+        if segment.atlasflow_run_id != run_id:
+            raise ValueError("segment.atlasflow_run_id must match the target run")
+        async with self._lock:
+            record = self._get(run_id)
+            segments = list(record.trace_segments)
+            for index, current in enumerate(segments):
+                if current.segment_id == segment.segment_id:
+                    if current == segment:
+                        return
+                    segments[index] = segment.model_copy(
+                        update={"started_at": current.started_at}
+                    )
+                    break
+            else:
+                segments.append(segment)
+            self._runs[run_id] = self._validated_update(
+                record, trace_segments=segments
+            )
+
+    async def list(
+        self,
+        *,
+        query: str | None = None,
+        status: RunStatus | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[RunRecord], int]:
+        async with self._lock:
+            needle = query.casefold() if query else None
+            records = [
+                record
+                for record in self._runs.values()
+                if (
+                    needle is None
+                    or needle in record.query.casefold()
+                    or needle in record.id.casefold()
+                )
+                and (status is None or record.status is status)
+                and (date_from is None or record.created_at >= date_from)
+                and (date_to is None or record.created_at <= date_to)
+            ]
+            records.sort(key=lambda item: item.created_at, reverse=True)
+            total = len(records)
+            start = (page - 1) * page_size
+            return (
+                [item.model_copy(deep=True) for item in records[start : start + page_size]],
+                total,
+            )
+
+    async def records_since(self, since: datetime | None) -> list[RunRecord]:
+        async with self._lock:
+            records = [
+                record
+                for record in self._runs.values()
+                if since is None or record.created_at >= since
+            ]
+            return [
+                item.model_copy(deep=True)
+                for item in sorted(records, key=lambda value: value.created_at)
+            ]
+
+    async def delete(self, run_id: str) -> None:
+        async with self._lock:
+            record = self._get(run_id)
+            if record.status not in RunStatus.terminal():
+                raise InvalidRunStateError(
+                    "Only terminal runs can be deleted; cancel the run first"
+                )
+            del self._runs[run_id]
+
     def _get(self, run_id: str) -> RunRecord:
         record = self._runs.get(run_id)
         if record is None:
@@ -130,10 +299,10 @@ class InMemoryRunStore:
 
 
 class RunService:
-    def __init__(self, store: InMemoryRunStore, workflow: ResearchWorkflow) -> None:
+    def __init__(self, store: RunStore, workflow: ResearchWorkflow) -> None:
         self.store = store
         self.workflow = workflow
-        self._tasks: set[asyncio.Task[None]] = set()
+        self._tasks: dict[str, asyncio.Task[None]] = {}
 
     async def create(
         self,
@@ -149,12 +318,44 @@ class RunService:
             policy=resolved_policy,
         )
         self._track(
+            run.id,
             self._execute_start(
                 run.id,
                 query,
                 auto_approve=auto_approve,
                 policy=resolved_policy,
             )
+        )
+        return run
+
+    async def rerun(
+        self,
+        source_run_id: str,
+        *,
+        query: str | None = None,
+        auto_approve: bool | None = None,
+        policy: RunPolicy | None = None,
+    ) -> RunRecord:
+        source = await self.store.get(source_run_id)
+        resolved_query = query if query is not None else source.query
+        resolved_auto_approve = (
+            auto_approve if auto_approve is not None else source.auto_approve
+        )
+        resolved_policy = policy or source.policy
+        run = await self.store.create(
+            resolved_query,
+            auto_approve=resolved_auto_approve,
+            policy=resolved_policy,
+            source_run_id=source.id,
+        )
+        self._track(
+            run.id,
+            self._execute_start(
+                run.id,
+                resolved_query,
+                auto_approve=resolved_auto_approve,
+                policy=resolved_policy,
+            ),
         )
         return run
 
@@ -192,6 +393,7 @@ class RunService:
             RunStatus.RUNNING,
         )
         self._track(
+            run_id,
             self._execute_resume(
                 run_id,
                 action=request.action.value,
@@ -200,10 +402,162 @@ class RunService:
         )
         return await self.store.get(run_id)
 
-    def _track(self, coroutine: Any) -> None:
+    async def cancel(self, run_id: str) -> RunRecord:
+        run = await self.store.get(run_id)
+        if run.status in RunStatus.terminal():
+            raise InvalidRunStateError(
+                f"Run {run_id} is already {run.status.value}; it cannot be cancelled"
+            )
+
+        task = self._tasks.get(run_id)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        current = await self.store.get(run_id)
+        if current.status in RunStatus.terminal():
+            if current.status is RunStatus.CANCELLED:
+                return current
+            raise InvalidRunStateError(
+                f"Run {run_id} became {current.status.value} before cancellation"
+            )
+        return await self.store.transition(
+            run_id,
+            RunStatus.CANCELLED,
+            event=RunEvent(
+                run_id=run_id,
+                event_type=RunEventType.RUN_CANCELLED,
+                message="任务已由用户取消",
+                status=RunStatus.CANCELLED.value,
+                data={"reason": "user_cancelled"},
+            ),
+        )
+
+    async def delete(self, run_id: str, confirmation_run_id: str) -> None:
+        if confirmation_run_id != run_id:
+            raise InvalidRunStateError("Run ID confirmation does not match")
+        await self.store.delete(run_id)
+
+    async def analytics(
+        self, selected_range: Literal["7d", "30d", "all"]
+    ) -> AnalyticsResponse:
+        now = utc_now()
+        since = {
+            "7d": now - timedelta(days=7),
+            "30d": now - timedelta(days=30),
+            "all": None,
+        }[selected_range]
+        records = await self.store.records_since(since)
+
+        status_counts = Counter(record.status for record in records)
+        successful = sum(
+            status_counts[status]
+            for status in (RunStatus.COMPLETED, RunStatus.COMPLETED_WITH_WARNINGS)
+        )
+        terminal_runs = sum(status_counts[status] for status in RunStatus.terminal())
+        durations = [
+            record.metrics.duration_ms
+            for record in records
+            if record.metrics.duration_ms is not None
+        ]
+        successful_tasks = sum(
+            record.metrics.successful_tasks for record in records
+        )
+        failed_tasks = sum(record.metrics.failed_tasks for record in records)
+        attempted_tasks = successful_tasks + failed_tasks
+        quality_scores = [
+            record.quality_history[-1].score
+            for record in records
+            if record.quality_history
+        ]
+        duration_by_date: dict[str, list[int]] = defaultdict(list)
+        decision_counts: Counter[str] = Counter()
+        version_counts: Counter[int] = Counter()
+        for record in records:
+            if record.metrics.duration_ms is not None:
+                duration_by_date[record.created_at.date().isoformat()].append(
+                    record.metrics.duration_ms
+                )
+            decision_counts.update(
+                decision.decision.value for decision in record.critique_history
+            )
+            decision_counts.update(
+                decision.decision.value for decision in record.quality_history
+            )
+            if record.plan is not None:
+                version_counts[record.plan.plan_version] += 1
+
+        return AnalyticsResponse(
+            range=selected_range,
+            summary=AnalyticsSummary(
+                total_runs=len(records),
+                success_rate=(
+                    successful / terminal_runs * 100 if terminal_runs else 0.0
+                ),
+                task_success_rate=(
+                    successful_tasks / attempted_tasks * 100
+                    if attempted_tasks
+                    else 0.0
+                ),
+                avg_quality_score=(
+                    sum(quality_scores) / len(quality_scores)
+                    if quality_scores
+                    else None
+                ),
+                avg_duration_ms=(sum(durations) / len(durations) if durations else None),
+                total_model_calls=sum(
+                    record.metrics.model_calls for record in records
+                ),
+                total_tasks=sum(record.metrics.total_tasks for record in records),
+                successful_tasks=successful_tasks,
+                failed_tasks=failed_tasks,
+                total_supplement_rounds=sum(
+                    record.metrics.supplement_rounds for record in records
+                ),
+                total_replans=sum(
+                    record.metrics.replan_count for record in records
+                ),
+                total_revisions=sum(
+                    record.metrics.revision_count for record in records
+                ),
+            ),
+            status_distribution=[
+                StatusCount(status=status, count=status_counts[status])
+                for status in RunStatus
+                if status_counts[status]
+            ],
+            duration_trend=[
+                DurationTrendPoint(
+                    date=date,
+                    avg_duration_ms=sum(values) / len(values),
+                    runs=len(values),
+                )
+                for date, values in sorted(duration_by_date.items())
+            ],
+            decision_counts=[
+                DecisionCount(decision=decision, count=count)
+                for decision, count in sorted(decision_counts.items())
+            ],
+            plan_versions=[
+                PlanVersionCount(version=version, count=count)
+                for version, count in sorted(version_counts.items())
+            ],
+        )
+
+    def _track(self, run_id: str, coroutine: Any) -> None:
         task = asyncio.create_task(coroutine)
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        self._tasks[run_id] = task
+
+        def forget(completed: asyncio.Task[None]) -> None:
+            if self._tasks.get(run_id) is completed:
+                self._tasks.pop(run_id, None)
+            if not completed.cancelled():
+                completed.exception()
+
+        task.add_done_callback(forget)
 
     async def _execute_start(
         self,
@@ -318,6 +672,7 @@ class RunService:
             "draft_versions",
             "quality_history",
             "route_history",
+            "trace_segments",
             "errors",
             "metrics",
             "report",

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from atlasflow.agents.gateway import ModelGateway, OpenRouterModelGateway
 from atlasflow.agents.workflow import ResearchWorkflow
 from atlasflow.config import Settings
+from atlasflow.observability import configure_langsmith
 from atlasflow.providers import EmbeddingProvider, RerankProvider
 from atlasflow.providers.openrouter import (
     OpenRouterClient,
@@ -13,7 +14,8 @@ from atlasflow.providers.openrouter import (
     ProviderConfigurationError,
 )
 from atlasflow.rag import HybridRetriever
-from atlasflow.service import InMemoryRunStore, RunService
+from atlasflow.service import RunService
+from atlasflow.storage import SQLiteRunStore
 from atlasflow.tools import BaseTool, ToolRegistry
 from atlasflow.tools.builtin import (
     CalculatorTool,
@@ -24,9 +26,10 @@ from atlasflow.tools.builtin import (
 
 @dataclass(slots=True)
 class Container:
+    settings: Settings
     retriever: HybridRetriever
     registry: ToolRegistry
-    store: InMemoryRunStore
+    store: SQLiteRunStore
     run_service: RunService
 
 
@@ -41,6 +44,7 @@ class ProviderBundle:
 def build_container(
     settings: Settings, providers: ProviderBundle | None = None
 ) -> Container:
+    configure_langsmith(settings)
     providers = providers or build_openrouter_providers(settings)
     retriever = HybridRetriever(
         embedding_provider=providers.embedding,
@@ -57,7 +61,7 @@ def build_container(
         registry.register(providers.web_search_tool)
     registry.register(CalculatorTool())
 
-    store = InMemoryRunStore()
+    store = SQLiteRunStore(settings.database_path)
     workflow = ResearchWorkflow(
         model=providers.model,
         event_sink=store.append_event,
@@ -71,8 +75,10 @@ def build_container(
         max_replans=settings.max_replans,
         max_revisions=settings.max_report_revisions,
         quality_threshold=settings.quality_threshold,
+        trace_segment_sink=store.upsert_trace_segment,
     )
     return Container(
+        settings=settings,
         retriever=retriever,
         registry=registry,
         store=store,

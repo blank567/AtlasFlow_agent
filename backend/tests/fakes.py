@@ -390,11 +390,17 @@ def make_test_settings() -> Settings:
         rerank_provider="openrouter",
         search_provider="openrouter",
         llm_model="test/model",
+        llm_base_url="https://example.test/v1",
         embedding_model="test/embedding",
         rerank_model="test/rerank",
         llm_api_key="test-key",
         embedding_api_key="test-key",
         rerank_api_key="test-key",
+        langsmith_tracing=False,
+        langsmith_trace_content=False,
+        langsmith_api_key="",
+        langsmith_endpoint="https://api.smith.langchain.com",
+        database_path=":memory:",
         tool_timeout_seconds=2,
     )
 

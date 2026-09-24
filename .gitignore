@@ -13,6 +13,13 @@ node_modules/
 .next/
 coverage/
 *.log
+.npm-cache/
+.pip-cache/
+data/*.db
+data/*.db-*
+data/*.sqlite
+data/*.sqlite-*
+data/*.sqlite3
+data/*.sqlite3-*
 .idea/
 .vscode/
-

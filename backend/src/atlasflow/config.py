@@ -1,7 +1,11 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "atlasflow.sqlite3"
 
 
 class Settings(BaseSettings):
@@ -42,10 +46,11 @@ class Settings(BaseSettings):
     langsmith_api_key: str = Field(default="", repr=False)
     langsmith_project: str = "atlasflow-dev"
 
-    database_url: str = (
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/atlasflow"
-    )
+    database_path: str = str(DEFAULT_DATABASE_PATH)
     redis_url: str = "redis://localhost:6379/0"
+
+    sse_heartbeat_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
+    sse_poll_seconds: float = Field(default=0.25, ge=0.05, le=2.0)
 
     max_research_tasks: int = Field(default=5, ge=2, le=5)
     max_research_concurrency: int = Field(default=3, ge=1, le=3)

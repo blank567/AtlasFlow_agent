@@ -1,0 +1,249 @@
+export type RunStatus =
+  | "pending"
+  | "running"
+  | "waiting_approval"
+  | "completed"
+  | "completed_with_warnings"
+  | "failed"
+  | "cancelled"
+  | string;
+
+export type RunPolicy = {
+  initial_task_count?: number | null;
+  required_supplement_rounds?: number;
+  supplement_task_count?: number | null;
+  replan_requires_critical_issue?: boolean;
+};
+
+export type ResearchTask = {
+  task_id: string;
+  title: string;
+  objective: string;
+  success_criteria: string[];
+  priority: number;
+  dependencies: string[];
+  plan_version: number;
+  provenance?: "initial" | "supplement" | "replan" | string;
+};
+
+export type ResearchPlan = {
+  plan_version: number;
+  rationale: string;
+  tasks: ResearchTask[];
+};
+
+export type SupplementBatch = {
+  round: number;
+  plan_version: number;
+  tasks: ResearchTask[];
+  task_ids?: string[];
+  rationale?: string;
+};
+
+export type PlanLineage = {
+  plan_version: number;
+  base_plan: ResearchPlan;
+  supplements: SupplementBatch[];
+  current_plan_version?: number;
+};
+
+export type ResearchResult = {
+  task_id: string;
+  plan_version: number;
+  summary: string;
+  confidence?: number;
+  attempt?: number;
+  duration_ms?: number;
+};
+
+export type AgentError = {
+  agent: string;
+  code: string;
+  message: string;
+  task_id?: string;
+  plan_version?: number;
+};
+
+export type CritiqueDecision = {
+  decision: "accept" | "supplement" | "replan" | string;
+  rationale: string;
+  plan_version: number;
+  replan_reason?: string | null;
+  missing_aspects?: string[];
+  critical_issues?: Array<string | { code?: string; message?: string }>;
+  created_at?: string;
+};
+
+export type QualityDecision = {
+  decision: "accept" | "revise" | "replan" | string;
+  score?: number;
+  rationale: string;
+  plan_version: number;
+  draft_version: number;
+  created_at?: string;
+};
+
+export type ProviderUsage = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  cost?: number;
+  currency?: string;
+  request_id?: string;
+  model?: string;
+};
+
+export type ProviderCallMetric = {
+  call_id: string;
+  provider?: string;
+  operation?: string;
+  endpoint?: string;
+  status?: string;
+  requested_model?: string;
+  model?: string;
+  request_id?: string;
+  generation_id?: string;
+  usage?: ProviderUsage;
+  duration_ms?: number;
+  attempt_count?: number;
+  http_status?: number;
+  error_type?: string;
+  recorded_at?: string;
+};
+
+export type ExecutionMetrics = {
+  total_tasks: number;
+  successful_tasks: number;
+  failed_tasks: number;
+  peak_concurrency: number;
+  plan_versions: number;
+  supplement_rounds: number;
+  replan_count: number;
+  revision_count: number;
+  model_calls: number;
+  duration_ms?: number;
+  provider_usage?: ProviderUsage;
+};
+
+export type TraceSegment = {
+  id: string;
+  name?: string;
+  url?: string;
+  status?: string;
+  started_at?: string;
+  ended_at?: string;
+  duration_ms?: number;
+  kind?: string;
+  trace_status?: string;
+  provider_calls: ProviderCallMetric[];
+};
+
+export type RunEvent = {
+  event_id: string;
+  run_id?: string;
+  sequence: number;
+  event_type: string;
+  message: string;
+  agent?: string;
+  node?: string;
+  task_id?: string;
+  plan_version?: number;
+  attempt?: number;
+  status?: string;
+  duration_ms?: number;
+  decision_reason?: string;
+  created_at: string;
+  data: Record<string, unknown>;
+};
+
+export type RunRecord = {
+  id: string;
+  query: string;
+  status: RunStatus;
+  auto_approve?: boolean;
+  policy?: RunPolicy;
+  source_run_id?: string;
+  created_at?: string;
+  updated_at?: string;
+  started_at?: string;
+  completed_at?: string;
+  plan?: ResearchPlan;
+  plans: ResearchPlan[];
+  plan_lineage?: PlanLineage;
+  research_results: ResearchResult[];
+  critique_history: CritiqueDecision[];
+  quality_history: QualityDecision[];
+  errors: AgentError[];
+  metrics: ExecutionMetrics;
+  warnings: string[];
+  events: RunEvent[];
+  trace_segments: TraceSegment[];
+  report?: string;
+  error?: string;
+};
+
+export type RunListResponse = {
+  items: RunRecord[];
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
+};
+
+export type AnalyticsData = {
+  range: string;
+  summary: {
+    total_runs?: number;
+    success_rate?: number;
+    avg_duration_ms?: number;
+    total_model_calls?: number;
+    total_tasks?: number;
+    task_success_rate?: number;
+    successful_tasks?: number;
+    failed_tasks?: number;
+    avg_quality_score?: number;
+    total_supplement_rounds?: number;
+    total_replans?: number;
+    total_revisions?: number;
+  };
+  status_distribution: Array<{ status: string; count: number }>;
+  duration_trend: Array<{ date: string; avg_duration_ms: number; runs?: number }>;
+  decision_counts: Array<{ decision: string; count: number }>;
+  plan_versions: Array<{ version: string | number; count: number }>;
+};
+
+export type SettingsStatus = {
+  app_version?: string;
+  database?: { path?: string; size_bytes?: number; persistent?: boolean };
+  langsmith?: {
+    state?: "ready" | "disabled" | "not_configured" | "unreachable" | "error" | string;
+    configured?: boolean;
+    enabled?: boolean;
+    project?: string;
+    endpoint?: string;
+    trace_content?: boolean | "metadata" | "full" | string;
+    connection_status?: "not_checked" | "reachable" | "unreachable" | string;
+    last_checked_at?: string;
+    message?: string;
+  };
+  provider?: { configured?: boolean; model?: string; name?: string };
+};
+
+export const EMPTY_METRICS: ExecutionMetrics = {
+  total_tasks: 0,
+  successful_tasks: 0,
+  failed_tasks: 0,
+  peak_concurrency: 0,
+  plan_versions: 0,
+  supplement_rounds: 0,
+  replan_count: 0,
+  revision_count: 0,
+  model_calls: 0,
+};
+
+export const TERMINAL_STATUSES = new Set([
+  "completed",
+  "completed_with_warnings",
+  "failed",
+  "cancelled",
+]);

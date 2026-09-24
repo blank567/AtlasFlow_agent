@@ -758,3 +758,175 @@ OpenRouter Gateway 会对格式或上述契约校验失败的结构化输出做�
 
 这些测试全部使用依赖注入的 FakeModelGateway，不访问网络，也不改变生产环境仍使用真实 OpenRouter
 Provider 的边界。
+
+---
+
+## v0.4.0 — 持久运行时、LangSmith 与可视化控制台（2026-09-24）
+
+> 本节只追加 v0.4 的增量说明；v0.1–v0.3 保留为演进记录。若历史说明与本节冲突，以本节为准。
+> 本版本聚焦 Agent 执行、运行时和可观测性，没有继续修改 Tool/RAG。
+
+### 本版本交付
+
+v0.4 把原来的单页演示升级为可持续使用的本地 Agent 控制台：
+
+```text
+Next.js Console
+  ├── Workbench：创建 Run、选择结构化 RunPolicy
+  ├── Runs：历史、筛选、分页、rerun、确认删除
+  ├── Run Detail：SSE、Agent Flow、Task DAG、审批、报告、Trace
+  ├── Analytics：本地 Run/Event 聚合指标
+  └── Settings：数据库、Provider、LangSmith 安全状态
+             │
+             ▼
+FastAPI → RunService → ResearchWorkflow / LangGraph
+             │                 │
+             │                 ├── initial / approval_resume Trace Segment
+             │                 └── OpenRouter 真实 usage metadata
+             ▼
+SQLite：runs + run_projections + run_events
+```
+
+前端保持浅色、简洁、中文业务文案与英文技术名词并用。桌面端展示完整图和指标，窄屏自动简化布局。
+
+### 五个页面
+
+| 路由 | 作用 |
+|---|---|
+| `/` | 创建研究 Run，使用策略预设或精确编辑 `RunPolicy`，查看最近记录 |
+| `/runs` | 按研究问题/Run ID、状态、日期筛选，分页、rerun、删除终态 Run |
+| `/runs/[runId]` | 动态查看 Agent Flow、Task DAG、PlanLineage、事件、审查、报告和 Trace |
+| `/analytics` | 展示状态分布、耗时趋势、决策、计划版本和本地汇总指标 |
+| `/settings` | 只读展示安全配置状态，并主动检测 LangSmith 连通性 |
+
+Run 详情通过 `@xyflow/react` 展示 Agent 与 Task 图。节点可点击，抽屉会展示输入、结果、耗时、
+依赖、成功标准、置信度、错误和审查信息。图状态来自 SSE 事件，即使终态 RunRecord 尚未完成落库，
+也能动态呈现计划和任务进度。研究报告使用禁止原始 HTML 的 Markdown 渲染。
+
+### SQLite Run/Event 数据库
+
+默认数据库为 `<repo>/data/atlasflow.sqlite3`；本项目位于 E 盘时，所有数据库、WAL/SHM 和构建产物
+也都留在 E 盘。可在 `.env` 中用 `DATABASE_PATH` 覆盖路径。
+
+数据库职责：
+
+- `runs`：Run 身份、query、来源 Run 和创建时间；
+- `run_projections`：经 Pydantic 校验的最新 `RunRecord` 快照与筛选字段；
+- `run_events`：按 `(run_id, sequence)` 排序的 append-only 审计日志；
+- 状态迁移、最终工件和终态事件原子提交；
+- `event_id` 去重、外键级联删除、WAL、busy timeout 和单进程异步锁；
+- 启动时把未完成 Run 标记为 `failed/backend_restart`，不会假装可恢复。
+
+当前仍使用 LangGraph `MemorySaver`，所以数据库可以恢复历史和审计数据，但不能在进程重启后继续
+执行中断点。运行时明确限定为本地单用户、单后端进程；不要用多个 Uvicorn worker 同时写该库。
+
+### SSE 快照校准
+
+`GET /api/v1/runs/{run_id}/events` 支持：
+
+- 连续 sequence、`id:` 和命名事件；
+- `Last-Event-ID` 请求头或 `last_event_id` query 参数断点续传；
+- heartbeat 注释、服务端 retry 提示和终态 `done`；
+- 前端按 `event_id/sequence` 去重、指数退避重连，并用 Run 快照校准；
+- 终态后延迟刷新，接收可能稍晚解析完成的 LangSmith Trace URL。
+
+### LangSmith 接入与隐私边界
+
+一个 AtlasFlow Run 可包含多个 Trace Segment：首次调用为 `initial`，人工审批恢复为
+`approval_resume`。每个 Segment 都用 `atlasflow_run_id`、segment ID、kind、tag 和 metadata 关联，
+因此既能在本地 Run 详情聚合，也能跳转到 LangSmith 深入排查。
+
+默认配置仍是：
+
+```dotenv
+LANGSMITH_TRACING=false
+LANGSMITH_TRACE_CONTENT=false
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+LANGSMITH_API_KEY=
+LANGSMITH_PROJECT=atlasflow-dev
+```
+
+- API key 只在后端环境中读取，设置接口和前端永不返回它；
+- `LANGSMITH_TRACE_CONTENT=false` 时隐藏 trace 输入/输出，并对嵌套 secret、token、authorization 等
+  字段做递归脱敏；
+- 初始化、上传、连通检查或 URL 解析失败时进入降级状态，不阻断 Agent 主流程；
+- 前端只展示 `disabled / not_configured / ready / unreachable` 等安全状态；
+- 删除本地 Run 只删除 SQLite 数据，不会删除 LangSmith 远端 Trace。
+
+### 真实 Provider 指标
+
+OpenRouter chat 请求显式请求 usage。每次调用只保存 Provider 实际返回或本地可直接测量的元数据：
+
+- requested model 与实际 model；
+- request ID、generation ID、HTTP 状态、重试次数；
+- prompt/completion/total tokens；
+- Provider 返回的 cost 原始数值；
+- 调用耗时、成功/失败和错误类型。
+
+缺失值保持“不可用”，不会估算 token、成本或伪造调用记录。指标挂在对应 Trace Segment 下，前端
+可查看单次调用和 Run 汇总。
+
+### v0.4 API 增量
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| `GET` | `/api/v1/runs` | query/Run ID、状态、带时区日期筛选与分页 |
+| `POST` | `/api/v1/runs/{run_id}/rerun` | 复制原 query、policy、审批方式，生成新 Run |
+| `POST` | `/api/v1/runs/{run_id}/cancel` | 取消 pending/running/waiting_approval Run |
+| `DELETE` | `/api/v1/runs/{run_id}` | 输入完整 Run ID 后删除终态本地记录 |
+| `GET` | `/api/v1/analytics?range=7d\|30d\|all` | 读取 SQLite 聚合指标 |
+| `GET` | `/api/v1/settings/status` | 返回无 secret 的数据库、Provider、LangSmith 状态 |
+| `POST` | `/api/v1/settings/langsmith/check` | 主动检查 LangSmith 连通性 |
+| `GET` | `/api/v1/runs/{run_id}/events` | 可恢复的 SSE 事件流 |
+
+原有创建 Run、读取 Run 和结构化审批接口保持兼容。删除只允许终态 Run；活动 Run 必须先取消，
+并且请求体必须提供与路径完全相同的 `confirmation_run_id`。
+
+### 使用既有 langchain 环境运行
+
+后端继续使用用户指定的 `E:\conda_envs\langchain`：
+
+```powershell
+$env:TEMP='E:\codex\tmp'
+$env:TMP='E:\codex\tmp'
+$env:PIP_CACHE_DIR=(Join-Path (Get-Location) '.pip-cache')
+
+& 'E:\conda_envs\langchain\python.exe' -m pip install -e .
+& 'E:\conda_envs\langchain\python.exe' -m uvicorn atlasflow.main:create_app --factory --reload --port 8000
+```
+
+另开终端启动前端：
+
+```powershell
+Set-Location frontend
+npm install
+npm run dev
+```
+
+`frontend/.npmrc` 把 npm cache 固定到仓库根目录 `.npm-cache`；pip cache 也由上面的命令固定在
+仓库根目录 `.pip-cache`。两者均已忽略，不会提交，也不会占用 C 盘。
+
+前端默认连接 `http://localhost:8000/api/v1`，可用 `NEXT_PUBLIC_API_URL` 覆盖。真实执行需要有效的
+LLM 配置；LangSmith 是可选能力，即使未配置也可以运行 Agent。
+
+### v0.4 验证结果
+
+在 E 盘 langchain 环境完成：
+
+- Ruff 全仓检查通过；
+- 后端 `58 passed`，只有 Starlette 上游 anyio alias 弃用警告；
+- 前端 `npm run typecheck` 通过；
+- Next.js 生产构建通过，7/7 页面生成成功；
+- `git diff --check` 用于最终检查空白错误。
+
+测试全部使用 Fake Gateway/Mock HTTP transport，不消耗真实 Provider 额度；因此本次结果不代表用户
+账号下的 OpenRouter 或 LangSmith 已完成在线调用。填写 `.env` 后，可从 Settings 页检查 LangSmith，
+再创建一条真实 Run 验证远端 Trace 和 Provider usage。
+
+### 明确未纳入 v0.4 的内容
+
+- 没有把 Tool/RAG 重新接回 Agent 主图；
+- 没有新增 RAG 向量数据库；SQLite 只保存 Run/Event，并非 RAG 数据库；
+- 没有 LangSmith Dataset、Eval 或 Feedback；
+- 没有多用户认证、多进程写入或持久 LangGraph checkpointer；
+- 没有估算 Provider 成本或 token。

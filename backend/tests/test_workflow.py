@@ -10,6 +10,8 @@ from atlasflow.agents.contracts import (
     ResearchTask,
     RunPolicy,
 )
+from atlasflow.config import Settings
+from atlasflow.observability import configure_langsmith
 from atlasflow.schemas import ApprovalAction, ApprovalRequest, RunEventType, RunStatus
 
 from backend.tests.fakes import (
@@ -418,3 +420,32 @@ async def test_human_approval_can_approve_edit_and_cancel() -> None:
     assert cancelled.status is RunStatus.CANCELLED
     assert cancelled.report is None
     assert cancelled.events[-1].event_type is RunEventType.RUN_CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_initial_and_approval_resume_are_separate_trace_segments() -> None:
+    configure_langsmith(
+        Settings(_env_file=None, langsmith_tracing=False, langsmith_api_key="")
+    )
+    container = make_test_container()
+    segments = []
+
+    async def segment_sink(run_id, segment) -> None:
+        assert run_id == segment.atlasflow_run_id
+        segments.append(segment)
+
+    container.run_service.workflow.trace_segment_sink = segment_sink
+    waiting = await container.run_service.execute_and_wait(
+        "验证 Trace Segment", auto_approve=False
+    )
+    await container.run_service.resolve_approval(
+        waiting.id, ApprovalRequest(action=ApprovalAction.APPROVE)
+    )
+    completed = await _wait_for_terminal(container, waiting.id)
+
+    assert completed.status is RunStatus.COMPLETED
+    finished = [segment for segment in segments if segment.status == "completed"]
+    assert [segment.kind for segment in finished] == ["initial", "approval_resume"]
+    assert len({segment.segment_id for segment in finished}) == 2
+    assert all(segment.atlasflow_run_id == waiting.id for segment in finished)
+    assert all(segment.trace_status == "disabled" for segment in finished)
