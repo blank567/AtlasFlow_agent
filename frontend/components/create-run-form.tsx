@@ -77,7 +77,7 @@ export function CreateRunForm() {
 
       <div className="createFooter">
         <label className="switchLabel"><input type="checkbox" checked={autoApprove} onChange={(event) => setAutoApprove(event.target.checked)} /><span className="switch" /><span><strong>自动审批</strong><small>关闭后可在 Planner 阶段编辑任务 DAG</small></span></label>
-        <button className="primaryButton" disabled={busy || query.trim().length < 3}>{busy ? <><span className="spinner" />正在创建</> : <>开始研究 <span>→</span></>}</button>
+        <button className="primaryButton" disabled={busy || query.trim().length < 3}>{busy ? <><span className="spinner" />正在创建</> : "开始研究"}</button>
       </div>
       {error && <p className="formError" role="alert">{error}</p>}
     </form>

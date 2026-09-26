@@ -1,13 +1,14 @@
 {
   "name": "atlasflow-web",
-  "version": "0.5.0",
+  "version": "0.4.5",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test:flow": "node scripts/verify-agent-flow.mjs"
+    "test:flow": "node scripts/verify-agent-flow.mjs",
+    "test:ui": "node scripts/verify-event-visuals.mjs"
   },
   "dependencies": {
     "@xyflow/react": "^12.11.6",

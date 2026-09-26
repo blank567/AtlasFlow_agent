@@ -11,6 +11,7 @@ import { compactId, formatDate, formatDuration } from "../lib/format";
 import { PlanLineage, ResearchPlan, ResearchTask, RunEvent, RunRecord, TERMINAL_STATUSES } from "../lib/types";
 import { useRunStream } from "../hooks/use-run-stream";
 import { ApprovalPanel } from "./approval-panel";
+import { ConfirmDialog } from "./confirm-dialog";
 import { EventTimeline } from "./event-timeline";
 import { EmptyState, LoadingBlock, MetricCard, Panel, StatusBadge } from "./ui";
 
@@ -25,17 +26,20 @@ export function RunDetail({ runId }: { runId: string }) {
   const [tab, setTab] = useState<Tab>("flow");
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<"cancel" | "rerun" | null>(null);
   const visualRun = useMemo(() => run ? deriveRunFromEvents(run, events) : null, [events, run]);
   const agentLabel = useMemo(() => events.at(-1)?.agent ?? events.at(-1)?.node ?? "等待调度", [events]);
 
   async function handleCancel() {
-    if (!run || !window.confirm("确认取消这个 Run？已经产生的事件仍会保留。")) return;
+    if (!run) return;
+    setConfirmAction(null);
     setActionBusy(true); setActionError(null);
     try { setRun(await cancelRun(run.id)); await refresh(); } catch (reason) { setActionError(reason instanceof Error ? reason.message : "取消失败"); } finally { setActionBusy(false); }
   }
 
   async function handleRerun() {
     if (!run) return;
+    setConfirmAction(null);
     setActionBusy(true); setActionError(null);
     try { const created = await rerun(run.id); router.push(`/runs/${created.id}`); } catch (reason) { setActionError(reason instanceof Error ? reason.message : "重新运行失败"); setActionBusy(false); }
   }
@@ -58,7 +62,7 @@ export function RunDetail({ runId }: { runId: string }) {
       <nav className="breadcrumb"><Link href="/runs">运行记录</Link><span>/</span><code>{compactId(run.id)}</code></nav>
       <header className="runHeader">
         <div><div className="runHeaderMeta"><StatusBadge status={run.status} /><span className={`streamIndicator ${streamState}`}><i />{streamState === "live" ? "实时连接" : streamState === "reconnecting" ? "正在重连" : streamState === "connecting" ? "连接中" : "快照模式"}</span></div><h1>{run.query}</h1><p><code title={run.id}>{run.id}</code><button className="copyMini" onClick={() => void navigator.clipboard.writeText(run.id)}>复制</button><span>创建于 {formatDate(run.created_at)}</span></p></div>
-        <div className="headerActions">{!isTerminal && <button className="secondaryButton dangerText" disabled={actionBusy} onClick={() => void handleCancel()}>取消运行</button>}<button className="primaryButton" disabled={actionBusy} onClick={() => void handleRerun()}>↻ 重新运行</button></div>
+        <div className="headerActions">{!isTerminal && <button className="secondaryButton dangerText" disabled={actionBusy} onClick={() => setConfirmAction("cancel")}>取消运行</button>}<button className="primaryButton" disabled={actionBusy} onClick={() => setConfirmAction("rerun")}>重新运行</button></div>
       </header>
       {(error || actionError) && <div className="inlineAlert errorAlert"><strong>部分数据暂不可用</strong><span>{actionError ?? error}</span></div>}
       {run.status === "waiting_approval" && <ApprovalPanel run={run} onResolved={(value) => { setRun(value); void refresh(); }} />}
@@ -76,8 +80,8 @@ export function RunDetail({ runId }: { runId: string }) {
           {([['flow', 'Agent 流程'], ['tasks', 'Task DAG'], ['events', `实时事件 ${events.length}`], ['reviews', '审查记录'], ['report', '研究报告']] as [Tab, string][]).map(([value, label]) => <button role="tab" aria-selected={tab === value} className={tab === value ? "active" : ""} key={value} onClick={() => setTab(value)}>{label}</button>)}
         </div>
         <div className="tabContent">
-          {tab === "flow" && <><div className="tabIntro"><div><h2>Agent 执行拓扑</h2><p>只绘制真实路由；回环次数、决策分支和完整顺序来自 route_selected 事件。点击节点、连线或路径记录查看细节。</p></div><div className="graphLegend"><span><i className="legendDot running" />执行中</span><span><i className="legendDot completed" />已完成</span><span><i className="legendLine normal" />实际路由</span><span><i className="legendLine supplement" />Supplement</span><span><i className="legendLine replan" />Replan</span><span><i className="legendLine revise" />Revise</span><span><i className="legendLine fallback" />决策改道</span></div></div><AgentFlow events={events} status={run.status} /></>}
-          {tab === "tasks" && <><div className="tabIntro"><div><h2>Task DAG 与 PlanLineage</h2><p>基础计划与 Supplement 增量分离，版本切换不会抹去历史。</p></div></div><TaskGraph run={activeRun} events={events} /></>}
+          {tab === "flow" && <><div className="tabIntro"><div><h2>Agent 执行拓扑</h2><p>两行折返显示实际执行方向，外侧回线显示补充、重规划和修订；所有原始路由仍可在下方展开。</p></div><div className="graphLegend"><span><i className="legendDot running" />执行中</span><span><i className="legendDot completed" />已执行</span><span><i className="legendLine normal" />主线</span><span><i className="legendLine supplement" />补充</span><span><i className="legendLine replan" />重规划</span><span><i className="legendLine revise" />修订</span><span><i className="legendLine fallback" />决策改道</span></div></div><AgentFlow events={events} status={run.status} /></>}
+          {tab === "tasks" && <><div className="tabIntro"><div><h2>任务依赖与计划版本</h2><p>基础计划与补充任务分开记录，版本切换不会抹去历史。</p></div></div><TaskGraph run={activeRun} events={events} /></>}
           {tab === "events" && <div className="eventTab"><div className="tabIntro"><div><h2>事件时间线</h2><p>SSE 增量更新、事件去重，并通过 RunRecord 快照校准。</p></div><span className="panelHint">最新在前</span></div><EventTimeline events={events} /></div>}
           {tab === "reviews" && <ReviewHistory run={activeRun} />}
           {tab === "report" && <ReportView report={run.report} />}
@@ -85,7 +89,7 @@ export function RunDetail({ runId }: { runId: string }) {
       </Panel>
 
       <div className="detailBottomGrid">
-        <Panel title="LangSmith Trace Segments" meta={<span className="panelHint">{run.trace_segments.length} segments</span>}>
+        <Panel title="LangSmith 追踪片段" meta={<span className="panelHint">{run.trace_segments.length} 条记录</span>}>
           <p className="traceHelp">LangSmith 链接打开嵌套调用树与耗时详情；Agent 的分支、补充任务和回环请看本站的执行路径图。两者展示的是不同层次。</p>
           {!run.trace_segments.length ? <div className="emptyInline">后端尚未返回 Trace Segment。主流程不受观测服务状态影响。</div> : <div className="traceList">{run.trace_segments.map((trace, index) => {
             const segmentTokens = trace.provider_calls.map((call) => call.usage?.total_tokens).filter((value): value is number => typeof value === "number").reduce((sum, value) => sum + value, 0);
@@ -96,6 +100,7 @@ export function RunDetail({ runId }: { runId: string }) {
           <dl className="counterList"><div><dt>Plan 版本</dt><dd>{run.metrics.plan_versions}</dd></div><div><dt>Supplement</dt><dd>{run.metrics.supplement_rounds}</dd></div><div><dt>Replan</dt><dd>{run.metrics.replan_count}</dd></div><div><dt>Revision</dt><dd>{run.metrics.revision_count}</dd></div><div><dt>失败任务</dt><dd>{run.metrics.failed_tasks}</dd></div><div><dt>Provider 成本</dt><dd title="Provider 返回的原始数值；未假定币种">{totalCost !== undefined ? `${totalCost.toFixed(6)}（原始值）` : "成本不可用"}</dd></div><div><dt>最新 Request ID</dt><dd title={latestProviderCall?.request_id}>{latestProviderCall?.request_id ? compactId(latestProviderCall.request_id) : "不可用"}</dd></div><div><dt>实际模型</dt><dd title={latestProviderCall?.model}>{latestProviderCall?.model ?? "不可用"}</dd></div></dl>
         </Panel>
       </div>
+      {confirmAction && <ConfirmDialog title={confirmAction === "cancel" ? "确认取消运行？" : "确认重新运行？"} description={confirmAction === "cancel" ? "运行将立即停止；已有的事件和追踪记录仍会保留。" : "系统会用相同参数创建新运行，再次调用模型可能产生费用。"} confirmLabel={confirmAction === "cancel" ? "确认取消" : "创建新运行"} cancelLabel="继续查看" tone={confirmAction === "cancel" ? "danger" : "default"} onCancel={() => setConfirmAction(null)} onConfirm={() => { if (confirmAction === "cancel") void handleCancel(); else void handleRerun(); }} />}
     </main>
   );
 }

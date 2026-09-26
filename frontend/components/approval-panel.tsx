@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { resolveApproval } from "../lib/api";
 import { ResearchPlan, RunRecord } from "../lib/types";
+import { ConfirmDialog } from "./confirm-dialog";
 
 export function ApprovalPanel({ run, onResolved }: { run: RunRecord; onResolved: (run: RunRecord) => void }) {
   const [plan, setPlan] = useState<ResearchPlan | null>(run.plan ? structuredClone(run.plan) : null);
@@ -10,6 +11,7 @@ export function ApprovalPanel({ run, onResolved }: { run: RunRecord; onResolved:
   const [json, setJson] = useState(run.plan ? JSON.stringify(run.plan, null, 2) : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<"approve" | "edit" | "cancel" | null>(null);
 
   useEffect(() => {
     setPlan(run.plan ? structuredClone(run.plan) : null);
@@ -30,6 +32,7 @@ export function ApprovalPanel({ run, onResolved }: { run: RunRecord; onResolved:
   }
 
   async function submit(action: "approve" | "edit" | "cancel") {
+    setPendingAction(null);
     setBusy(true);
     setError(null);
     try {
@@ -64,7 +67,8 @@ export function ApprovalPanel({ run, onResolved }: { run: RunRecord; onResolved:
         {showJson && <textarea className="jsonEditor" spellCheck={false} value={json} onChange={(event) => setJson(event.target.value)} />}
       </>}
       {error && <p className="formError" role="alert">{error}</p>}
-      <div className="approvalActions"><button className="primaryButton" disabled={busy || !plan} onClick={() => void submit("approve")}>批准原计划</button><button className="secondaryButton" disabled={busy || !plan} onClick={() => void submit("edit")}>保存修改并继续</button><button className="textButton dangerText" disabled={busy} onClick={() => void submit("cancel")}>取消运行</button></div>
+      <div className="approvalActions"><button className="primaryButton" disabled={busy || !plan} onClick={() => setPendingAction("approve")}>批准原计划</button><button className="secondaryButton" disabled={busy || !plan} onClick={() => setPendingAction("edit")}>保存修改并继续</button><button className="textButton dangerText" disabled={busy} onClick={() => setPendingAction("cancel")}>取消运行</button></div>
+      {pendingAction && <ConfirmDialog title={pendingAction === "cancel" ? "取消这次研究？" : pendingAction === "edit" ? "确认保存并继续？" : "确认批准计划？"} description={pendingAction === "cancel" ? "运行将结束，已产生的事件仍会保留。" : pendingAction === "edit" ? "系统会提交当前编辑的任务计划并继续执行；后端会再次校验任务依赖。" : "批准后研究任务将开始执行，并可能产生模型调用费用。"} confirmLabel={pendingAction === "cancel" ? "确认取消" : pendingAction === "edit" ? "保存并继续" : "批准并执行"} cancelLabel="返回检查" tone={pendingAction === "cancel" ? "danger" : "default"} onCancel={() => setPendingAction(null)} onConfirm={() => void submit(pendingAction)} />}
     </section>
   );
 }

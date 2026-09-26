@@ -15,5 +15,5 @@ export function RecentRuns() {
   }, []);
   if (runs === null) return <LoadingBlock label="读取最近运行" />;
   if (!runs.length) return <EmptyState title={unavailable ? "运行列表接口暂不可用" : "还没有运行记录"} description={unavailable ? "后端升级完成后会自动显示持久化记录。" : "从上方创建第一个多 Agent 研究任务。"} />;
-  return <div className="runList compact">{runs.map((run) => <RunRow key={run.id} run={run} />)}<Link className="textLink" href="/runs">查看全部运行 →</Link></div>;
+  return <div className="runList compact">{runs.map((run) => <RunRow key={run.id} run={run} />)}<Link className="textLink" href="/runs">查看全部运行</Link></div>;
 }

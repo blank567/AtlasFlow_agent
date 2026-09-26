@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { deleteRun, listRuns, rerun } from "../../lib/api";
 import { RunListResponse, RunRecord, TERMINAL_STATUSES } from "../../lib/types";
 import { EmptyState, LoadingBlock, PageHeader, Panel, RunRow } from "../../components/ui";
+import { ConfirmDialog } from "../../components/confirm-dialog";
 
 const EMPTY_LIST: RunListResponse = { items: [], total: 0, page: 1, page_size: 10, pages: 1 };
 
@@ -19,6 +20,7 @@ export default function RunsPage() {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<RunRecord | null>(null);
+  const [rerunTarget, setRerunTarget] = useState<RunRecord | null>(null);
   const [confirmation, setConfirmation] = useState("");
 
   const load = useCallback(async (nextPage = page) => {
@@ -45,6 +47,7 @@ export default function RunsPage() {
   }
 
   async function handleRerun(runId: string) {
+    setRerunTarget(null);
     setBusyId(runId);
     try {
       const created = await rerun(runId);
@@ -73,8 +76,8 @@ export default function RunsPage() {
   }
 
   return (
-    <main className="pageContent">
-      <PageHeader eyebrow="RUN HISTORY" title="运行记录" description="检索、复用和审计本地持久化的每一次研究执行。" />
+    <main className="pageContent runsPage">
+      <PageHeader eyebrow="运行档案" title="每一次执行，都可以追溯" description="按状态和时间查找记录，查看结果，或基于旧参数发起新运行。" />
       <Panel className="filterPanel">
         <form className="filterBar" onSubmit={submitFilters}>
           <label className="searchField"><span aria-hidden>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索研究问题或 Run ID" /></label>
@@ -86,14 +89,14 @@ export default function RunsPage() {
           <button className="secondaryButton">应用筛选</button>
         </form>
       </Panel>
-      <Panel title="全部 Runs" meta={<span className="panelHint">{data ? `${data.total} 条记录` : "读取中"}</span>} className="runsPanel">
+      <Panel title="全部运行" meta={<span className="panelHint">{data ? `${data.total} 条记录` : "读取中"}</span>} className="runsPanel">
         {error && <div className="inlineAlert errorAlert"><strong>无法完成请求</strong><span>{error}</span></div>}
         {!data ? <LoadingBlock /> : data.items.length === 0 ? <EmptyState title="没有匹配的运行" description="调整筛选条件，或回到工作台创建新任务。" /> : (
           <div className="runList">
             {data.items.map((run) => (
               <RunRow key={run.id} run={run} actions={<>
-                <button className="iconButton" title="使用相同参数重新运行" disabled={busyId === run.id} onClick={() => void handleRerun(run.id)}>↻</button>
-                <button className="iconButton dangerText" title={TERMINAL_STATUSES.has(run.status) ? "删除本地记录" : "请先取消运行，再删除记录"} disabled={busyId === run.id || !TERMINAL_STATUSES.has(run.status)} onClick={() => { setDeleteTarget(run); setConfirmation(""); }}>⌫</button>
+                <button className="rowActionButton" type="button" disabled={busyId === run.id} onClick={() => setRerunTarget(run)}>重新运行</button>
+                <button className="rowActionButton dangerText" type="button" title={TERMINAL_STATUSES.has(run.status) ? "删除本地记录" : "请先取消运行，再删除记录"} disabled={busyId === run.id || !TERMINAL_STATUSES.has(run.status)} onClick={() => { setDeleteTarget(run); setConfirmation(""); }}>删除</button>
               </>} />
             ))}
           </div>
@@ -111,6 +114,7 @@ export default function RunsPage() {
           </section>
         </div>
       )}
+      {rerunTarget && <ConfirmDialog title="确认重新运行？" description={`将使用“${rerunTarget.query || "未命名研究任务"}”的原始参数创建新运行，模型调用可能产生费用。`} confirmLabel="创建新运行" cancelLabel="保留当前页面" onCancel={() => setRerunTarget(null)} onConfirm={() => void handleRerun(rerunTarget.id)} />}
     </main>
   );
 }

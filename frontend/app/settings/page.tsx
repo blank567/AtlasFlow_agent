@@ -46,10 +46,10 @@ export default function SettingsPage() {
   const stateLabel = state === "ready" && langsmith?.connection_status !== "reachable" ? "已配置 · 待检测" : STATE_LABEL[state] ?? state;
   return (
     <main className="pageContent">
-      <PageHeader eyebrow="READ-ONLY CONFIGURATION" title="系统设置" description="查看本地服务状态与安全配置；密钥不会被浏览器读取或显示。" actions={<span className="softBadge">v{status?.app_version ?? "0.5.0"}</span>} />
+      <PageHeader eyebrow="连接与存储" title="让运行环境保持透明" description="检查追踪、模型和本地数据库状态；密钥不会传到浏览器。" actions={<span className="softBadge">v{status?.app_version ?? "0.4.5"}</span>} />
       {error && <div className="inlineAlert errorAlert"><strong>检测未完成</strong><span>{error}</span></div>}
       {!status && !error ? <LoadingBlock /> : <div className="settingsGrid">
-        <Panel title="LangSmith Observability" meta={<span className={`connectionBadge connection-${state}`}><i />{stateLabel}</span>} className="settingsMain">
+        <Panel title="LangSmith 追踪" meta={<span className={`connectionBadge connection-${state}`}><i />{stateLabel}</span>} className="settingsMain">
           <p className="settingsIntro">一个 AtlasFlow Run 可以对应多个 Trace Segment，并通过 <code>atlasflow_run_id</code> 关联。LangSmith 不可用时，Agent 主流程继续执行。</p>
           <dl className="settingsList">
             <div><dt>Tracing</dt><dd>{langsmith?.enabled ? "已启用" : "未启用"}</dd></div>
@@ -74,7 +74,7 @@ export default function SettingsPage() {
           </Panel>
           <Panel title="LangGraph Studio">
             <p className="privacyNote">先在 E 盘终端运行 <code>.\scripts\start-studio.ps1</code>，再打开本地 Studio。Studio 使用独立线程，不会写入 AtlasFlow 的 Run/Event 数据库。</p>
-            <a className="secondaryButton inlineButton" href="https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024" target="_blank" rel="noreferrer">打开 Studio ↗</a>
+            <a className="secondaryButton inlineButton" href="https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024" target="_blank" rel="noreferrer">打开 Studio</a>
           </Panel>
         </div>
       </div>}

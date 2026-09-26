@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "atlasflow"
-version = "0.5.0"
+version = "0.4.5"
 description = "Observable multi-agent research and decision platform"
 readme = "README.md"
 requires-python = ">=3.11"

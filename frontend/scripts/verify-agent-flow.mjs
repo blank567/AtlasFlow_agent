@@ -11,7 +11,8 @@ function loadTypeScript(relativePath) {
   return exports;
 }
 
-const { buildAgentFlow } = loadTypeScript("../lib/agent-flow-model.ts");
+const { buildAgentFlow, buildAgentOverview } = loadTypeScript("../lib/agent-flow-model.ts");
+const { mainDiagramPath, feedbackDiagramPath } = loadTypeScript("../lib/agent-flow-diagram.ts");
 const { eventReducer, initialEventState } = loadTypeScript("../lib/event-reducer.ts");
 
 function route(sequence, source, target, decision) {
@@ -42,6 +43,26 @@ assert.equal(flow.edges.find((edge) => edge.kind === "revise")?.target, "synthes
 assert.equal(flow.edges.find((edge) => edge.source === "planner" && edge.target === "approval")?.routes.length, 2);
 assert.equal(buildAgentFlow([route(25, "critic", "synthesizer", "replan")], "completed").edges[0]?.kind, "fallback", "a requested replan is not an executed replan when policy diverts it");
 assert.equal(buildAgentFlow([], "running").edges.length, 0, "do not draw routes that never happened");
+
+const overview = buildAgentOverview(flow);
+assert.deepEqual(overview.stages.map((stage) => stage.id), ["plan", "approval", "research", "review", "report", "finish"]);
+assert.deepEqual(overview.mainLinks.map((link) => `${link.source}->${link.target}`), ["plan->approval", "approval->research", "research->review", "review->report", "report->finish"]);
+assert.deepEqual(overview.feedbackLinks.map((link) => link.kind), ["supplement", "replan", "revise"]);
+assert.equal(overview.feedbackLinks.find((link) => link.kind === "supplement")?.routes[0].sequence, 9);
+assert.equal(overview.feedbackLinks.find((link) => link.kind === "replan")?.target, "plan");
+assert.equal(overview.feedbackLinks.find((link) => link.kind === "revise")?.source, "report");
+assert.equal(overview.mainLinks.find((link) => link.source === "plan")?.routes.length, 2, "repeated main transitions retain their counts");
+assert.equal(buildAgentOverview(buildAgentFlow([], "running")).mainLinks.length, 0, "the overview must not invent an executed arrow");
+const diverted = buildAgentOverview(buildAgentFlow([route(25, "critic", "synthesizer", "replan"), route(26, "quality_gate", "finalizer", "replan")], "completed"));
+assert.deepEqual(diverted.mainLinks.map((link) => `${link.source}->${link.target}`), ["review->report", "report->finish"], "actual forward arrows remain visible even when the decision was diverted");
+assert.ok(diverted.mainLinks.every(mainDiagramPath), "every actual forward transition has an arrow path");
+assert.deepEqual(diverted.feedbackLinks.map((link) => link.kind), ["fallback", "fallback"], "diverted decisions also stay in feedback details");
+assert.equal(feedbackDiagramPath(diverted.feedbackLinks[0]), undefined, "a forward diversion does not create a false loop");
+assert.equal(buildAgentOverview(buildAgentFlow([route(26, "planner", "finalizer")], "completed")).feedbackLinks[0]?.target, "finish", "a skipped stage is shown as a direct jump");
+assert.ok(overview.mainLinks.every(mainDiagramPath), "all five mainline arrows have diagram paths");
+assert.ok(overview.feedbackLinks.every(feedbackDiagramPath), "the known supplement, replan, and revise loops have diagram paths");
+const otherLoops = buildAgentOverview(buildAgentFlow([route(30, "research_gate", "planner", "replan"), route(31, "quality_gate", "planner", "replan")], "completed"));
+assert.ok(otherLoops.feedbackLinks.every(feedbackDiagramPath), "research and quality replans also return visibly to planning");
 
 const noisy = Array.from({ length: 1100 }, (_, index) => ({ event_id: `noise-${index}`, sequence: index + 100, event_type: "node_started", node: "researcher", data: {}, message: "event", created_at: "2026-01-01T00:00:00Z" }));
 const retained = eventReducer(initialEventState, { type: "hydrate", events: [events[0], ...noisy] });

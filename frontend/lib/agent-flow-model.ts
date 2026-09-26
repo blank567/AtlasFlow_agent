@@ -31,6 +31,81 @@ export type AgentFlowEdge = {
   routes: AgentRoute[];
 };
 
+export type FlowStage = {
+  id: string;
+  label: string;
+  description: string;
+  nodeIds: readonly string[];
+  state: FlowState;
+};
+
+export type FlowStageLink = {
+  id: string;
+  source: string;
+  target: string;
+  kind: RouteKind;
+  routes: AgentRoute[];
+};
+
+const STAGE_DEFINITIONS = [
+  { id: "plan", label: "规划", description: "确定目标与计划", nodeIds: ["supervisor", "planner"] },
+  { id: "approval", label: "审批", description: "确认执行方案", nodeIds: ["approval"] },
+  { id: "research", label: "研究", description: "分派并汇集结果", nodeIds: ["schedule_wave", "researcher", "wave_join", "research_gate"] },
+  { id: "review", label: "审查", description: "检查证据与结论", nodeIds: ["critic"] },
+  { id: "report", label: "成稿", description: "合成并校验报告", nodeIds: ["synthesizer", "quality_gate"] },
+  { id: "finish", label: "完成", description: "归档运行结果", nodeIds: ["finalizer"] },
+] as const;
+
+const STAGE_BY_NODE = new Map<string, string>(STAGE_DEFINITIONS.flatMap((stage) => stage.nodeIds.map((nodeId) => [nodeId, stage.id] as const)));
+
+export function buildAgentOverview(flow: ReturnType<typeof buildAgentFlow>): {
+  stages: FlowStage[];
+  mainLinks: FlowStageLink[];
+  feedbackLinks: FlowStageLink[];
+} {
+  const stages: FlowStage[] = STAGE_DEFINITIONS.map((stage) => {
+    const members = flow.nodes.filter((node) => (stage.nodeIds as readonly string[]).includes(node.id));
+    const state: FlowState = members.some((node) => node.state === "failed") ? "failed"
+      : members.some((node) => node.state === "running") ? "running"
+      : members.some((node) => node.state === "completed") ? "completed" : "waiting";
+    return { ...stage, state };
+  });
+  const main = new Map<string, FlowStageLink>();
+  const feedback = new Map<string, FlowStageLink>();
+  for (const route of flow.routes) {
+    const source = STAGE_BY_NODE.get(route.source);
+    const target = STAGE_BY_NODE.get(route.target);
+    if (!source || !target) continue;
+    const kind = routeKind(route);
+    if (source === target && kind === "normal") continue;
+    const sourceIndex = STAGE_DEFINITIONS.findIndex((stage) => stage.id === source);
+    const targetIndex = STAGE_DEFINITIONS.findIndex((stage) => stage.id === target);
+    const isAdjacent = targetIndex === sourceIndex + 1;
+    // The diagram describes where execution actually went. A policy-diverted
+    // review is still an executed forward transition, even though its decision
+    // also belongs in the feedback list for explanation.
+    if (isAdjacent) {
+      const id = `${source}:${target}`;
+      const existing = main.get(id);
+      if (existing) {
+        existing.routes.push(route);
+        if (kind === "normal") existing.kind = "normal";
+      } else main.set(id, { id, source, target, kind, routes: [route] });
+    }
+    if (!isAdjacent || kind !== "normal") {
+      const id = `${source}:${target}:${kind}`;
+      const existing = feedback.get(id);
+      if (existing) existing.routes.push(route);
+      else feedback.set(id, { id, source, target, kind, routes: [route] });
+    }
+  }
+  return {
+    stages,
+    mainLinks: [...main.values()],
+    feedbackLinks: [...feedback.values()].sort((a, b) => a.routes[0].sequence - b.routes[0].sequence),
+  };
+}
+
 const NODE_DEFINITIONS = [
   { id: "supervisor", label: "Supervisor", description: "入口与预算", position: { x: 0, y: 20 } },
   { id: "planner", label: "Planner", description: "初始计划 / Replan", position: { x: 220, y: 20 } },

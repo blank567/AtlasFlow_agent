@@ -8,7 +8,7 @@ const STATUS_LABELS: Record<string, string> = {
   running: "运行中",
   waiting_approval: "等待审批",
   completed: "已完成",
-  completed_with_warnings: "完成 · 有警告",
+  completed_with_warnings: "完成但有警告",
   failed: "失败",
   cancelled: "已取消",
 };
@@ -51,7 +51,7 @@ export function RunRow({ run, actions }: { run: RunRecord; actions?: ReactNode }
         <Link href={`/runs/${run.id}`} className="runQuery">{run.query || "未命名研究任务"}</Link>
         <div className="runMeta"><code title={run.id}>{compactId(run.id)}</code><span>创建于 {formatDate(run.created_at)}</span></div>
       </div>
-      <div className="runStats"><span><strong>{run.metrics.total_tasks}</strong> Tasks</span><span><strong>{run.metrics.model_calls}</strong> Calls</span></div>
+      <div className="runStats"><span><strong>{run.metrics.total_tasks}</strong> 任务</span><span><strong>{run.metrics.model_calls}</strong> 调用</span></div>
       <StatusBadge status={run.status} />
       {actions && <div className="rowActions">{actions}</div>}
     </article>

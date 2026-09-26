@@ -252,7 +252,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .legendLine { width: 15px; border-top: 2px solid #4f67d8; }
 .legendLine.supplement { border-color: #9a6dce; border-top-style: dashed; }
 .legendLine.replan { border-color: #d67a52; border-top-style: dashed; }
-.legendLine.revise { border-color: #d2a14b; border-top-style: dashed; }
+.legendLine.revise { border-color: #b97817; border-top-style: dashed; }
 .legendLine.fallback { border-color: #7d8797; border-top-style: dashed; }
 .routeHistory { padding: 16px 22px 20px; }
 .routeHistoryHeader { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
@@ -263,6 +263,26 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .routeHistoryList code { color: var(--primary); font-size: 9px; }.routeHistoryList span { overflow: hidden; flex: 1; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.routeHistoryList b { color: var(--muted); }.routeHistoryList small { color: var(--muted); font-size: 8px; white-space: nowrap; }
 .routeKind { padding: 3px 5px; border-radius: 4px; font-size: 8px; font-style: normal; font-weight: 800; }.routeKind-supplement { color: #7952a8; background: #f2eafb; }.routeKind-replan { color: #ae5733; background: #fbece4; }.routeKind-revise { color: #9e762a; background: #fbf2d9; }.routeKind-fallback { color: #586476; background: #edf0f4; }
 .routeDrawerItem { padding: 5px 0; border-bottom: 1px solid var(--line); }
+.agentFlowOverview { padding: 24px 22px 18px; border-bottom: 1px solid var(--line); }
+.flowSectionHeading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 13px; }
+.flowSectionHeading strong { font-size: 12px; }.flowSectionHeading span { color: var(--muted); font-size: 10px; }
+.flowDiagramScroll { overflow-x: auto; padding: 2px 2px 8px; scrollbar-color: #c9d1df transparent; }
+.flowDiagramCanvas { position: relative; min-width: 1000px; height: 480px; background: #fafbfe; border: 1px solid #edf0f5; border-radius: 10px; }
+.flowDiagramPaths { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.flowMobileHint { display: none; }
+.flowDiagramEdge { cursor: pointer; }.flowDiagramEdge:focus-visible { outline: none; }.flowDiagramEdge:focus-visible path:first-of-type { stroke-width: 4; }
+.flowStage { position: absolute; z-index: 1; display: grid; align-content: start; gap: 5px; width: 18%; height: 110px; padding: 12px 14px; color: var(--ink); background: #fff; border: 1px solid var(--line); border-left: 3px solid #c5ccd7; border-radius: 9px; text-align: left; }
+.flowStage:hover { border-color: #8c9ce7; }.flowStage:focus-visible, .flowFeedbackItem:focus-visible, .routeHistoryList button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.flowStage-running { border-left-color: var(--primary); background: #f8f9ff; }.flowStage-completed { border-left-color: var(--green); }.flowStage-failed { border-left-color: var(--red); }
+.flowStageTop { display: flex; align-items: center; justify-content: space-between; min-height: 14px; }.flowStageNumber { color: #919bae; font-size: 10px; font-variant-numeric: tabular-nums; }
+.flowStage strong { font-size: 15px; letter-spacing: -.02em; }.flowStage small { color: var(--ink-soft); font-size: 10px; }.flowStageStatus { margin-top: 5px; color: var(--muted); font-size: 10px; }.flowStage-running .flowStageStatus { color: var(--primary-dark); font-weight: 700; }
+.flowFeedback { margin-top: 18px; padding-top: 17px; border-top: 1px solid var(--line); }.flowFeedback .flowSectionHeading { margin-bottom: 10px; }
+.flowFeedbackList { display: flex; flex-wrap: wrap; gap: 8px; }.flowFeedbackItem { display: grid; gap: 5px; min-width: 205px; padding: 10px 12px; color: var(--ink); background: #f8f9fb; border: 1px solid var(--line); border-left: 3px solid #8b96a6; border-radius: 7px; text-align: left; }.flowFeedbackItem:hover { background: #fff; border-color: #9aa8ca; }
+.flowFeedbackItem strong { font-size: 11px; }.flowFeedbackItem strong span { padding: 0 3px; color: var(--muted); }.flowFeedbackItem small { color: var(--muted); font-size: 9px; }.flowFeedbackKind { color: #667387; font-size: 10px; font-weight: 700; }
+.flowFeedback-supplement { border-left-color: #9a6dce; }.flowFeedback-supplement .flowFeedbackKind { color: #7952a8; }.flowFeedback-replan { border-left-color: #d67a52; }.flowFeedback-replan .flowFeedbackKind { color: #ae5733; }.flowFeedback-revise { border-left-color: #d2a14b; }.flowFeedback-revise .flowFeedbackKind { color: #9e762a; }
+.flowFeedbackEmpty { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.routeHistory { padding: 0 22px 16px; }.routeHistoryHeader { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0; padding: 15px 0 0; cursor: pointer; list-style: none; }.routeHistoryHeader::-webkit-details-marker { display: none; }.routeHistoryHeader strong::before { content: "▸"; display: inline-block; width: 15px; color: var(--primary); }.routeHistory[open] .routeHistoryHeader strong::before { content: "▾"; }
+.routeHistoryList { margin-top: 13px; }.routeHistoryEmpty { margin: 12px 0 0; }
 .legendDot { width: 7px; height: 7px; background: #b8c0cb; border-radius: 50%; }
 .legendDot.running { background: var(--primary); }.legendDot.completed { background: var(--green); }.legendDot.waiting { background: #b8c0cb; }
 .legendDot.initial { background: var(--primary); }.legendDot.supplement { background: #8b69c6; }
@@ -387,6 +407,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
   .metricStrip, .analyticsMetrics { grid-template-columns: 1fr 1fr; }.metricCard { min-height: 92px; padding: 13px; }.metricCard > strong { font-size: 16px; }.metricStrip .metricCard:first-child { grid-column: 1 / -1; }
   .runHeader h1 { font-size: 23px; }.runHeader .headerActions { width: 100%; }.runHeader .headerActions button { flex: 1; }.runHeader p code { max-width: 200px; }.approvalHeading { display: grid; }.taskEditGrid { grid-template-columns: 1fr; }.approvalActions { display: grid; }.approvalActions button { width: 100%; }
   .visualizationPanel { margin-inline: 0; }.tabBar { padding: 0 8px; }.tabBar button { padding: 0 10px; }.tabIntro { display: grid; padding: 16px 16px 2px; }.agentFlowCanvas { height: 340px; }.taskFlowCanvas { height: 400px; }.react-flow__controls { display: none; }.eventTimeline { padding-inline: 14px; }.eventBody > div { display: grid; gap: 4px; }.reviewColumns, .markdownReport { padding: 16px; }.markdownReport { overflow-x: auto; font-size: 12px; }
+  .agentFlowOverview { padding: 18px 15px 15px; }.flowSectionHeading { display: grid; gap: 3px; }.flowMobileHint { display: block; margin: 3px 0 0; color: var(--primary-dark); font-size: 11px; }.flowFeedbackItem { flex: 1 1 100%; }.routeHistory { padding-inline: 15px; }.routeHistoryHeader { align-items: flex-start; flex-direction: column; gap: 3px; }
   .traceList article { grid-template-columns: 24px 1fr auto; padding: 9px 0; }.traceList article > .softBadge { display: none; }.traceList article > .traceActions { grid-column: 2 / -1; justify-content: flex-start; }
   .providerDetails { grid-column: 2 / -1; }.providerCall { grid-template-columns: 1fr auto; }.providerCall > span:nth-child(n+2), .providerCall code { display: none; }
   .pageHeader .segmented { width: 100%; }.segmented button { flex: 1; }.chartPanel { min-height: 310px; }.settingsActions { display: grid; }.settingsActions button { width: 100%; }.modal { padding: 20px; }
