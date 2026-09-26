@@ -11,7 +11,7 @@ LANGSMITH_TRACING=true
 LANGSMITH_API_KEY=lsv2_...
 LANGSMITH_PROJECT=atlasflow
 LANGSMITH_ENDPOINT=https://api.smith.langchain.com
-LANGSMITH_TRACE_CONTENT=false`;
+LANGSMITH_TRACE_CONTENT=true`;
 
 const STATE_LABEL: Record<string, string> = { ready: "连接正常", disabled: "追踪未启用", not_configured: "尚未配置", unreachable: "连接失败", error: "连接失败" };
 
@@ -46,7 +46,7 @@ export default function SettingsPage() {
   const stateLabel = state === "ready" && langsmith?.connection_status !== "reachable" ? "已配置 · 待检测" : STATE_LABEL[state] ?? state;
   return (
     <main className="pageContent">
-      <PageHeader eyebrow="READ-ONLY CONFIGURATION" title="系统设置" description="查看本地服务状态与安全配置；密钥不会被浏览器读取或显示。" actions={<span className="softBadge">v{status?.app_version ?? "0.4.0"}</span>} />
+      <PageHeader eyebrow="READ-ONLY CONFIGURATION" title="系统设置" description="查看本地服务状态与安全配置；密钥不会被浏览器读取或显示。" actions={<span className="softBadge">v{status?.app_version ?? "0.5.0"}</span>} />
       {error && <div className="inlineAlert errorAlert"><strong>检测未完成</strong><span>{error}</span></div>}
       {!status && !error ? <LoadingBlock /> : <div className="settingsGrid">
         <Panel title="LangSmith Observability" meta={<span className={`connectionBadge connection-${state}`}><i />{stateLabel}</span>} className="settingsMain">
@@ -60,6 +60,7 @@ export default function SettingsPage() {
             <div><dt>最近检测</dt><dd>{formatDate(langsmith?.last_checked_at)}</dd></div>
           </dl>
           {langsmith?.message && <div className="inlineAlert neutralAlert"><span>{langsmith.message}</span></div>}
+          <p className="privacyNote">开启 Trace 内容后，新运行的查询、任务和结果会发送到 LangSmith；密钥字段仍会脱敏。旧 Trace 的空白输入输出不会补录。</p>
           <div className="settingsActions"><button className="primaryButton" disabled={checking} onClick={() => void check()}>{checking ? <><span className="spinner" />检测中</> : "重新检测 LangSmith"}</button><button className="secondaryButton" onClick={() => void copyTemplate()}>{copied ? "已复制 ✓" : "复制 .env 模板"}</button></div>
         </Panel>
         <div className="settingsSide">
@@ -70,6 +71,10 @@ export default function SettingsPage() {
           <Panel title="模型 Provider">
             <dl className="settingsList compactList"><div><dt>状态</dt><dd>{status?.provider?.configured ? "已配置" : "未配置"}</dd></div><div><dt>Provider</dt><dd>{status?.provider?.name ?? "OpenRouter"}</dd></div><div><dt>Model</dt><dd>{status?.provider?.model ?? "不可用"}</dd></div></dl>
             <p className="privacyNote">Token、成本和 Request ID 仅在 Provider 返回真实 usage 时展示，不进行估算。</p>
+          </Panel>
+          <Panel title="LangGraph Studio">
+            <p className="privacyNote">先在 E 盘终端运行 <code>.\scripts\start-studio.ps1</code>，再打开本地 Studio。Studio 使用独立线程，不会写入 AtlasFlow 的 Run/Event 数据库。</p>
+            <a className="secondaryButton inlineButton" href="https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024" target="_blank" rel="noreferrer">打开 Studio ↗</a>
           </Panel>
         </div>
       </div>}

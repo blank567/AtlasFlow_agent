@@ -33,7 +33,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="sidebarFoot">
           <span className="onlineDot" />
           <span>本地工作区</span>
-          <small>v0.4.0</small>
+          <small>v0.5.0</small>
         </div>
       </aside>
       <div className="pageFrame">

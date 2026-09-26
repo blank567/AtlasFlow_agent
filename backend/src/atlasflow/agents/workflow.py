@@ -6,12 +6,14 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter
-from typing import Annotated, Any, Literal, TypedDict
+from typing import Annotated, Any, Literal
+from uuid import uuid4
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, Send, interrupt
+from typing_extensions import TypedDict
 
 from atlasflow.agents.contracts import (
     AgentError,
@@ -119,6 +121,14 @@ class AgentState(TypedDict, total=False):
     metrics: ExecutionMetrics
 
 
+class StudioInput(TypedDict, total=False):
+    """Small user-facing input; the Studio entry node fills internal state."""
+
+    query: str
+    auto_approve: bool
+    policy: dict[str, Any]
+
+
 @dataclass(frozen=True, slots=True)
 class WorkflowExecution:
     """Stable boundary returned to the run service."""
@@ -154,6 +164,7 @@ class ResearchWorkflow:
         max_revisions: int = MAX_REVISIONS,
         quality_threshold: int = QUALITY_THRESHOLD,
         trace_segment_sink: TraceSegmentSink | None = None,
+        studio_mode: bool = False,
     ) -> None:
         if not 1 <= max_concurrency <= 3:
             raise ValueError("max_concurrency must be between 1 and 3")
@@ -193,8 +204,13 @@ class ResearchWorkflow:
         self.max_revisions = max_revisions
         self.quality_threshold = quality_threshold
         self.trace_segment_sink = trace_segment_sink
-        self.checkpointer = checkpointer or MemorySaver(
-            serde=JsonPlusSerializer(allowed_msgpack_modules=_CHECKPOINT_TYPES)
+        self.studio_mode = studio_mode
+        self.checkpointer = checkpointer or (
+            None
+            if studio_mode
+            else MemorySaver(
+                serde=JsonPlusSerializer(allowed_msgpack_modules=_CHECKPOINT_TYPES)
+            )
         )
         self._research_slots = asyncio.Semaphore(max_concurrency)
         self._concurrency_lock = asyncio.Lock()
@@ -203,7 +219,11 @@ class ResearchWorkflow:
         self.graph = self._build_graph()
 
     def _build_graph(self):
-        graph = StateGraph(AgentState)
+        graph = StateGraph(
+            AgentState, input_schema=StudioInput if self.studio_mode else None
+        )
+        if self.studio_mode:
+            graph.add_node("studio_entry", self._studio_entry)
         graph.add_node("supervisor", self._supervisor)
         graph.add_node("planner", self._planner)
         graph.add_node("approval", self._approval)
@@ -216,7 +236,11 @@ class ResearchWorkflow:
         graph.add_node("quality_gate", self._quality_gate)
         graph.add_node("finalizer", self._finalizer)
 
-        graph.add_edge(START, "supervisor")
+        if self.studio_mode:
+            graph.add_edge(START, "studio_entry")
+            graph.add_edge("studio_entry", "supervisor")
+        else:
+            graph.add_edge(START, "supervisor")
         graph.add_edge("supervisor", "planner")
         graph.add_conditional_edges(
             "planner",
@@ -281,6 +305,16 @@ class ResearchWorkflow:
         policy: RunPolicy | None = None,
     ) -> WorkflowExecution:
         resolved_policy = policy or RunPolicy()
+        self._validate_policy_budget(resolved_policy)
+        initial = self._initial_state(
+            run_id=run_id,
+            query=query,
+            auto_approve=auto_approve,
+            policy=resolved_policy,
+        )
+        return await self._invoke(initial, run_id=run_id)
+
+    def _validate_policy_budget(self, resolved_policy: RunPolicy) -> None:
         if (
             resolved_policy.initial_task_count is not None
             and resolved_policy.initial_task_count > self.max_initial_tasks
@@ -299,11 +333,16 @@ class ResearchWorkflow:
             raise ValueError(
                 "policy supplement_task_count exceeds the configured supplement-task budget"
             )
-        initial: AgentState = {
+
+    @staticmethod
+    def _initial_state(
+        *, run_id: str, query: str, auto_approve: bool, policy: RunPolicy
+    ) -> AgentState:
+        return {
             "run_id": run_id,
             "query": query,
             "auto_approve": auto_approve,
-            "policy": resolved_policy,
+            "policy": policy,
             "started_at": datetime.now(UTC),
             "plans": [],
             "plan_lineages": [],
@@ -327,7 +366,22 @@ class ResearchWorkflow:
             "fatal_error": None,
             "report": None,
         }
-        return await self._invoke(initial, run_id=run_id)
+
+    async def _studio_entry(self, state: AgentState) -> AgentState:
+        raw_query = state.get("query")
+        if not isinstance(raw_query, str) or not raw_query.strip():
+            raise ValueError("Studio input requires a non-empty query")
+        auto_approve = state.get("auto_approve", True)
+        if not isinstance(auto_approve, bool):
+            raise TypeError("Studio auto_approve must be a boolean")
+        policy = RunPolicy.model_validate(state.get("policy") or {})
+        self._validate_policy_budget(policy)
+        return self._initial_state(
+            run_id=str(uuid4()),
+            query=raw_query.strip(),
+            auto_approve=auto_approve,
+            policy=policy,
+        )
 
     async def run(
         self,

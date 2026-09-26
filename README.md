@@ -930,3 +930,60 @@ LLM 配置；LangSmith 是可选能力，即使未配置也可以运行 Agent。
 - 没有 LangSmith Dataset、Eval 或 Feedback；
 - 没有多用户认证、多进程写入或持久 LangGraph checkpointer；
 - 没有估算 Provider 成本或 token。
+
+## v0.4.1 — 真实执行路径与 Trace 入口修复（2026-09-24）
+
+本节只记录 v0.4.1 相对于 v0.4.0 的增量，不改写上面的历史版本说明。
+
+- Agent 执行拓扑不再使用固定六节点直线。前端展示 11 个 LangGraph 节点，连线只从 `route_selected` 事件提取；未发生的路线不会伪装成已执行。Critic 的 `Supplement`、`Replan` 以及 Quality Gate 的 `Revise` 回边用不同颜色和标签展示，重复经过的边显示次数。若审查请求重规划但预算耗尽，实际走向 Synthesizer/Finalizer，则标成“决策改道”，不误标为已执行 Replan。
+- 图下新增按事件序号排列的完整路由记录。点击节点、连线或记录可查看对应的 Plan 版本、决策和原因，因此 `2 → 3 → Accept`、补充任务后再重规划等多轮过程可逐步追溯。
+- 前端保留全部 `route_selected` 事件；普通高频遥测仍只保留最近 1000 条。长运行不会因事件窗口截断而丢失早期路径。刷新快照也会与实时 SSE 事件合并，避免快照稍旧时刚发生的路由短暂消失。
+- Trace 卡片同时提供“查看执行路径图”和“LangSmith 调用树”入口，并明确两者区别：LangSmith Trace 是父子 Run / Span 的执行树与耗时详情，不是 AtlasFlow 的条件路由拓扑。已检查远端真实 Trace 含根 Run、LangGraph 子 Run、节点和模型调用；若 LangSmith 页面仍为空白，应另查登录工作区、浏览器加载或远端权限，而非假定没有生成 Trace。
+- 新增 `npm run test:flow`，用确定性事件覆盖 Supplement、Replan、Revise、重复经过、事件乱序及超过 1000 条普通事件时的路由保留；`npm run typecheck` 和 `npm run build` 仍用于前端验证。
+
+验证结果：`npm run test:flow`、`npm run typecheck`、`npm run build`、Ruff 均通过；E 盘 langchain 环境的后端测试为 `58 passed`（仅 Starlette 上游弃用警告）。真实 LangSmith 页面在用户浏览器中的展示仍需登录同一工作区进行人工确认；本次只验证了远端 Trace 的父子 Run 数据和应用内执行路径。
+
+## v0.5.0 — LangSmith 内容 Trace 与 LangGraph Studio（2026-09-24）
+
+本节只追加 v0.5.0 的增量，不改写旧版说明。
+
+### 为什么旧 Trace 的节点输入/输出为空
+
+此前本地 `.env` 没有 `LANGSMITH_TRACE_CONTENT`，配置默认值为 `false`。后端据此设置 `LANGSMITH_HIDE_INPUTS=true` 与 `LANGSMITH_HIDE_OUTPUTS=true`，因此远端仍有嵌套 Run 和耗时，但不保留节点正文。这是有意的隐私默认值，不是模型没有传入数据。
+
+本机的 `.env` 现已显式设为 `LANGSMITH_TRACE_CONTENT=true`。**重启 FastAPI 后创建的新 Run** 会把节点输入、输出及查询/任务/报告内容发送到 LangSmith；现有密钥字段和常见 token 格式仍经脱敏处理，但一般业务内容不会再隐藏。已经上传为空的旧 Trace 无法补录。仓库的 `.env.example` 继续默认 `false`，避免其他安装环境意外上传数据。若要恢复仅元数据模式，把本机 `.env` 改回 `false` 并重启后端。
+
+### Studio 本地入口
+
+- `langgraph.json` 注册 `atlasflow` 图，指向 `backend/src/atlasflow/studio.py` 的工厂函数；Studio 复用生产工作流的 11 个节点、条件边和真实 OpenRouter Gateway，增加 `studio_entry` 节点把 `query`、`auto_approve`、`policy` 转为完整状态。
+- Studio 的 Agent Server 在 `127.0.0.1:2024` 独立运行，线程与检查点由 Studio 管理。它不会写入 FastAPI 的 SQLite Run/Event 数据库，也不会自动导入以前的 AtlasFlow Run；这是同一张图的另一种调试入口，而非原有控制台的数据库视图。
+- `scripts/start-studio.ps1` 固定使用 `E:\conda_envs\langchain`，把临时文件与缓存指向 E 盘，并启用 Python UTF-8 模式，以避免 Windows GBK 读取 Studio OpenAPI 文件失败。
+
+在仓库根目录的 PowerShell 终端执行：
+
+```powershell
+$env:TEMP='E:\codex\tmp'
+$env:TMP='E:\codex\tmp'
+$env:PIP_CACHE_DIR='E:\codex\agent\.pip-cache'
+$env:UV_CACHE_DIR='E:\codex\agent\.uv-cache'
+& 'E:\conda_envs\langchain\python.exe' -m pip install --no-user --no-build-isolation -e '.[studio]'
+.\scripts\start-studio.ps1
+```
+
+打开 [LangGraph Studio](https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024)，选择 `atlasflow`，在 Graph 模式输入：
+
+```json
+{
+  "query": "介绍黄山风景，先规划 2 个任务，审查后补充 1 个任务",
+  "auto_approve": true,
+  "policy": {
+    "initial_task_count": 2,
+    "required_supplement_rounds": 1,
+    "supplement_task_count": 1
+  }
+}
+```
+
+Settings 页也有 Studio 快捷入口。Studio 的本地服务仅用于开发测试；运行真实任务会调用 OpenRouter 并产生费用。LangSmith Studio 是网页，但图的执行发生在本机 Agent Server；若连不上，应先检查 `http://127.0.0.1:2024/ok`、登录的 LangSmith 工作区，以及浏览器是否允许该网页访问本地服务。
+
+验证：后端 `62 passed`、Ruff 和前端类型检查通过；Studio 本地服务的 `/ok`、图拓扑与输入 Schema 接口均返回成功，且假网关测试跑完一次完整 Studio 图。前端生产构建通过。若前端开发服务器正在运行，构建时可设置 `$env:ATLASFLOW_NEXT_DIST_DIR='.next-build'`，避免两个进程共用 `.next`。本次没有发起付费 OpenRouter 调用；由于执行环境对 LangSmith 出站网络有限制，**新 Trace 在远端页面呈现正文**仍需重启后端后创建一条新 Run 人工确认。

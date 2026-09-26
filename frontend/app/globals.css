@@ -222,7 +222,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .tabIntro { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; padding: 20px 22px 4px; }
 .tabIntro p { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
 .flowCanvas { width: 100%; background: #fcfcfd; }
-.agentFlowCanvas { height: 400px; }
+.agentFlowCanvas { height: 470px; border-bottom: 1px solid var(--line); }
 .taskFlowCanvas { height: 440px; }
 .react-flow__controls { overflow: hidden; border: 1px solid var(--line) !important; border-radius: 9px !important; box-shadow: var(--shadow) !important; }
 .react-flow__controls-button { border-bottom-color: var(--line) !important; }
@@ -234,6 +234,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .flowNodeLabel > div { display: grid; gap: 3px; }
 .flowNodeLabel strong { font-size: 11px; }
 .flowNodeLabel small { color: var(--muted); font-size: 8px; }
+.flowVisitCount { margin-left: auto; padding: 2px 5px; color: var(--primary); background: var(--primary-soft); border-radius: 5px; font-size: 9px; font-style: normal; font-weight: 800; }
 .nodeState { display: inline-block; width: 8px; height: 8px; flex: 0 0 8px; background: #b8c0cb; border-radius: 50%; }
 .nodeState.running { background: var(--primary); box-shadow: 0 0 0 4px var(--primary-soft); animation: pulse 1.2s infinite; }
 .nodeState.completed { background: var(--green); box-shadow: 0 0 0 4px var(--green-soft); }
@@ -248,6 +249,20 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .drawerDefinition { margin: 0; }.drawerDefinition > div { display: grid; grid-template-columns: 78px 1fr; gap: 10px; padding: 7px 0; }.drawerDefinition dt { color: var(--muted); font-size: 9px; }.drawerDefinition dd { margin: 0; color: var(--ink-soft); font-size: 11px; line-height: 1.55; }.criteriaList { display: grid; gap: 7px; padding: 0; margin: 0; list-style: none; }.criteriaList li { position: relative; padding-left: 16px; color: var(--ink-soft); font-size: 11px; line-height: 1.55; }.criteriaList li::before { content: "✓"; position: absolute; left: 0; color: var(--green); font-weight: 800; }.drawerEvents { display: grid; gap: 8px; padding: 0; margin: 0; list-style: none; }.drawerEvents li { display: grid; grid-template-columns: 38px 1fr; color: var(--ink-soft); font-size: 10px; line-height: 1.5; }.drawerEvents span { color: var(--primary); font-family: monospace; }
 .graphLegend { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: 9px; }
 .graphLegend span { display: flex; align-items: center; gap: 5px; }
+.legendLine { width: 15px; border-top: 2px solid #4f67d8; }
+.legendLine.supplement { border-color: #9a6dce; border-top-style: dashed; }
+.legendLine.replan { border-color: #d67a52; border-top-style: dashed; }
+.legendLine.revise { border-color: #d2a14b; border-top-style: dashed; }
+.legendLine.fallback { border-color: #7d8797; border-top-style: dashed; }
+.routeHistory { padding: 16px 22px 20px; }
+.routeHistoryHeader { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+.routeHistoryHeader strong { font-size: 11px; }.routeHistoryHeader span, .routeHistoryEmpty { color: var(--muted); font-size: 10px; }
+.routeHistoryList { display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap: 6px; max-height: 225px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+.routeHistoryList button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 35px; padding: 6px 8px; color: var(--ink-soft); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 7px; text-align: left; cursor: pointer; }
+.routeHistoryList button:hover { border-color: var(--primary); background: white; }
+.routeHistoryList code { color: var(--primary); font-size: 9px; }.routeHistoryList span { overflow: hidden; flex: 1; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.routeHistoryList b { color: var(--muted); }.routeHistoryList small { color: var(--muted); font-size: 8px; white-space: nowrap; }
+.routeKind { padding: 3px 5px; border-radius: 4px; font-size: 8px; font-style: normal; font-weight: 800; }.routeKind-supplement { color: #7952a8; background: #f2eafb; }.routeKind-replan { color: #ae5733; background: #fbece4; }.routeKind-revise { color: #9e762a; background: #fbf2d9; }.routeKind-fallback { color: #586476; background: #edf0f4; }
+.routeDrawerItem { padding: 5px 0; border-bottom: 1px solid var(--line); }
 .legendDot { width: 7px; height: 7px; background: #b8c0cb; border-radius: 50%; }
 .legendDot.running { background: var(--primary); }.legendDot.completed { background: var(--green); }.legendDot.waiting { background: #b8c0cb; }
 .legendDot.initial { background: var(--primary); }.legendDot.supplement { background: #8b69c6; }
@@ -301,10 +316,12 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .markdownReport table { width: 100%; border-collapse: collapse; }.markdownReport th, .markdownReport td { padding: 8px 10px; border: 1px solid var(--line); text-align: left; }.markdownReport th { background: var(--surface-soft); }
 .detailBottomGrid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(270px, .6fr); gap: 16px; margin-top: 16px; }
 .traceList { display: grid; }
+.traceHelp { margin: 0 0 12px; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .traceList article { display: grid; grid-template-columns: 30px minmax(120px, 1fr) auto auto; align-items: center; gap: 12px; min-height: 58px; border-bottom: 1px solid var(--line); }
 .traceList article:last-child { border-bottom: 0; }
 .traceIndex { color: var(--primary); font: 700 10px monospace; }
 .traceList article > div { display: grid; gap: 4px; }.traceList strong { font-size: 11px; }.traceList small { color: var(--muted); font-size: 9px; }.traceList .secondaryButton { min-height: 31px; padding: 0 10px; font-size: 9px; }
+.traceList article > .traceActions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }.traceActions button { cursor: pointer; }
 .unavailable { color: var(--muted); font-size: 9px; }
 .providerDetails { grid-column: 2 / -1; width: 100%; margin: 0 0 10px; }
 .providerDetails summary { width: fit-content; color: var(--primary); cursor: pointer; font-size: 9px; font-weight: 700; }
@@ -370,7 +387,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
   .metricStrip, .analyticsMetrics { grid-template-columns: 1fr 1fr; }.metricCard { min-height: 92px; padding: 13px; }.metricCard > strong { font-size: 16px; }.metricStrip .metricCard:first-child { grid-column: 1 / -1; }
   .runHeader h1 { font-size: 23px; }.runHeader .headerActions { width: 100%; }.runHeader .headerActions button { flex: 1; }.runHeader p code { max-width: 200px; }.approvalHeading { display: grid; }.taskEditGrid { grid-template-columns: 1fr; }.approvalActions { display: grid; }.approvalActions button { width: 100%; }
   .visualizationPanel { margin-inline: 0; }.tabBar { padding: 0 8px; }.tabBar button { padding: 0 10px; }.tabIntro { display: grid; padding: 16px 16px 2px; }.agentFlowCanvas { height: 340px; }.taskFlowCanvas { height: 400px; }.react-flow__controls { display: none; }.eventTimeline { padding-inline: 14px; }.eventBody > div { display: grid; gap: 4px; }.reviewColumns, .markdownReport { padding: 16px; }.markdownReport { overflow-x: auto; font-size: 12px; }
-  .traceList article { grid-template-columns: 24px 1fr auto; padding: 9px 0; }.traceList article > .softBadge { display: none; }.traceList article > .secondaryButton, .traceList article > .unavailable { grid-column: 2 / -1; justify-self: start; }
+  .traceList article { grid-template-columns: 24px 1fr auto; padding: 9px 0; }.traceList article > .softBadge { display: none; }.traceList article > .traceActions { grid-column: 2 / -1; justify-content: flex-start; }
   .providerDetails { grid-column: 2 / -1; }.providerCall { grid-template-columns: 1fr auto; }.providerCall > span:nth-child(n+2), .providerCall code { display: none; }
   .pageHeader .segmented { width: 100%; }.segmented button { flex: 1; }.chartPanel { min-height: 310px; }.settingsActions { display: grid; }.settingsActions button { width: 100%; }.modal { padding: 20px; }
 }

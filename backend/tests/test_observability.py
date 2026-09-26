@@ -116,6 +116,32 @@ def test_configure_is_authoritative_and_enables_sdk_level_hiding(monkeypatch) ->
     assert "LANGCHAIN_API_KEY" not in os.environ
 
 
+def test_full_trace_content_keeps_inputs_outputs_and_redacts_secrets(monkeypatch) -> None:
+    created: dict[str, Any] = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            created.update(kwargs)
+
+    monkeypatch.setattr("atlasflow.observability._LangSmithClient", FakeClient)
+    configure_langsmith(
+        Settings(
+            _env_file=None,
+            langsmith_tracing=True,
+            langsmith_trace_content=True,
+            langsmith_api_key="configured-key",
+        )
+    )
+    assert os.environ["LANGSMITH_HIDE_INPUTS"] == "false"
+    assert os.environ["LANGSMITH_HIDE_OUTPUTS"] == "false"
+    assert callable(created["hide_inputs"])
+    assert callable(created["hide_outputs"])
+    assert created["hide_inputs"]({"query": "visible", "api_key": "private"}) == {
+        "query": "visible",
+        "api_key": "[REDACTED]",
+    }
+
+
 def test_configure_clears_a_stale_api_key_and_reports_missing(monkeypatch) -> None:
     monkeypatch.setenv("LANGSMITH_API_KEY", "stale-key")
 
