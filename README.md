@@ -1,10 +1,10 @@
 # AtlasFlow
 
-当前版本：`v0.4.5`。最新变更见文末的 [v0.4.5](#v045--事件颜色确认操作与视觉系统2026-09-26)；
-下方 v0.1–v0.4.4 章节保留为版本演进记录。历史描述与当前实现不一致时，以最新版本章节为准。
+当前版本：`v5.0.0`。最新变更见文末的 [v5.0.0](#v500--原生工具调用与地图导航2026-09-26)；
+下方 v0.1–v0.4.5 章节保留为版本演进记录。历史描述与当前实现不一致时，以最新版本章节为准。
 
 当前 Agent 主流程：Supervisor → Planner → Approval → Scheduler/Researcher → Research Gate →
-Critic → Synthesizer → Quality Gate → Finalizer。Tool/RAG 的旧实现仍保留，但尚未接入这条主流程；
+Critic → Synthesizer → Quality Gate → Finalizer。推理 Agent 已接入统一工具阶段，RAG 尚未接回主流程；
 FastAPI 控制台展示实时事件和运行记录，LangSmith 记录 Trace，Studio 是独立的图调试入口。
 
 > 以下项目概述至 `v0.2.0` 章节之前属于 v0.1.0 的历史说明，不代表当前工作流。
@@ -1028,3 +1028,118 @@ Settings 页也有 Studio 快捷入口。Studio 的本地服务仅用于开发�
 - 开发与预览继续使用 E 盘临时目录；本次没有读取或改写 `.env`，也没有发起模型调用。
 
 验证：`npm run test:ui`、`npm run test:flow`、`npm run typecheck`、隔离目录下的 `npm run build` 均通过。桌面预览已检查工作台、运行记录、统计分析、系统设置和运行详情的页面骨架与无数据状态；临时预览端口未获后端 CORS 授权，因此本轮未把预览中的数据加载失败当作真实数据态验收。
+
+## v5.0.0 — 原生工具调用与地图导航（2026-09-26）
+
+本节追加本次工具开发的增量。版本号按用户指定升级为 5.0，代码采用 `5.0.0`；旧章节保留。
+
+### Agent 如何使用工具
+
+Planner、Researcher、Critic、Synthesizer、Quality Gate 共用 `ToolRuntime`。每个 Agent 在输出业务结果前，先进行有限次数的原生 Function Calling：模型返回带 `tool_call_id` 的函数调用，执行器验证权限和参数，运行真实工具，再以 `role=tool` 把结果交回模型。结束后，经过筛选的事实交给原有 Gateway，生成计划、研究结果或审核决策。计划和决策继续使用 JSON Schema；报告正文仍为 Markdown。
+
+```text
+Agent 当前职责 + 已有工具结果
+  → 原生 Function Calling
+  → 角色白名单 / 参数校验 / 共享预算
+  → ToolRegistry：超时、重试、真实执行、LangSmith Tool Span
+  → tool_call_id 对应的结果消息（循环至完成或预算边界）
+  → 安全的事实上下文
+  → 原有 Gateway 的结构化结果 / Markdown 报告
+```
+
+| Agent | 首版可调用工具 | 用途 |
+|---|---|---|
+| Planner | `web_search`、`map_route` | 明确任务范围、路线条件 |
+| Researcher | `web_search`、`calculator`、`map_route` | 获取事实、计算、查询路线 |
+| Critic | 同 Researcher | 针对研究结果核查缺口与冲突 |
+| Synthesizer | 同 Researcher | 成稿或修订时补充核验 |
+| Quality Gate | 同 Researcher | 针对报告复核事实与来源 |
+
+Supervisor、Approval、Scheduler、Research Gate、Finalizer 继续承担确定性流程职责。工具调用发生在 Agent 节点内部，不额外增加主拓扑节点。FastAPI 与 Studio 使用同一工具执行逻辑；Studio 的线程仍由 Agent Server 管理，不自动同步到网页 SQLite。
+
+### 工具、预算和失败处理
+
+- 网页检索复用 OpenRouter `openrouter:web_search` server tool，保留 URL、来源摘录、检索时间和搜索摘要。没有有效 HTTP(S) 来源引用即判定失败；搜索摘要与原文摘录分别标识，不把摘要伪装成网页原文。
+- 计算器使用受限 AST，仅支持基本算术，限制表达式长度、深度、指数及数值范围，拒绝代码执行、复数和非有限结果。
+- 地图使用高德 Web 服务：限定城市的地点检索 → 驾车/步行路线查询 → 高德导航入口。首版仅支持中国境内同城两点；地点有歧义时返回失败，要求明确起终点。
+- `RunPolicy.max_tool_calls_per_turn` 默认 3（可设 1–10），`max_tool_calls_per_run` 默认 12（可设 1–50，不能小于单次预算）。前端“高级 RunPolicy”可修改；创建后固定，重新运行默认继承。所有并行 Researcher 共享同一 Run 计数，以原子预留防止超额。
+- 预算统计一次逻辑工具请求，参数错误或被拒绝的请求也计数。一次 `web_search` 内部另有搜索模型调用，一次 `map_route` 包含地点和路线等多个 HTTP 请求；因此工具次数不等于 Provider 请求次数或费用。实际 usage/cost 仍以 Provider 返回的 Trace 数据为准。
+- Researcher 对“当前/最新”等动态问题要求有效网页证据；纯算术问题要求计算器；路线问题由相关任务要求地图查询。必需结果缺失会使该研究任务失败，进入现有重试、Quorum 和审核逻辑；可选工具执行失败记录局限，允许继续。工具决策阶段的 Provider 或协议错误明确失败，不启用 Mock 运行时。
+- 查询意图的硬约束目前由关键词和任务范围识别；它是首版规则，不等价于完整语义分类。来源链接保留也不代表所有结论已被自动验证，仍需要 Critic / Quality Gate 审查。
+
+### 地图数据的保存边界
+
+按本轮确认的策略，地图的距离、耗时、POI 响应和路径数据只在当次工具阶段内使用。持久化的工具记录与事件保留调用状态、Agent、耗时等审计字段及导航链接；不保存路线数字或原始地图响应。报告只附导航入口，并提示打开高德查看最新路线、距离和耗时。导航链接本身包含必要的起终点坐标及名称。
+
+即使 `LANGSMITH_TRACE_CONTENT=true`，地图 Tool Span 的输出也会经过专门过滤；地图成功后关闭本次工具阶段的追加调用，避免路线数字被复制到另一个工具的持久化参数。传给后续研究、成稿和审核节点的材料只包含导航入口。业务节点、模型和其他工具仍遵循既有的 Trace 内容开关。此实现描述的是 AtlasFlow 自身的记录边界；服务提供商的数据处理仍以各自协议为准。
+
+### 页面和记录
+
+- 新增 `tool_requested`、`tool_succeeded`、`tool_failed`、`tool_budget_exhausted` 事件，沿用 SSE 实时展示，21 种事件保持独立配色。
+- `RunRecord` 增加 `tool_calls` 和 `evidence`，运行指标增加 `tool_calls`；SQLite 保存暂停或终态的完整快照。工具执行期间先通过事件时间线观察，结束后可在“工具调用与来源”查看摘要、来源和导航入口。
+- 报告生成后补齐工具实际返回的来源/导航链接，再交 Quality Gate 验收；原有任务引用仍保留。没有调用地图时不会凭空生成导航链接。
+
+### 关键文件
+
+| 文件 | 本版职责 |
+|---|---|
+| `backend/src/atlasflow/agents/tool_runtime.py` | 角色工具白名单、原生调用循环、共享预算、结果过滤、来源链接 |
+| `backend/src/atlasflow/agents/workflow.py` | 五类 Agent 接入工具阶段，合并并行调用记录与证据 |
+| `backend/src/atlasflow/agents/gateway.py` | 使用已有工具证据生成业务结果，修正旧版“没有工具”的提示 |
+| `backend/src/atlasflow/tools/amap.py` | 高德地点消歧、驾车/步行查询与导航 URL |
+| `backend/src/atlasflow/tools/builtin.py` | 网页证据解析与受限计算器 |
+| `backend/src/atlasflow/providers/openrouter.py` | `tool_choice`、工具消息、并行调用开关、server tool 预算 |
+| `backend/src/atlasflow/observability.py` | 工具阶段 Trace 与地图响应过滤 |
+| `frontend/components/create-run-form.tsx` | 工具预算配置 |
+| `frontend/components/run-detail.tsx` | 调用记录、来源和地图入口 |
+| `backend/tests/test_tool_runtime.py` | 原生调用、预算竞争、失败语义、地图留存和工作流集成回归 |
+
+### 配置与尝试
+
+项目根目录 `.env` 和 `.env.example` 已增加 `AMAP_API_KEY=` 占位。填写高德 **Web 服务 API 类型 Key** 后重启 FastAPI；使用 Studio 时也重启 Agent Server。地图 Key 未填时，普通研究、搜索和计算仍可运行，地图调用会明确提示缺少配置。网页检索继续使用已有的 `SEARCH_*` 配置；`SEARCH_API_KEY` 和 `SEARCH_MODEL` 为空时复用 LLM 配置。主模型需要同时支持原生 Function Calling 和 JSON Schema。
+
+无需新建环境或安装新依赖，继续使用 E 盘的 `langchain` 环境和原有启动方式。建议从这些任务验证：
+
+1. `1+1=?`：时间线出现计算器调用，详情保留结果 `2`。
+2. `检索今天人民币兑美元的汇率，注明报价方向、数据日期和来源`：先获取网页证据，再生成带来源的报告；查询失败时明确暴露失败原因。
+3. `介绍北京故宫附近的游览安排，并提供从北京站到故宫博物院的驾车导航`：配置地图 Key 后，报告和工具记录出现高德导航入口，路线数字不进入历史记录。
+
+接口依据：[OpenRouter Function Calling](https://openrouter.ai/docs/guides/features/tool-calling)、[OpenRouter Web Search Server Tool](https://openrouter.ai/docs/guides/features/server-tools/web-search)、[高德路线 API](https://lbs.amap.com/api/webservice/guide/api/newroute)、[高德导航 URI](https://lbs.amap.com/api/uri-api/guide/travel/route)。
+
+RAG、向量数据库及网页全文抓取留待后续版本。本轮自动化验证使用注入的测试 Gateway 和 HTTP transport，不消耗真实模型、搜索或地图额度；实际账号权限、远端模型支持情况和真实检索质量需要配置后在线验证。
+
+### v5.0 验证结果
+
+E 盘 `langchain` 环境的后端测试为 **75 passed**，覆盖调用消息往返、并行预算竞争、越权/非法参数、必需工具失败、Provider 中断后保留调用记录、地图 Trace 过滤及 SQLite/报告集成。Ruff、`npm run typecheck`、`npm run test:ui`、`npm run test:flow` 均通过；`npm run build` 在 E 盘 `.next-build` 隔离目录完成，7/7 页面生成成功。后端仅有 Starlette 上游 anyio alias 弃用警告。
+
+### v5.0 修补 — 工具阶段 OpenRouter 404（2026-09-26）
+
+真实运行反馈 `No endpoints found that can handle the requested parameters`。检查发现工具阶段同时发送 `parallel_tool_calls=false` 和 `provider.require_parameters=true`；本次配置的 `deepseek/deepseek-v4.1-flash` 的公开端点能力包含 `tools`、`tool_choice`，但未声明 `parallel_tool_calls`。即使参数值为 `false`，严格路由仍要求端点支持该参数，因此候选端点被排除。依据：[模型端点能力](https://openrouter.ai/api/v1/models/deepseek/deepseek-v4.1-flash/endpoints)、[OpenRouter 参数支持筛选](https://openrouter.ai/docs/guides/routing/provider-selection)。
+
+- 工具决策请求省略可选的 `parallel_tool_calls`，保留 `tools`、`tool_choice` 和严格参数检查。用户无需更换当前模型、API Key 或修改 `.env`。
+- 模型一次返回多个调用时，本地执行器逐条执行，逐条验证权限、参数和预算；返回消息按各自的 `tool_call_id` 配对。重复/缺失 ID 在执行前拒绝。
+- 若预算在批次中耗尽，仅保留已经执行的结果并结束该工具阶段，不把缺少部分工具响应的消息序列再次发给 Provider；必需工具的成功条件仍然检查。地图结果的临时使用和留存边界保持原策略。
+- 修复后重启 FastAPI；如果从 Studio 调试，也重启 Agent Server，再创建新 Run。已失败的历史 Run 不会自动重新执行。
+
+验证：增加可选参数导致 404 的回归模拟，以及批量调用顺序、单次/整轮预算、重复 ID 检查；后端 **79 passed**，Ruff 通过。本次在线检查仅读取公开模型能力列表，没有发起收费模型调用，因此真实账号下的重跑结果仍需验证。版本保持 `5.0.0`。
+
+### v5.0 调整 — 每个工具一个文件（2026-09-27）
+
+为便于阅读与扩展，工具实现按工具名称分别存放；每个文件包含该工具的参数模型、实现类和专属辅助方法：
+
+```text
+backend/src/atlasflow/tools/
+├── calculator.py        # CalculatorArguments / CalculatorTool：受限算术计算
+├── web_search.py        # WebSearchArguments / OpenRouterWebSearchTool：网页搜索
+├── knowledge_search.py  # KnowledgeSearchArguments / KnowledgeSearchTool：知识检索
+├── map_route.py         # AmapRouteArguments / AmapRouteTool：高德路线与导航
+├── base.py              # 公共工具接口、上下文、返回值和风险等级
+├── registry.py          # 公共注册表与执行器
+└── __init__.py          # 公共接口导出
+```
+
+原 `builtin.py` 的三个工具已完整迁移至各自文件，该聚合文件移除；原 `amap.py` 更名为 `map_route.py`。旧章节中的文件名保留为历史记录，以本节目录为准。FastAPI 装配、Studio、测试和在线冒烟脚本已同步更新 import；工具名称、参数、调用逻辑和权限保持不变，知识检索仍未接回 Agent 主流程。
+
+扩展新工具时，在 `tools/` 下创建对应文件，继承 `BaseTool` 并实现 `run()`，再在装配入口注册，并按需更新 `ROLE_TOOLS`。本次版本仍为 `5.0.0`。
+
+验证：E 盘 `langchain` 环境下后端 **79 passed**，Ruff 通过；未执行真实 Provider 调用。

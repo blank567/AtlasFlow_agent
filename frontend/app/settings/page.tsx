@@ -46,7 +46,7 @@ export default function SettingsPage() {
   const stateLabel = state === "ready" && langsmith?.connection_status !== "reachable" ? "已配置 · 待检测" : STATE_LABEL[state] ?? state;
   return (
     <main className="pageContent">
-      <PageHeader eyebrow="连接与存储" title="让运行环境保持透明" description="检查追踪、模型和本地数据库状态；密钥不会传到浏览器。" actions={<span className="softBadge">v{status?.app_version ?? "0.4.5"}</span>} />
+      <PageHeader eyebrow="连接与存储" title="让运行环境保持透明" description="检查追踪、模型和本地数据库状态；密钥不会传到浏览器。" actions={<span className="softBadge">v{status?.app_version ?? "5.0.0"}</span>} />
       {error && <div className="inlineAlert errorAlert"><strong>检测未完成</strong><span>{error}</span></div>}
       {!status && !error ? <LoadingBlock /> : <div className="settingsGrid">
         <Panel title="LangSmith 追踪" meta={<span className={`connectionBadge connection-${state}`}><i />{stateLabel}</span>} className="settingsMain">

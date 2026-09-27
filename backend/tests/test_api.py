@@ -110,7 +110,11 @@ def test_run_api_propagates_structured_policy_to_the_workflow() -> None:
             },
         )
         assert created.status_code == 202
-        assert created.json()["policy"] == policy
+        assert created.json()["policy"] == {
+            **policy,
+            "max_tool_calls_per_turn": 3,
+            "max_tool_calls_per_run": 12,
+        }
         final = _wait_for_status(
             client,
             created.json()["id"],
@@ -118,7 +122,11 @@ def test_run_api_propagates_structured_policy_to_the_workflow() -> None:
         )
 
     assert final["status"] == "completed"
-    assert final["policy"] == policy
+    assert final["policy"] == {
+        **policy,
+        "max_tool_calls_per_turn": 3,
+        "max_tool_calls_per_run": 12,
+    }
     assert final["plan_lineage"]["base_plan"]["tasks"][0]["task_id"] == "p1-t1"
     assert len(final["plan_lineage"]["base_plan"]["tasks"]) == 2
     assert len(final["plan_lineage"]["supplements"][0]["tasks"]) == 1
@@ -127,7 +135,11 @@ def test_run_api_propagates_structured_policy_to_the_workflow() -> None:
     assert final["review_contexts"][1]["current_task_count"] == 3
     assert final["review_contexts"][1]["expected_task_count"] == 3
     assert gateway.plan_policies[0] is not None
-    assert gateway.plan_policies[0].model_dump(mode="json") == policy
+    assert gateway.plan_policies[0].model_dump(mode="json") == {
+        **policy,
+        "max_tool_calls_per_turn": 3,
+        "max_tool_calls_per_run": 12,
+    }
     assert gateway.review_contexts[-1].current_task_count == 3
     assert gateway.review_contexts[-1].expected_task_count == 3
 

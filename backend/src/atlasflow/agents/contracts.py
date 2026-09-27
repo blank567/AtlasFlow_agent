@@ -55,12 +55,18 @@ class RunPolicy(ContractModel):
     required_supplement_rounds: int = Field(default=0, ge=0, le=1)
     supplement_task_count: int | None = Field(default=None, ge=1, le=2)
     replan_requires_critical_issue: bool = True
+    max_tool_calls_per_turn: int = Field(default=3, ge=1, le=10)
+    max_tool_calls_per_run: int = Field(default=12, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def validate_tool_budget(self) -> Self:
+        if self.max_tool_calls_per_run < self.max_tool_calls_per_turn:
+            raise ValueError("run tool budget must be at least the per-turn budget")
+        return self
 
 
 class ResearchTask(ContractModel):
-    task_id: str = Field(
-        min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$"
-    )
+    task_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
     title: str = Field(min_length=1, max_length=200)
     objective: str = Field(min_length=1, max_length=2_000)
     success_criteria: list[str] = Field(min_length=1, max_length=10)
@@ -165,9 +171,7 @@ class SupplementBatch(ContractModel):
         if len(task_ids) != len(set(task_ids)):
             raise ValueError("supplemental task ids must be unique")
         if any(task.plan_version != self.plan_version for task in self.tasks):
-            raise ValueError(
-                "supplemental tasks must use the supplemented plan version"
-            )
+            raise ValueError("supplemental tasks must use the supplemented plan version")
         return self
 
 
@@ -194,9 +198,7 @@ class PlanLineage(ContractModel):
 
         all_ids = [*self.initial_task_ids, *self.supplemental_task_ids]
         if len(all_ids) != len(set(all_ids)):
-            raise ValueError(
-                "supplemental task ids must not duplicate existing task ids"
-            )
+            raise ValueError("supplemental task ids must not duplicate existing task ids")
 
         # Rebuilding the active plan also validates dependencies and cycles across
         # the base plan and every supplement delta.
@@ -216,9 +218,7 @@ class PlanLineage(ContractModel):
         return tuple(task.task_id for batch in self.supplements for task in batch.tasks)
 
     def active_plan(self) -> ResearchPlan:
-        supplemental_tasks = [
-            task for batch in self.supplements for task in batch.tasks
-        ]
+        supplemental_tasks = [task for batch in self.supplements for task in batch.tasks]
         return ResearchPlan(
             plan_version=self.plan_version,
             rationale=self.base_plan.rationale,
@@ -266,9 +266,7 @@ class ResearchResult(ContractModel):
 
 class ReviewIssue(ContractModel):
     severity: Severity
-    code: str = Field(
-        min_length=1, max_length=80, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$"
-    )
+    code: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
     message: str = Field(min_length=1, max_length=2_000)
     task_id: str | None = Field(default=None, max_length=64)
     recommendation: str = Field(min_length=1, max_length=2_000)
@@ -318,8 +316,7 @@ class ReviewContext(ContractModel):
         unknown_result_ids = (completed_ids | failed_ids) - active_ids
         if unknown_result_ids:
             raise ValueError(
-                "review result ids must belong to the active plan: "
-                f"{sorted(unknown_result_ids)}"
+                f"review result ids must belong to the active plan: {sorted(unknown_result_ids)}"
             )
 
         if self.plan_revision > self.supplement_rounds_used:
@@ -347,9 +344,7 @@ class ReviewContext(ContractModel):
             and len(self.supplemental_task_ids)
             != self.policy.supplement_task_count * self.plan_revision
         ):
-            raise ValueError(
-                "supplemental task ids must satisfy policy.supplement_task_count"
-            )
+            raise ValueError("supplemental task ids must satisfy policy.supplement_task_count")
 
         expected_initial = (
             self.policy.initial_task_count
@@ -380,16 +375,12 @@ class CritiqueDecision(ContractModel):
             if not self.supplemental_tasks:
                 raise ValueError("supplement decisions must include one or two tasks")
         elif self.supplemental_tasks:
-            raise ValueError(
-                "only a supplement decision may include supplemental tasks"
-            )
+            raise ValueError("only a supplement decision may include supplemental tasks")
 
         task_ids = [task.task_id for task in self.supplemental_tasks]
         if len(task_ids) != len(set(task_ids)):
             raise ValueError("supplemental task ids must be unique")
-        if any(
-            task.plan_version != self.plan_version for task in self.supplemental_tasks
-        ):
+        if any(task.plan_version != self.plan_version for task in self.supplemental_tasks):
             raise ValueError("supplemental tasks must use the reviewed plan version")
 
         if self.decision is CritiqueRoute.REPLAN:
@@ -409,24 +400,15 @@ class CritiqueDecision(ContractModel):
             context.supplement_rounds_used < context.policy.required_supplement_rounds
         )
         if required_round_pending and self.decision is not CritiqueRoute.SUPPLEMENT:
-            raise ValueError(
-                "the run policy requires a supplement round before accept or replan"
-            )
+            raise ValueError("the run policy requires a supplement round before accept or replan")
 
         if self.decision is CritiqueRoute.SUPPLEMENT:
             if context.supplement_rounds_remaining < 1:
-                raise ValueError(
-                    "supplement decision exceeds the remaining round budget"
-                )
+                raise ValueError("supplement decision exceeds the remaining round budget")
 
             expected_count = context.policy.supplement_task_count
-            if (
-                expected_count is not None
-                and len(self.supplemental_tasks) != expected_count
-            ):
-                raise ValueError(
-                    "supplement decision must satisfy policy.supplement_task_count"
-                )
+            if expected_count is not None and len(self.supplemental_tasks) != expected_count:
+                raise ValueError("supplement decision must satisfy policy.supplement_task_count")
 
             existing_ids = {
                 *context.initial_task_ids,
@@ -435,17 +417,12 @@ class CritiqueDecision(ContractModel):
             added_ids = [task.task_id for task in self.supplemental_tasks]
             duplicate_ids = existing_ids.intersection(added_ids)
             if duplicate_ids:
-                raise ValueError(
-                    "supplemental task ids must be new: " f"{sorted(duplicate_ids)}"
-                )
+                raise ValueError(f"supplemental task ids must be new: {sorted(duplicate_ids)}")
 
             if context.current_task_count + len(added_ids) > 7:
                 raise ValueError("supplement decision exceeds the plan task limit")
 
-        if (
-            self.decision is CritiqueRoute.REPLAN
-            and context.policy.replan_requires_critical_issue
-        ):
+        if self.decision is CritiqueRoute.REPLAN and context.policy.replan_requires_critical_issue:
             critical_issues = [
                 issue for issue in self.issues if issue.severity is Severity.CRITICAL
             ]
@@ -453,9 +430,7 @@ class CritiqueDecision(ContractModel):
                 raise ValueError("replan decisions require a critical issue")
             expected_code = self.replan_reason.value if self.replan_reason else None
             if not any(issue.code == expected_code for issue in critical_issues):
-                raise ValueError(
-                    "replan reason must be backed by a matching critical issue code"
-                )
+                raise ValueError("replan reason must be backed by a matching critical issue code")
         return self
 
 
@@ -527,6 +502,7 @@ class ExecutionMetrics(ContractModel):
     replan_count: int = Field(default=0, ge=0, le=1)
     revision_count: int = Field(default=0, ge=0, le=2)
     model_calls: int = Field(default=0, ge=0)
+    tool_calls: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validate_task_counts(self) -> Self:

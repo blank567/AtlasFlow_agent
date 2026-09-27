@@ -6,7 +6,7 @@ import json
 from atlasflow.bootstrap import build_openrouter_providers
 from atlasflow.config import Settings
 from atlasflow.tools import RiskLevel, ToolContext
-from atlasflow.tools.builtin import WebSearchArguments
+from atlasflow.tools.web_search import WebSearchArguments
 
 
 async def main() -> None:

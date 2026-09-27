@@ -64,6 +64,10 @@ class RunEventType(StrEnum):
     APPROVAL_RESOLVED = "approval_resolved"
     TASK_SCHEDULED = "task_scheduled"
     TASK_COMPLETED = "task_completed"
+    TOOL_REQUESTED = "tool_requested"
+    TOOL_SUCCEEDED = "tool_succeeded"
+    TOOL_FAILED = "tool_failed"
+    TOOL_BUDGET_EXHAUSTED = "tool_budget_exhausted"
     REVIEW_DECIDED = "review_decided"
     ROUTE_SELECTED = "route_selected"
     QUALITY_EVALUATED = "quality_evaluated"
@@ -85,12 +89,18 @@ class Evidence(BaseModel):
 
 
 class ToolCallRecord(BaseModel):
+    call_id: str = Field(default_factory=lambda: str(uuid4()))
     tool_name: str
+    agent: str = "unknown"
+    task_id: str | None = None
     arguments: dict[str, Any]
     success: bool
     duration_ms: int
     evidence_ids: list[str] = Field(default_factory=list)
+    summary: str | None = None
+    navigation_url: str | None = None
     error: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class RunEvent(BaseModel):
@@ -174,6 +184,8 @@ class RunRecord(BaseModel):
     plan_lineage: PlanLineage | None = None
     plan_lineages: list[PlanLineage] = Field(default_factory=list)
     research_results: list[ResearchResult] = Field(default_factory=list)
+    tool_calls: list[ToolCallRecord] = Field(default_factory=list)
+    evidence: list[Evidence] = Field(default_factory=list)
     critique_history: list[CritiqueDecision] = Field(default_factory=list)
     review_contexts: list[ReviewContext] = Field(default_factory=list)
     draft_versions: list[DraftVersion] = Field(default_factory=list)
@@ -197,9 +209,7 @@ class RunRecord(BaseModel):
         } and (not self.report or not self.report.strip()):
             raise ValueError(f"{self.status.value} runs require a non-empty report")
         if self.status is RunStatus.COMPLETED_WITH_WARNINGS and not self.warnings:
-            raise ValueError(
-                "completed_with_warnings runs require at least one warning"
-            )
+            raise ValueError("completed_with_warnings runs require at least one warning")
         if self.status is RunStatus.FAILED and not self.error:
             raise ValueError("failed runs require an error")
         return self
@@ -230,12 +240,8 @@ class RunListItem(BaseModel):
             policy=record.policy,
             status=record.status,
             plan_version=record.plan.plan_version if record.plan else None,
-            task_count=(
-                len(record.plan.tasks) if record.plan else record.metrics.total_tasks
-            ),
-            quality_score=(
-                record.quality_history[-1].score if record.quality_history else None
-            ),
+            task_count=(len(record.plan.tasks) if record.plan else record.metrics.total_tasks),
+            quality_score=(record.quality_history[-1].score if record.quality_history else None),
             duration_ms=record.metrics.duration_ms,
             model_calls=record.metrics.model_calls,
             created_at=record.created_at,

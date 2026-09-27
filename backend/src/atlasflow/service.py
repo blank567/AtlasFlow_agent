@@ -33,9 +33,7 @@ class InvalidRunStateError(RuntimeError):
 
 
 _ALLOWED_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
-    RunStatus.PENDING: frozenset(
-        {RunStatus.RUNNING, RunStatus.FAILED, RunStatus.CANCELLED}
-    ),
+    RunStatus.PENDING: frozenset({RunStatus.RUNNING, RunStatus.FAILED, RunStatus.CANCELLED}),
     RunStatus.RUNNING: frozenset(
         {
             RunStatus.WAITING_APPROVAL,
@@ -73,9 +71,7 @@ class RunStore(Protocol):
 
     async def append_event(self, run_id: str, event: RunEvent) -> None: ...
 
-    async def events_after(
-        self, run_id: str, after_sequence: int
-    ) -> list[RunEvent]: ...
+    async def events_after(self, run_id: str, after_sequence: int) -> list[RunEvent]: ...
 
     async def event_batch(
         self, run_id: str, after_sequence: int
@@ -107,9 +103,7 @@ class RunStore(Protocol):
 
     async def delete(self, run_id: str) -> None: ...
 
-    async def upsert_trace_segment(
-        self, run_id: str, segment: TraceSegment
-    ) -> None: ...
+    async def upsert_trace_segment(self, run_id: str, segment: TraceSegment) -> None: ...
 
 
 class InMemoryRunStore:
@@ -166,9 +160,7 @@ class InMemoryRunStore:
                 record.status,
             )
 
-    async def events_after(
-        self, run_id: str, after_sequence: int
-    ) -> list[RunEvent]:
+    async def events_after(self, run_id: str, after_sequence: int) -> list[RunEvent]:
         events, _ = await self.event_batch(run_id, after_sequence)
         return events
 
@@ -193,25 +185,18 @@ class InMemoryRunStore:
             raise ValueError("event.run_id must match the target run")
         async with self._lock:
             record = self._get(run_id)
-            if (
-                status is not record.status
-                and status not in _ALLOWED_TRANSITIONS[record.status]
-            ):
+            if status is not record.status and status not in _ALLOWED_TRANSITIONS[record.status]:
                 raise InvalidRunStateError(
                     f"Cannot transition run {run_id} from {record.status.value} to {status.value}"
                 )
             events = list(record.events)
             if event is not None:
                 events.append(event.model_copy(update={"sequence": len(events) + 1}))
-            updated = self._validated_update(
-                record, status=status, events=events, **changes
-            )
+            updated = self._validated_update(record, status=status, events=events, **changes)
             self._runs[run_id] = updated
             return updated.model_copy(deep=True)
 
-    async def upsert_trace_segment(
-        self, run_id: str, segment: TraceSegment
-    ) -> None:
+    async def upsert_trace_segment(self, run_id: str, segment: TraceSegment) -> None:
         if segment.atlasflow_run_id != run_id:
             raise ValueError("segment.atlasflow_run_id must match the target run")
         async with self._lock:
@@ -221,15 +206,11 @@ class InMemoryRunStore:
                 if current.segment_id == segment.segment_id:
                     if current == segment:
                         return
-                    segments[index] = segment.model_copy(
-                        update={"started_at": current.started_at}
-                    )
+                    segments[index] = segment.model_copy(update={"started_at": current.started_at})
                     break
             else:
                 segments.append(segment)
-            self._runs[run_id] = self._validated_update(
-                record, trace_segments=segments
-            )
+            self._runs[run_id] = self._validated_update(record, trace_segments=segments)
 
     async def list(
         self,
@@ -324,7 +305,7 @@ class RunService:
                 query,
                 auto_approve=auto_approve,
                 policy=resolved_policy,
-            )
+            ),
         )
         return run
 
@@ -338,9 +319,7 @@ class RunService:
     ) -> RunRecord:
         source = await self.store.get(source_run_id)
         resolved_query = query if query is not None else source.query
-        resolved_auto_approve = (
-            auto_approve if auto_approve is not None else source.auto_approve
-        )
+        resolved_auto_approve = auto_approve if auto_approve is not None else source.auto_approve
         resolved_policy = policy or source.policy
         run = await self.store.create(
             resolved_query,
@@ -380,9 +359,7 @@ class RunService:
         )
         return await self.store.get(run.id)
 
-    async def resolve_approval(
-        self, run_id: str, request: ApprovalRequest
-    ) -> RunRecord:
+    async def resolve_approval(self, run_id: str, request: ApprovalRequest) -> RunRecord:
         run = await self.store.get(run_id)
         if run.status is not RunStatus.WAITING_APPROVAL:
             raise InvalidRunStateError(
@@ -398,7 +375,7 @@ class RunService:
                 run_id,
                 action=request.action.value,
                 edited_plan=request.edited_plan,
-            )
+            ),
         )
         return await self.store.get(run_id)
 
@@ -417,6 +394,8 @@ class RunService:
             except asyncio.CancelledError:
                 pass
 
+        if self.workflow.tool_runtime is not None:
+            self.workflow.tool_runtime.budget.clear(run_id)
         current = await self.store.get(run_id)
         if current.status in RunStatus.terminal():
             if current.status is RunStatus.CANCELLED:
@@ -441,9 +420,7 @@ class RunService:
             raise InvalidRunStateError("Run ID confirmation does not match")
         await self.store.delete(run_id)
 
-    async def analytics(
-        self, selected_range: Literal["7d", "30d", "all"]
-    ) -> AnalyticsResponse:
+    async def analytics(self, selected_range: Literal["7d", "30d", "all"]) -> AnalyticsResponse:
         now = utc_now()
         since = {
             "7d": now - timedelta(days=7),
@@ -463,15 +440,11 @@ class RunService:
             for record in records
             if record.metrics.duration_ms is not None
         ]
-        successful_tasks = sum(
-            record.metrics.successful_tasks for record in records
-        )
+        successful_tasks = sum(record.metrics.successful_tasks for record in records)
         failed_tasks = sum(record.metrics.failed_tasks for record in records)
         attempted_tasks = successful_tasks + failed_tasks
         quality_scores = [
-            record.quality_history[-1].score
-            for record in records
-            if record.quality_history
+            record.quality_history[-1].score for record in records if record.quality_history
         ]
         duration_by_date: dict[str, list[int]] = defaultdict(list)
         decision_counts: Counter[str] = Counter()
@@ -481,12 +454,8 @@ class RunService:
                 duration_by_date[record.created_at.date().isoformat()].append(
                     record.metrics.duration_ms
                 )
-            decision_counts.update(
-                decision.decision.value for decision in record.critique_history
-            )
-            decision_counts.update(
-                decision.decision.value for decision in record.quality_history
-            )
+            decision_counts.update(decision.decision.value for decision in record.critique_history)
+            decision_counts.update(decision.decision.value for decision in record.quality_history)
             if record.plan is not None:
                 version_counts[record.plan.plan_version] += 1
 
@@ -494,35 +463,21 @@ class RunService:
             range=selected_range,
             summary=AnalyticsSummary(
                 total_runs=len(records),
-                success_rate=(
-                    successful / terminal_runs * 100 if terminal_runs else 0.0
-                ),
+                success_rate=(successful / terminal_runs * 100 if terminal_runs else 0.0),
                 task_success_rate=(
-                    successful_tasks / attempted_tasks * 100
-                    if attempted_tasks
-                    else 0.0
+                    successful_tasks / attempted_tasks * 100 if attempted_tasks else 0.0
                 ),
                 avg_quality_score=(
-                    sum(quality_scores) / len(quality_scores)
-                    if quality_scores
-                    else None
+                    sum(quality_scores) / len(quality_scores) if quality_scores else None
                 ),
                 avg_duration_ms=(sum(durations) / len(durations) if durations else None),
-                total_model_calls=sum(
-                    record.metrics.model_calls for record in records
-                ),
+                total_model_calls=sum(record.metrics.model_calls for record in records),
                 total_tasks=sum(record.metrics.total_tasks for record in records),
                 successful_tasks=successful_tasks,
                 failed_tasks=failed_tasks,
-                total_supplement_rounds=sum(
-                    record.metrics.supplement_rounds for record in records
-                ),
-                total_replans=sum(
-                    record.metrics.replan_count for record in records
-                ),
-                total_revisions=sum(
-                    record.metrics.revision_count for record in records
-                ),
+                total_supplement_rounds=sum(record.metrics.supplement_rounds for record in records),
+                total_replans=sum(record.metrics.replan_count for record in records),
+                total_revisions=sum(record.metrics.revision_count for record in records),
             ),
             status_distribution=[
                 StatusCount(status=status, count=status_counts[status])
@@ -611,9 +566,7 @@ class RunService:
             )
             return
         if not execution.final:
-            raise RuntimeError(
-                "Workflow returned without pausing or reaching a terminal state"
-            )
+            raise RuntimeError("Workflow returned without pausing or reaching a terminal state")
 
         status = RunStatus(execution.status)
         event_type, message = {
@@ -642,6 +595,8 @@ class RunService:
         )
 
     async def _fail(self, run_id: str, exc: Exception) -> None:
+        if self.workflow.tool_runtime is not None:
+            self.workflow.tool_runtime.budget.clear(run_id)
         run = await self.store.get(run_id)
         if run.status in RunStatus.terminal():
             return
@@ -667,6 +622,8 @@ class RunService:
             "plan_lineage",
             "plan_lineages",
             "research_results",
+            "tool_calls",
+            "evidence",
             "critique_history",
             "review_contexts",
             "draft_versions",

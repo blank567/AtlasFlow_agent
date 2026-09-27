@@ -217,6 +217,20 @@ def _sanitize_trace_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sanitize_trace_outputs(outputs: Any) -> dict[str, Any]:
+    # AMap's response content is intentionally transient even when ordinary
+    # LangSmith content tracing is enabled for the rest of the workflow.
+    data = outputs.get("data") if isinstance(outputs, dict) else getattr(outputs, "data", None)
+    if isinstance(data, dict) and data.get("provider") == "amap":
+        return {
+            "success": bool(
+                outputs.get("success", False)
+                if isinstance(outputs, dict)
+                else getattr(outputs, "success", False)
+            ),
+            "provider": "amap",
+            "navigation_url": data.get("navigation_url") if _trace_content_enabled() else None,
+            "route_content_redacted": True,
+        }
     if not _trace_content_enabled():
         return {
             "content_redacted": True,
@@ -267,11 +281,7 @@ def _redact(value: Any, *, seen: set[int]) -> Any:
             sanitized: dict[str, Any] = {}
             for raw_key, item in value.items():
                 key = str(raw_key)
-                sanitized[key] = (
-                    "[REDACTED]"
-                    if _is_secret_field(key)
-                    else _redact(item, seen=seen)
-                )
+                sanitized[key] = "[REDACTED]" if _is_secret_field(key) else _redact(item, seen=seen)
             return sanitized
         finally:
             seen.remove(value_id)
@@ -384,8 +394,7 @@ def configure_langsmith(settings: Settings) -> ObservabilityMeta:
         status = "disabled"
         if initialization_error is not None:
             message = (
-                "LangSmith client initialization failed "
-                f"({type(initialization_error).__name__})."
+                f"LangSmith client initialization failed ({type(initialization_error).__name__})."
             )
     elif not api_key:
         status = "not_configured"
@@ -395,16 +404,11 @@ def configure_langsmith(settings: Settings) -> ObservabilityMeta:
         message = "LangSmith SDK is unavailable; the application will continue without tracing."
     elif initialization_error is not None:
         status = "degraded"
-        message = (
-            "LangSmith client initialization failed "
-            f"({type(initialization_error).__name__})."
-        )
+        message = f"LangSmith client initialization failed ({type(initialization_error).__name__})."
     else:
         status = "configured"
 
-    os.environ["LANGSMITH_TRACING"] = str(
-        tracing_requested and client is not None
-    ).lower()
+    os.environ["LANGSMITH_TRACING"] = str(tracing_requested and client is not None).lower()
 
     with _RUNTIME_LOCK:
         _RUNTIME.enabled = tracing_requested
@@ -418,15 +422,11 @@ def configure_langsmith(settings: Settings) -> ObservabilityMeta:
         _RUNTIME.last_checked_at = None
         _RUNTIME.client = client
         _RUNTIME.trace_error_count = 0
-        _RUNTIME.configuration_fingerprint = (
-            fingerprint if initialization_error is None else None
-        )
+        _RUNTIME.configuration_fingerprint = fingerprint if initialization_error is None else None
     return get_observability_meta()
 
 
-def get_observability_meta(
-    *, segments: Sequence[TraceSegment] = ()
-) -> ObservabilityMeta:
+def get_observability_meta(*, segments: Sequence[TraceSegment] = ()) -> ObservabilityMeta:
     with _RUNTIME_LOCK:
         return ObservabilityMeta(
             enabled=_RUNTIME.enabled,
@@ -660,11 +660,7 @@ async def trace_segment(
             trace_error_count = _RUNTIME.trace_error_count
         trace_status = initial_trace_status
         if initial_trace_status == "active":
-            trace_status = (
-                "degraded"
-                if trace_error_count > trace_errors_at_start
-                else "completed"
-            )
+            trace_status = "degraded" if trace_error_count > trace_errors_at_start else "completed"
         final_error: str | None = None
         if application_error is not None:
             safe_error = _redact_string(str(application_error).strip())[:500]
@@ -708,9 +704,7 @@ async def resolve_trace_segment_url(segment: TraceSegment) -> TraceSegment:
     return segment.model_copy(update={"url": str(url)})
 
 
-def _schedule_url_resolution(
-    sink: TraceSegmentSink, run_id: str, segment: TraceSegment
-) -> None:
+def _schedule_url_resolution(sink: TraceSegmentSink, run_id: str, segment: TraceSegment) -> None:
     async def resolve_and_notify() -> None:
         resolved = await resolve_trace_segment_url(segment)
         if resolved != segment:

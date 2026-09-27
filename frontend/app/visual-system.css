@@ -116,6 +116,17 @@ button, a, input, select, textarea, summary { outline-offset: 3px; }
 .flowFeedbackItem, .routeHistoryList button, .reviewCard { border-radius: 5px; }
 .markdownReport { max-width: 930px; font-size: 14px; }
 .detailBottomGrid { gap: 18px; margin-top: 18px; }
+.toolPanel { margin-top: 18px; }
+.toolCallList { display: grid; gap: 0; }
+.toolCallList article { padding: 13px 0; border-top: 1px solid var(--line); }
+.toolCallList article:first-child { border-top: 0; }
+.toolCallHead { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+.toolCallHead strong { color: var(--ink); font-size: 12px; }
+.toolCallHead small { color: var(--muted); font-size: 10px; }
+.toolCallList p { margin: 7px 0; color: var(--ink-soft); font-size: 11px; }
+.toolSources { display: flex; flex-wrap: wrap; gap: 8px; }
+.toolSources a, .toolSources span, .toolNavigation { color: var(--primary-dark); font-size: 10px; text-decoration: none; }
+.toolSources a:hover, .toolNavigation:hover { text-decoration: underline; }
 
 .eventTimeline { max-width: none; padding: 7px 22px 22px; }
 .eventTimeline li { grid-template-columns: 23px minmax(0, 1fr); gap: 13px; padding: 0; }

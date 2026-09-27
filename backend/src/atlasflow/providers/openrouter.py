@@ -67,11 +67,14 @@ class OpenRouterClient:
         self,
         *,
         model: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         temperature: float = 0.2,
         max_tokens: int = 2000,
         response_format: dict[str, Any] | None = None,
         tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        parallel_tool_calls: bool | None = None,
+        max_tool_calls: int | None = None,
     ) -> dict[str, Any]:
         if not model.strip():
             raise ProviderConfigurationError("LLM model is required")
@@ -94,6 +97,12 @@ class OpenRouterClient:
         if tools is not None:
             payload["tools"] = tools
             payload.setdefault("provider", {"require_parameters": True})
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        if parallel_tool_calls is not None:
+            payload["parallel_tool_calls"] = parallel_tool_calls
+        if max_tool_calls is not None:
+            payload["max_tool_calls"] = max_tool_calls
         response = await self._post("/chat/completions", payload)
         data = response.data
         choices = data.get("choices") or []
@@ -107,14 +116,10 @@ class OpenRouterClient:
             raise ProviderRequestError("OpenRouter chat response contains no message")
         self._record_metric(response.metric)
         message = dict(first_choice["message"])
-        message["_atlasflow_provider"] = response.metric.model_dump(
-            mode="json", exclude_none=True
-        )
+        message["_atlasflow_provider"] = response.metric.model_dump(mode="json", exclude_none=True)
         return message
 
-    async def embed(
-        self, *, model: str, texts: list[str], input_type: str
-    ) -> list[list[float]]:
+    async def embed(self, *, model: str, texts: list[str], input_type: str) -> list[list[float]]:
         if not model.strip():
             raise ProviderConfigurationError("Embedding model is required")
         if not texts:
@@ -132,8 +137,7 @@ class OpenRouterClient:
         raw_rows = data.get("data") or []
         rows = (
             sorted(raw_rows, key=lambda row: row.get("index", 0))
-            if isinstance(raw_rows, list)
-            and all(isinstance(row, dict) for row in raw_rows)
+            if isinstance(raw_rows, list) and all(isinstance(row, dict) for row in raw_rows)
             else []
         )
         vectors = [row.get("embedding") for row in rows]
@@ -184,9 +188,7 @@ class OpenRouterClient:
         self._record_metric(response.metric)
         return results
 
-    async def _post(
-        self, endpoint: str, payload: dict[str, Any]
-    ) -> _OpenRouterResponse:
+    async def _post(self, endpoint: str, payload: dict[str, Any]) -> _OpenRouterResponse:
         if not self._api_key:
             raise ProviderConfigurationError("OpenRouter API key is required")
         url = f"{self.base_url}{endpoint}"
@@ -220,9 +222,7 @@ class OpenRouterClient:
                     error_type=type(exc).__name__,
                 )
                 self._record_metric(metric)
-                raise ConnectionError(
-                    f"OpenRouter request failed: {type(exc).__name__}"
-                ) from exc
+                raise ConnectionError(f"OpenRouter request failed: {type(exc).__name__}") from exc
 
             retryable = response.status_code in {408, 429} or response.status_code >= 500
             if retryable and attempt < self.max_retries:
@@ -433,9 +433,7 @@ class OpenRouterRerankProvider:
         self.client = client
         self.model = model
 
-    async def rerank(
-        self, query: str, documents: list[str], *, top_n: int
-    ) -> list[RerankResult]:
+    async def rerank(self, query: str, documents: list[str], *, top_n: int) -> list[RerankResult]:
         return await self.client.rerank(
             model=self.model, query=query, documents=documents, top_n=top_n
         )

@@ -88,6 +88,19 @@ export function RunDetail({ runId }: { runId: string }) {
         </div>
       </Panel>
 
+      <Panel title="工具调用与来源" meta={<span className="panelHint">{run.tool_calls.length} 次调用 · {run.evidence.length} 条来源</span>} className="toolPanel">
+        {!run.tool_calls.length ? <div className="emptyInline">尚无工具调用；运行中的请求会先出现在事件时间线。</div> : <div className="toolCallList">{run.tool_calls.map((call) => {
+          const sources = run.evidence.filter((item) => call.evidence_ids.includes(item.id));
+          const navigationUrl = call.navigation_url?.startsWith("https://uri.amap.com/") ? call.navigation_url : null;
+          return <article key={call.call_id}>
+            <div className="toolCallHead"><strong>{call.tool_name}</strong><span className={`softBadge ${call.success ? "" : "amber"}`}>{call.success ? "已完成" : "失败"}</span><small>{call.agent}{call.task_id ? ` · ${call.task_id}` : ""} · {formatDuration(call.duration_ms)}</small></div>
+            <p>{call.summary ?? call.error ?? "无结果摘要"}</p>
+            {sources.length > 0 && <div className="toolSources">{sources.map((source) => source.uri?.startsWith("https://") || source.uri?.startsWith("http://") ? <a key={source.id} href={source.uri} target="_blank" rel="noreferrer">{source.title} ↗</a> : <span key={source.id}>{source.title}</span>)}</div>}
+            {navigationUrl && <a className="toolNavigation" href={navigationUrl} target="_blank" rel="noreferrer">打开高德导航 ↗</a>}
+          </article>;
+        })}</div>}
+      </Panel>
+
       <div className="detailBottomGrid">
         <Panel title="LangSmith 追踪片段" meta={<span className="panelHint">{run.trace_segments.length} 条记录</span>}>
           <p className="traceHelp">LangSmith 链接打开嵌套调用树与耗时详情；Agent 的分支、补充任务和回环请看本站的执行路径图。两者展示的是不同层次。</p>
@@ -97,7 +110,7 @@ export function RunDetail({ runId }: { runId: string }) {
           })}</div>}
         </Panel>
         <Panel title="运行计数器">
-          <dl className="counterList"><div><dt>Plan 版本</dt><dd>{run.metrics.plan_versions}</dd></div><div><dt>Supplement</dt><dd>{run.metrics.supplement_rounds}</dd></div><div><dt>Replan</dt><dd>{run.metrics.replan_count}</dd></div><div><dt>Revision</dt><dd>{run.metrics.revision_count}</dd></div><div><dt>失败任务</dt><dd>{run.metrics.failed_tasks}</dd></div><div><dt>Provider 成本</dt><dd title="Provider 返回的原始数值；未假定币种">{totalCost !== undefined ? `${totalCost.toFixed(6)}（原始值）` : "成本不可用"}</dd></div><div><dt>最新 Request ID</dt><dd title={latestProviderCall?.request_id}>{latestProviderCall?.request_id ? compactId(latestProviderCall.request_id) : "不可用"}</dd></div><div><dt>实际模型</dt><dd title={latestProviderCall?.model}>{latestProviderCall?.model ?? "不可用"}</dd></div></dl>
+          <dl className="counterList"><div><dt>Plan 版本</dt><dd>{run.metrics.plan_versions}</dd></div><div><dt>Supplement</dt><dd>{run.metrics.supplement_rounds}</dd></div><div><dt>Replan</dt><dd>{run.metrics.replan_count}</dd></div><div><dt>Revision</dt><dd>{run.metrics.revision_count}</dd></div><div><dt>失败任务</dt><dd>{run.metrics.failed_tasks}</dd></div><div><dt>工具调用</dt><dd>{run.metrics.tool_calls ?? run.tool_calls.length}</dd></div><div><dt>Provider 成本</dt><dd title="Provider 返回的原始数值；未假定币种">{totalCost !== undefined ? `${totalCost.toFixed(6)}（原始值）` : "成本不可用"}</dd></div><div><dt>最新 Request ID</dt><dd title={latestProviderCall?.request_id}>{latestProviderCall?.request_id ? compactId(latestProviderCall.request_id) : "不可用"}</dd></div><div><dt>实际模型</dt><dd title={latestProviderCall?.model}>{latestProviderCall?.model ?? "不可用"}</dd></div></dl>
         </Panel>
       </div>
       {confirmAction && <ConfirmDialog title={confirmAction === "cancel" ? "确认取消运行？" : "确认重新运行？"} description={confirmAction === "cancel" ? "运行将立即停止；已有的事件和追踪记录仍会保留。" : "系统会用相同参数创建新运行，再次调用模型可能产生费用。"} confirmLabel={confirmAction === "cancel" ? "确认取消" : "创建新运行"} cancelLabel="继续查看" tone={confirmAction === "cancel" ? "danger" : "default"} onCancel={() => setConfirmAction(null)} onConfirm={() => { if (confirmAction === "cancel") void handleCancel(); else void handleRerun(); }} />}

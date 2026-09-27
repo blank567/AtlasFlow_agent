@@ -1,10 +1,8 @@
 import pytest
 from atlasflow.tools import RiskLevel, ToolContext, ToolRegistry
-from atlasflow.tools.builtin import (
-    CalculatorTool,
-    KnowledgeSearchArguments,
-    WebSearchArguments,
-)
+from atlasflow.tools.calculator import CalculatorTool
+from atlasflow.tools.knowledge_search import KnowledgeSearchArguments
+from atlasflow.tools.web_search import WebSearchArguments
 
 
 @pytest.mark.asyncio

@@ -7,11 +7,16 @@ deliberately not used here, so exploratory Studio runs cannot mutate app runs.
 from __future__ import annotations
 
 from atlasflow.agents.gateway import ModelGateway, OpenRouterModelGateway
+from atlasflow.agents.tool_runtime import ToolRuntime
 from atlasflow.agents.workflow import ResearchWorkflow
 from atlasflow.config import Settings
 from atlasflow.observability import configure_langsmith
 from atlasflow.providers.openrouter import OpenRouterClient, ProviderConfigurationError
 from atlasflow.schemas import RunEvent
+from atlasflow.tools import ToolRegistry
+from atlasflow.tools.calculator import CalculatorTool
+from atlasflow.tools.map_route import AmapRouteTool
+from atlasflow.tools.web_search import OpenRouterWebSearchTool
 
 
 async def _ignore_studio_event(_run_id: str, _event: RunEvent) -> None:
@@ -21,9 +26,37 @@ async def _ignore_studio_event(_run_id: str, _event: RunEvent) -> None:
 def build_studio_graph(*, settings: Settings, model: ModelGateway):
     """Reuse the production graph nodes with a Studio-only input adapter."""
 
+    tool_runtime = None
+    if isinstance(model, OpenRouterModelGateway):
+        registry = ToolRegistry(
+            timeout_seconds=settings.tool_timeout_seconds,
+            max_retries=settings.max_tool_retries,
+        )
+        registry.register(
+            OpenRouterWebSearchTool(
+                OpenRouterClient(
+                    api_key=settings.search_api_key or settings.llm_api_key,
+                    base_url=settings.search_base_url or settings.llm_base_url,
+                    timeout_seconds=settings.provider_timeout_seconds,
+                    app_name=settings.app_name,
+                    max_retries=settings.max_tool_retries,
+                ),
+                settings.search_model or model.model,
+            )
+        )
+        registry.register(CalculatorTool())
+        registry.register(AmapRouteTool(settings.amap_api_key))
+        tool_runtime = ToolRuntime(
+            registry=registry,
+            client=model.client,
+            model=model.model,
+            event_sink=_ignore_studio_event,
+        )
+
     workflow = ResearchWorkflow(
         model=model,
         event_sink=_ignore_studio_event,
+        tool_runtime=tool_runtime,
         max_concurrency=settings.max_research_concurrency,
         max_initial_tasks=settings.max_research_tasks,
         max_research_attempts=settings.max_research_attempts,

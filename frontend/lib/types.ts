@@ -13,6 +13,8 @@ export type RunPolicy = {
   required_supplement_rounds?: number;
   supplement_task_count?: number | null;
   replan_requires_critical_issue?: boolean;
+  max_tool_calls_per_turn?: number;
+  max_tool_calls_per_run?: number;
 };
 
 export type ResearchTask = {
@@ -121,6 +123,7 @@ export type ExecutionMetrics = {
   replan_count: number;
   revision_count: number;
   model_calls: number;
+  tool_calls?: number;
   duration_ms?: number;
   provider_usage?: ProviderUsage;
 };
@@ -156,6 +159,29 @@ export type RunEvent = {
   data: Record<string, unknown>;
 };
 
+export type ToolCallRecord = {
+  call_id: string;
+  tool_name: string;
+  agent: string;
+  task_id?: string | null;
+  arguments: Record<string, unknown>;
+  success: boolean;
+  duration_ms: number;
+  evidence_ids: string[];
+  summary?: string | null;
+  navigation_url?: string | null;
+  error?: string | null;
+  created_at: string;
+};
+
+export type ToolEvidence = {
+  id: string;
+  source_id: string;
+  title: string;
+  content: string;
+  uri?: string | null;
+};
+
 export type RunRecord = {
   id: string;
   query: string;
@@ -171,6 +197,8 @@ export type RunRecord = {
   plans: ResearchPlan[];
   plan_lineage?: PlanLineage;
   research_results: ResearchResult[];
+  tool_calls: ToolCallRecord[];
+  evidence: ToolEvidence[];
   critique_history: CritiqueDecision[];
   quality_history: QualityDecision[];
   errors: AgentError[];
@@ -239,6 +267,7 @@ export const EMPTY_METRICS: ExecutionMetrics = {
   replan_count: 0,
   revision_count: 0,
   model_calls: 0,
+  tool_calls: 0,
 };
 
 export const TERMINAL_STATUSES = new Set([
