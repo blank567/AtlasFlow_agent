@@ -13,9 +13,7 @@ from atlasflow.config import Settings
 from atlasflow.observability import configure_langsmith
 from atlasflow.providers.openrouter import OpenRouterClient, ProviderConfigurationError
 from atlasflow.schemas import RunEvent
-from atlasflow.tools import ToolRegistry
-from atlasflow.tools.calculator import CalculatorTool
-from atlasflow.tools.map_route import AmapRouteTool
+from atlasflow.tools.catalog import build_tool_registry
 from atlasflow.tools.web_search import OpenRouterWebSearchTool
 
 
@@ -28,12 +26,9 @@ def build_studio_graph(*, settings: Settings, model: ModelGateway):
 
     tool_runtime = None
     if isinstance(model, OpenRouterModelGateway):
-        registry = ToolRegistry(
-            timeout_seconds=settings.tool_timeout_seconds,
-            max_retries=settings.max_tool_retries,
-        )
-        registry.register(
-            OpenRouterWebSearchTool(
+        registry = build_tool_registry(
+            settings,
+            web_search=OpenRouterWebSearchTool(
                 OpenRouterClient(
                     api_key=settings.search_api_key or settings.llm_api_key,
                     base_url=settings.search_base_url or settings.llm_base_url,
@@ -44,8 +39,6 @@ def build_studio_graph(*, settings: Settings, model: ModelGateway):
                 settings.search_model or model.model,
             )
         )
-        registry.register(CalculatorTool())
-        registry.register(AmapRouteTool(settings.amap_api_key))
         tool_runtime = ToolRuntime(
             registry=registry,
             client=model.client,

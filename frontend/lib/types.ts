@@ -9,12 +9,22 @@ export type RunStatus =
   | string;
 
 export type RunPolicy = {
+  planner_allow_research?: boolean;
   initial_task_count?: number | null;
   required_supplement_rounds?: number;
   supplement_task_count?: number | null;
   replan_requires_critical_issue?: boolean;
   max_tool_calls_per_turn?: number;
   max_tool_calls_per_run?: number;
+};
+
+export type CapabilityDescription = {
+  id: string;
+  description: string;
+  supports_fresh_data: boolean;
+  available: boolean;
+  tools: string[];
+  unavailable_reasons: string[];
 };
 
 export type ResearchTask = {
@@ -24,6 +34,8 @@ export type ResearchTask = {
   success_criteria: string[];
   priority: number;
   dependencies: string[];
+  requires_fresh_data?: boolean;
+  required_capabilities?: string[];
   plan_version: number;
   provenance?: "initial" | "supplement" | "replan" | string;
 };
@@ -164,12 +176,16 @@ export type ToolCallRecord = {
   tool_name: string;
   agent: string;
   task_id?: string | null;
+  plan_version?: number | null;
+  capabilities?: string[];
+  reused_from_call_id?: string | null;
   arguments: Record<string, unknown>;
   success: boolean;
   duration_ms: number;
   evidence_ids: string[];
   summary?: string | null;
   navigation_url?: string | null;
+  navigation_urls?: string[];
   error?: string | null;
   created_at: string;
 };

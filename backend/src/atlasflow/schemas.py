@@ -93,12 +93,16 @@ class ToolCallRecord(BaseModel):
     tool_name: str
     agent: str = "unknown"
     task_id: str | None = None
+    plan_version: int | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    reused_from_call_id: str | None = None
     arguments: dict[str, Any]
     success: bool
     duration_ms: int
     evidence_ids: list[str] = Field(default_factory=list)
     summary: str | None = None
     navigation_url: str | None = None
+    navigation_urls: list[str] = Field(default_factory=list)
     error: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
 

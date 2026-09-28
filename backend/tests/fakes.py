@@ -5,7 +5,7 @@ import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from atlasflow.agents.contracts import (
     CritiqueDecision,
@@ -27,6 +27,7 @@ from atlasflow.config import Settings
 from atlasflow.providers import RerankResult
 from atlasflow.schemas import Evidence
 from atlasflow.tools import BaseTool, RiskLevel, ToolContext, ToolResult
+from atlasflow.tools.web_search import OpenRouterWebSearchTool
 from pydantic import BaseModel
 
 T = TypeVar("T")
@@ -65,6 +66,8 @@ class GatewayScenario:
     """Deterministic knobs for exercising every orchestration branch offline."""
 
     initial_task_count: int = 3
+    task_capabilities: dict[str, list[str]] = field(default_factory=dict)
+    fresh_tasks: set[str] = field(default_factory=set)
     plan_task_counts: dict[int, int] = field(default_factory=dict)
     linear_dependencies: bool = False
     research_delay_seconds: float = 0.02
@@ -98,6 +101,8 @@ class FakeModelGateway:
         plan_version: int = 1,
         *,
         policy: RunPolicy | None = None,
+        capability_catalog: Sequence[dict[str, Any]] = (),
+        tool_context: str = "",
     ) -> ResearchPlan:
         del query
         self._called("create_plan")
@@ -127,6 +132,8 @@ class FakeModelGateway:
                     priority=min(index, 5),
                     dependencies=dependencies,
                     plan_version=plan_version,
+                    required_capabilities=self.scenario.task_capabilities.get(task_id, []),
+                    requires_fresh_data=task_id in self.scenario.fresh_tasks,
                 )
             )
         return ResearchPlan(
@@ -140,6 +147,8 @@ class FakeModelGateway:
         query: str,
         task: ResearchTask,
         dependency_results: Sequence[ResearchResult] = (),
+        *,
+        tool_context: str = "",
     ) -> ResearchResult:
         del query
         self._called("analyze_task")
@@ -188,6 +197,8 @@ class FakeModelGateway:
         results: Sequence[ResearchResult],
         *,
         context: ReviewContext,
+        capability_catalog: Sequence[dict[str, Any]] = (),
+        tool_context: str = "",
     ) -> CritiqueDecision:
         del query, results
         index = self._called("review_research") - 1
@@ -215,6 +226,10 @@ class FakeModelGateway:
                         priority=1,
                         dependencies=[],
                         plan_version=plan.plan_version,
+                        required_capabilities=self.scenario.task_capabilities.get(
+                            f"p{plan.plan_version}-t{number}", []
+                        ),
+                        requires_fresh_data=f"p{plan.plan_version}-t{number}" in self.scenario.fresh_tasks,
                     )
                 )
         issues: list[ReviewIssue] = []
@@ -261,6 +276,8 @@ class FakeModelGateway:
         plan: ResearchPlan,
         results: Sequence[ResearchResult],
         draft_version: int = 1,
+        *,
+        tool_context: str = "",
     ) -> DraftVersion:
         self._called("synthesize_report")
         self._maybe_fail("synthesize_report")
@@ -268,7 +285,12 @@ class FakeModelGateway:
         return DraftVersion(
             version=draft_version,
             plan_version=plan.plan_version,
-            content=f"# 测试报告\n\n{query}\n\n{references}",
+            content=(
+                f"## 摘要\n\n{query}。{references}\n\n"
+                "## 分析\n\n研究任务已完成。\n\n"
+                "## 局限\n\n离线测试结果，不代表实时资料。\n\n"
+                "## 来源\n\n本测试不使用外部来源。"
+            ),
             based_on_task_ids=[result.task_id for result in results],
         )
 
@@ -277,6 +299,8 @@ class FakeModelGateway:
         query: str,
         draft: DraftVersion,
         results: Sequence[ResearchResult],
+        *,
+        tool_context: str = "",
     ) -> QualityDecision:
         del query, results
         index = self._called("evaluate_report") - 1
@@ -327,6 +351,8 @@ class FakeModelGateway:
         draft: DraftVersion,
         decision: QualityDecision,
         results: Sequence[ResearchResult],
+        *,
+        tool_context: str = "",
     ) -> DraftVersion:
         del decision
         self._called("revise_report")
@@ -335,7 +361,12 @@ class FakeModelGateway:
         return DraftVersion(
             version=draft.version + 1,
             plan_version=draft.plan_version,
-            content=f"# 修订测试报告\n\n{query}\n\n{references}",
+            content=(
+                f"## 摘要\n\n{query}。{references}\n\n"
+                "## 分析\n\n按质量意见修订后的测试结论。\n\n"
+                "## 局限\n\n离线测试结果，不代表实时资料。\n\n"
+                "## 来源\n\n本测试不使用外部来源。"
+            ),
             based_on_task_ids=[result.task_id for result in results],
         )
 
@@ -361,6 +392,7 @@ class EmptyArguments(BaseModel):
 
 
 class FakeWebSearchTool(BaseTool):
+    capabilities = OpenRouterWebSearchTool.capabilities
     name = "web_search"
     description = "Test-only web search double."
     risk_level = RiskLevel.LOW

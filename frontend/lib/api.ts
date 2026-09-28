@@ -1,5 +1,6 @@
 import {
   AnalyticsData,
+  CapabilityDescription,
   EMPTY_METRICS,
   RunEvent,
   RunListResponse,
@@ -11,6 +12,10 @@ import {
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 
 type JsonObject = Record<string, unknown>;
+
+export function listCapabilities(): Promise<CapabilityDescription[]> {
+  return request<CapabilityDescription[]>("/capabilities");
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {

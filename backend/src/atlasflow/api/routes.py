@@ -59,6 +59,11 @@ async def list_tools(request: Request) -> list[dict[str, object]]:
     return container_from(request).registry.describe()
 
 
+@router.get("/capabilities")
+async def list_capabilities(request: Request) -> list[dict[str, object]]:
+    return container_from(request).registry.capability_catalog()
+
+
 @router.post("/documents", response_model=IngestDocumentResponse)
 async def ingest_document(
     payload: IngestDocumentRequest, request: Request
@@ -242,6 +247,8 @@ async def resolve_run_approval(
         raise HTTPException(status_code=404, detail="Run not found") from exc
     except InvalidRunStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/runs/{run_id}/events")

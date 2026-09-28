@@ -9,7 +9,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from atlasflow.tools.base import BaseTool, RiskLevel, ToolContext, ToolResult
+from atlasflow.tools.base import BaseTool, Capability, RiskLevel, ToolContext, ToolResult
 
 
 class CalculatorArguments(BaseModel):
@@ -19,10 +19,20 @@ class CalculatorArguments(BaseModel):
 
 
 class CalculatorTool(BaseTool):
+    cache_identical_calls = True
+    capabilities = (Capability("calculator", "精确数值计算，不提供外部实时事实"),)
     name = "calculator"
     description = "Evaluate an arithmetic expression with a restricted AST interpreter."
     risk_level = RiskLevel.LOW
     arguments_model = CalculatorArguments
+
+    @staticmethod
+    def safe_summary(result: ToolResult) -> str | None:
+        return str(result.data.get("result"))[:200] if result.success else None
+
+    @staticmethod
+    def format_summary(arguments: dict[str, Any], summary: str) -> str:
+        return f"{arguments.get('expression', '')} = {summary}"
 
     _binary: ClassVar[dict[type[ast.operator], Any]] = {
         ast.Add: operator.add,

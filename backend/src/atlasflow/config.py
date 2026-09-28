@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     search_api_key: str = Field(default="", repr=False)
     search_base_url: str = ""
     amap_api_key: str = Field(default="", repr=False)
+    open_meteo_api_key: str = Field(default="", repr=False)
 
     langsmith_tracing: bool = False
     langsmith_trace_content: bool = False

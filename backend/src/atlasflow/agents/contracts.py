@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Self
+from typing import Annotated, Any, Self
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -57,6 +57,7 @@ class RunPolicy(ContractModel):
     replan_requires_critical_issue: bool = True
     max_tool_calls_per_turn: int = Field(default=3, ge=1, le=10)
     max_tool_calls_per_run: int = Field(default=12, ge=1, le=50)
+    planner_allow_research: bool = False
 
     @model_validator(mode="after")
     def validate_tool_budget(self) -> Self:
@@ -72,10 +73,19 @@ class ResearchTask(ContractModel):
     success_criteria: list[str] = Field(min_length=1, max_length=10)
     priority: int = Field(ge=1, le=5)
     dependencies: list[str] = Field(default_factory=list, max_length=6)
+    # Defaults read historical checkpoints; new model output must include both fields.
+    requires_fresh_data: bool = Field(default=False, strict=True)
+    required_capabilities: list[
+        Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
+    ] = Field(default_factory=list, max_length=16)
     plan_version: int = Field(ge=1)
 
     @model_validator(mode="after")
     def validate_dependencies(self) -> Self:
+        if len(set(self.required_capabilities)) != len(self.required_capabilities):
+            raise ValueError("required capabilities must be unique")
+        if self.requires_fresh_data and not self.required_capabilities:
+            raise ValueError("fresh-data tasks must declare a required capability")
         if any(not criterion for criterion in self.success_criteria):
             raise ValueError("task success criteria must not be blank")
         if len(self.success_criteria) != len(set(self.success_criteria)):
@@ -85,6 +95,21 @@ class ResearchTask(ContractModel):
         if self.task_id in self.dependencies:
             raise ValueError("a task cannot depend on itself")
         return self
+
+
+def validate_task_capabilities(
+    tasks: Sequence[ResearchTask], catalog: Sequence[Mapping[str, Any]]
+) -> None:
+    """Validate intent against known capabilities, including temporarily unavailable ones."""
+    known = {item["id"]: item for item in catalog}
+    for task in tasks:
+        unknown = set(task.required_capabilities) - known.keys()
+        if unknown:
+            raise ValueError(f"task {task.task_id}: unknown capabilities: {sorted(unknown)}")
+        if task.requires_fresh_data and not any(
+            known[name]["supports_fresh_data"] for name in task.required_capabilities
+        ):
+            raise ValueError(f"task {task.task_id}: required capabilities cannot fetch fresh data")
 
 
 class ResearchPlan(ContractModel):

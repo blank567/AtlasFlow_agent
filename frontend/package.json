@@ -8,7 +8,9 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test:flow": "node scripts/verify-agent-flow.mjs",
-    "test:ui": "node scripts/verify-event-visuals.mjs"
+    "test:ui": "node scripts/verify-event-visuals.mjs",
+    "test:report": "node scripts/verify-report.mjs",
+    "test:report:browser": "node scripts/verify-report-browser.mjs"
   },
   "dependencies": {
     "@xyflow/react": "^12.11.6",

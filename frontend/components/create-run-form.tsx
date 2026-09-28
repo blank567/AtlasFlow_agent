@@ -75,6 +75,7 @@ export function CreateRunForm() {
       </button>
       {advanced && (
         <div className="advancedFields">
+          <label className="checkField"><input type="checkbox" checked={policy.planner_allow_research ?? false} onChange={(event) => { setCustomPolicy((current) => ({ ...(preset === "custom" ? current : policy), planner_allow_research: event.target.checked })); setPreset("custom"); }} /><span><strong>允许 Planner 轻量调研</strong><small>默认直接规划。开启后每次规划最多一次背景查询，不调用地图。</small></span></label>
           <label className="field"><span>初始任务数（2–5）</span><input type="number" min={2} max={5} value={policy.initial_task_count ?? ""} onChange={(event) => updateNumber("initial_task_count", event.target.value)} placeholder="Planner 自主" /></label>
           <label className="field"><span>要求补充轮次（0–1）</span><input type="number" min={0} max={1} value={policy.required_supplement_rounds ?? 0} onChange={(event) => updateNumber("required_supplement_rounds", event.target.value)} /></label>
           <label className="field"><span>每轮补充任务数（1–2）</span><input type="number" min={1} max={2} value={policy.supplement_task_count ?? ""} onChange={(event) => updateNumber("supplement_task_count", event.target.value)} placeholder="Critic 决定" /></label>

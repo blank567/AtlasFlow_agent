@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from atlasflow.providers.openrouter import OpenRouterClient
 from atlasflow.schemas import Evidence
-from atlasflow.tools.base import BaseTool, RiskLevel, ToolContext, ToolResult
+from atlasflow.tools.base import BaseTool, Capability, RiskLevel, ToolContext, ToolResult
 
 
 class WebSearchArguments(BaseModel):
@@ -20,6 +20,10 @@ class WebSearchArguments(BaseModel):
 
 
 class OpenRouterWebSearchTool(BaseTool):
+    planning_safe = True
+    cache_identical_calls = True
+    capabilities = (Capability("web_search", "检索公开网页及可引用来源，包括当前信息", True),)
+    model_calls_per_execution = 1
     name = "web_search"
     description = "Search current public web sources through OpenRouter server tools."
     risk_level = RiskLevel.LOW

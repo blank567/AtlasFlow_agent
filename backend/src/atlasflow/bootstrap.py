@@ -18,9 +18,8 @@ from atlasflow.rag import HybridRetriever
 from atlasflow.service import RunService
 from atlasflow.storage import SQLiteRunStore
 from atlasflow.tools import BaseTool, ToolRegistry
-from atlasflow.tools.calculator import CalculatorTool
+from atlasflow.tools.catalog import build_tool_registry
 from atlasflow.tools.knowledge_search import KnowledgeSearchTool
-from atlasflow.tools.map_route import AmapRouteTool
 from atlasflow.tools.web_search import OpenRouterWebSearchTool
 
 
@@ -50,15 +49,8 @@ def build_container(settings: Settings, providers: ProviderBundle | None = None)
     )
     _seed_demo_knowledge(retriever)
 
-    registry = ToolRegistry(
-        timeout_seconds=settings.tool_timeout_seconds,
-        max_retries=settings.max_tool_retries,
-    )
+    registry = build_tool_registry(settings, web_search=providers.web_search_tool)
     registry.register(KnowledgeSearchTool(retriever))
-    if providers.web_search_tool is not None:
-        registry.register(providers.web_search_tool)
-    registry.register(CalculatorTool())
-    registry.register(AmapRouteTool(settings.amap_api_key))
 
     store = SQLiteRunStore(settings.database_path)
 

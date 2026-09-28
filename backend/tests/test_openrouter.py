@@ -266,6 +266,8 @@ async def test_planner_retries_a_malformed_structured_response() -> None:
                                 "success_criteria": ["列出关键约束"],
                                 "priority": 1,
                                 "dependencies": [],
+                                "requires_fresh_data": False,
+                                "required_capabilities": [],
                             },
                             {
                                 "task_id": "T2",
@@ -274,6 +276,8 @@ async def test_planner_retries_a_malformed_structured_response() -> None:
                                 "success_criteria": ["给出可执行建议"],
                                 "priority": 2,
                                 "dependencies": ["T1"],
+                                "requires_fresh_data": False,
+                                "required_capabilities": [],
                             },
                         ],
                     },
@@ -318,6 +322,8 @@ async def test_planner_policy_sets_an_exact_initial_task_schema() -> None:
                                 "success_criteria": [f"完成维度 {index}"],
                                 "priority": index,
                                 "dependencies": [],
+                                "requires_fresh_data": False,
+                                "required_capabilities": [],
                             }
                             for index in (1, 2)
                         ],

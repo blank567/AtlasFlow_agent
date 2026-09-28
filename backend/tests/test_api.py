@@ -36,6 +36,25 @@ def test_health_tools_and_document_ingestion() -> None:
     assert document.json()["chunks_created"] == 1
 
 
+def test_capability_catalog_and_invalid_approval_edit() -> None:
+    with TestClient(
+        create_app(settings=make_test_settings(), container=make_test_container())
+    ) as client:
+        catalog = client.get("/api/v1/capabilities")
+        assert catalog.status_code == 200
+        assert {item["id"] for item in catalog.json()} >= {"calculator", "web_search", "map_route"}
+        created = client.post("/api/v1/runs", json={"query": "解释概念", "auto_approve": False})
+        run_id = created.json()["id"]
+        run = _wait_for_status(client, run_id, {"waiting_approval"})
+        edited = run["plan"]
+        edited["tasks"][0]["required_capabilities"] = ["unknown_capability"]
+        response = client.post(f"/api/v1/runs/{run_id}/approval",
+                               json={"action": "edit", "edited_plan": edited})
+        assert response.status_code == 422
+        assert "unknown capabilities" in response.json()["detail"]
+        assert client.get(f"/api/v1/runs/{run_id}").json()["status"] == "waiting_approval"
+
+
 def _wait_for_status(
     client: TestClient, run_id: str, expected: set[str]
 ) -> dict[str, object]:
@@ -114,6 +133,7 @@ def test_run_api_propagates_structured_policy_to_the_workflow() -> None:
             **policy,
             "max_tool_calls_per_turn": 3,
             "max_tool_calls_per_run": 12,
+            "planner_allow_research": False,
         }
         final = _wait_for_status(
             client,
@@ -126,6 +146,7 @@ def test_run_api_propagates_structured_policy_to_the_workflow() -> None:
         **policy,
         "max_tool_calls_per_turn": 3,
         "max_tool_calls_per_run": 12,
+        "planner_allow_research": False,
     }
     assert final["plan_lineage"]["base_plan"]["tasks"][0]["task_id"] == "p1-t1"
     assert len(final["plan_lineage"]["base_plan"]["tasks"]) == 2
@@ -139,6 +160,7 @@ def test_run_api_propagates_structured_policy_to_the_workflow() -> None:
         **policy,
         "max_tool_calls_per_turn": 3,
         "max_tool_calls_per_run": 12,
+        "planner_allow_research": False,
     }
     assert gateway.review_contexts[-1].current_task_count == 3
     assert gateway.review_contexts[-1].expected_task_count == 3

@@ -96,7 +96,7 @@ async def test_native_call_round_trip_uses_validated_result_and_preserves_call_i
         agent="researcher",
         prompt="1+1=?",
         policy=RunPolicy(max_tool_calls_per_turn=1, max_tool_calls_per_run=1),
-        required_tools=["calculator"],
+        required_capabilities=["calculator"],
     )
     assert result.model_calls == 2
     assert len(result.records) == 1
@@ -185,7 +185,7 @@ async def test_batch_respects_budget_and_never_sends_partial_tool_results(budget
             max_tool_calls_per_turn=1 if budget_scope == "turn" else 2, max_tool_calls_per_run=2
         ),
         prior_calls=prior,
-        required_tools=["calculator"],
+        required_capabilities=["calculator"],
     )
     assert len(stage.records) == 1
     assert stage.records[0].summary == "2"
@@ -228,7 +228,7 @@ async def test_parallel_branches_share_one_atomic_run_budget() -> None:
                 agent="researcher",
                 prompt="calculate",
                 task_id=task_id,
-                required_tools=["calculator"],
+                required_capabilities=["calculator"],
                 policy=RunPolicy(max_tool_calls_per_turn=1, max_tool_calls_per_run=1),
             )
             for task_id in ("T1", "T2")
@@ -252,7 +252,7 @@ async def test_turn_budget_blocks_an_additional_request() -> None:
         agent="researcher",
         prompt="calculate",
         policy=RunPolicy(max_tool_calls_per_turn=1),
-        required_tools=["calculator"],
+        required_capabilities=["calculator"],
     )
     assert len(result.records) == 1
     assert events[-1].event_type is RunEventType.TOOL_BUDGET_EXHAUSTED
@@ -276,7 +276,7 @@ async def test_disallowed_tool_and_bad_arguments_are_audited_failures() -> None:
             agent="researcher",
             prompt="calculate",
             policy=RunPolicy(),
-            required_tools=["calculator"],
+            required_capabilities=["calculator"],
         )
     assert error.value.stage is not None
     assert len(error.value.stage.records) == 2
@@ -372,7 +372,7 @@ async def test_map_is_transient_in_stage_events_records_context_and_trace(monkey
         agent="researcher",
         prompt="导航",
         policy=RunPolicy(),
-        required_tools=["map_route"],
+        required_capabilities=["map_route"],
     )
     persisted = json.dumps(
         {
@@ -445,7 +445,8 @@ async def test_web_search_retains_cited_summary_and_rejects_missing_sources() ->
 @pytest.mark.asyncio
 async def test_tool_records_survive_workflow_checkpoints_and_sqlite_snapshot() -> None:
     container = make_test_container(
-        scenario=GatewayScenario(initial_task_count=2, linear_dependencies=True)
+        scenario=GatewayScenario(initial_task_count=2, linear_dependencies=True,
+                                 task_capabilities={"p1-t1": ["calculator"]})
     )
     registry = ToolRegistry()
     registry.register(CalculatorTool())
@@ -478,7 +479,11 @@ async def test_tool_records_survive_workflow_checkpoints_and_sqlite_snapshot() -
 
 @pytest.mark.asyncio
 async def test_required_tool_failure_cannot_produce_successful_research() -> None:
-    container = make_test_container(scenario=GatewayScenario(initial_task_count=2))
+    container = make_test_container(scenario=GatewayScenario(
+        initial_task_count=2,
+        task_capabilities={f"p{version}-t{index}": ["calculator"]
+                           for version in (1, 2, 3) for index in (1, 2)},
+    ))
     registry = ToolRegistry()
     registry.register(CalculatorTool())
     runtime = ToolRuntime(
@@ -491,13 +496,14 @@ async def test_required_tool_failure_cannot_produce_successful_research() -> Non
     run = await container.run_service.execute_and_wait("1+1=?")
     assert run.status is RunStatus.FAILED
     assert run.research_results == []
-    assert any("required tools" in error.message for error in run.errors)
+    assert any("required capabilities" in error.message for error in run.errors)
 
 
 @pytest.mark.asyncio
 async def test_navigation_link_reaches_report_without_persisting_route_numbers() -> None:
     container = make_test_container(
-        scenario=GatewayScenario(initial_task_count=2, linear_dependencies=True)
+        scenario=GatewayScenario(initial_task_count=2, linear_dependencies=True,
+                                 task_capabilities={"p1-t1": ["map_route"]})
     )
     registry = ToolRegistry()
     registry.register(AmapRouteTool("amap-test-key", transport=httpx.MockTransport(_amap_handler)))

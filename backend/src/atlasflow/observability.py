@@ -85,6 +85,8 @@ class ProviderCallMetric(BaseModel):
     attempt_count: int = Field(ge=1)
     http_status: int | None = Field(default=None, ge=100, le=599)
     error_type: str | None = Field(default=None, max_length=120)
+    finish_reason: str | None = Field(default=None, max_length=80)
+    content_length: int | None = Field(default=None, ge=0)
     recorded_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -229,6 +231,8 @@ def _sanitize_trace_outputs(outputs: Any) -> dict[str, Any]:
             ),
             "provider": "amap",
             "navigation_url": data.get("navigation_url") if _trace_content_enabled() else None,
+            "navigation_urls": data.get("navigation_urls", []) if _trace_content_enabled() else [],
+            "error": redact_sensitive_data(outputs.get("error") if isinstance(outputs, dict) else getattr(outputs, "error", None)),
             "route_content_redacted": True,
         }
     if not _trace_content_enabled():
@@ -631,10 +635,15 @@ async def trace_segment(
         application_error = exc
         raise
     finally:
+        business_failed = bool(handle.outputs and handle.outputs.get("status") == "failed")
         if run_tree is not None and application_error is None:
             try:
                 outputs = handle.outputs or {"status": "completed"}
-                run_tree.end(outputs=_sanitize_trace_outputs(outputs))
+                if business_failed:
+                    run_tree.end(outputs=_sanitize_trace_outputs(outputs),
+                                 error="AtlasFlow workflow failed; inspect workflow errors and failed child runs")
+                else:
+                    run_tree.end(outputs=_sanitize_trace_outputs(outputs))
             except Exception as exc:  # noqa: BLE001
                 _record_tracing_error(exc)
         if manager is not None:
@@ -667,9 +676,11 @@ async def trace_segment(
             final_error = safe_error or type(application_error).__name__
         elif trace_setup_error is not None:
             final_error = f"Tracing setup failed ({type(trace_setup_error).__name__})."
+        elif business_failed:
+            final_error = "AtlasFlow workflow returned status=failed"
         final_segment = segment.model_copy(
             update={
-                "status": "failed" if application_error is not None else "completed",
+                "status": "failed" if application_error is not None or business_failed else "completed",
                 "trace_status": trace_status,
                 "ended_at": datetime.now(UTC),
                 "error": final_error,

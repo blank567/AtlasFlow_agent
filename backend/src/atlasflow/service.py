@@ -365,6 +365,8 @@ class RunService:
             raise InvalidRunStateError(
                 f"Run {run_id} is {run.status.value}; approval requires waiting_approval"
             )
+        if request.edited_plan is not None:
+            self.workflow.validate_plan_capabilities(request.edited_plan)
         await self.store.transition(
             run_id,
             RunStatus.RUNNING,
@@ -558,6 +560,14 @@ class RunService:
 
     async def _apply_execution(self, run_id: str, execution: WorkflowExecution) -> None:
         changes = self._artifact_changes(execution.state)
+        # Include schema-repair requests hidden inside a gateway method span.
+        snapshot = await self.store.get(run_id)
+        actual_calls = [call for segment in snapshot.trace_segments
+                        for call in segment.provider_calls if call.operation == "chat"]
+        if actual_calls and "metrics" in changes:
+            changes["metrics"] = execution.state["metrics"].model_copy(
+                update={"model_calls": len({call.call_id for call in actual_calls})}
+            )
         if execution.paused:
             await self.store.transition(
                 run_id,

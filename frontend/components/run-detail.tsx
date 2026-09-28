@@ -4,8 +4,6 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { cancelRun, rerun } from "../lib/api";
 import { compactId, formatDate, formatDuration } from "../lib/format";
 import { PlanLineage, ResearchPlan, ResearchTask, RunEvent, RunRecord, TERMINAL_STATUSES } from "../lib/types";
@@ -13,6 +11,7 @@ import { useRunStream } from "../hooks/use-run-stream";
 import { ApprovalPanel } from "./approval-panel";
 import { ConfirmDialog } from "./confirm-dialog";
 import { EventTimeline } from "./event-timeline";
+import { ReportView } from "./report-view";
 import { EmptyState, LoadingBlock, MetricCard, Panel, StatusBadge } from "./ui";
 
 const AgentFlow = dynamic(() => import("./agent-flow").then((module) => module.AgentFlow), { ssr: false, loading: () => <LoadingBlock label="加载 Agent 拓扑" /> });
@@ -84,19 +83,19 @@ export function RunDetail({ runId }: { runId: string }) {
           {tab === "tasks" && <><div className="tabIntro"><div><h2>任务依赖与计划版本</h2><p>基础计划与补充任务分开记录，版本切换不会抹去历史。</p></div></div><TaskGraph run={activeRun} events={events} /></>}
           {tab === "events" && <div className="eventTab"><div className="tabIntro"><div><h2>事件时间线</h2><p>SSE 增量更新、事件去重，并通过 RunRecord 快照校准。</p></div><span className="panelHint">最新在前</span></div><EventTimeline events={events} /></div>}
           {tab === "reviews" && <ReviewHistory run={activeRun} />}
-          {tab === "report" && <ReportView report={run.report} />}
+          {tab === "report" && <ReportView run={run} />}
         </div>
       </Panel>
 
       <Panel title="工具调用与来源" meta={<span className="panelHint">{run.tool_calls.length} 次调用 · {run.evidence.length} 条来源</span>} className="toolPanel">
         {!run.tool_calls.length ? <div className="emptyInline">尚无工具调用；运行中的请求会先出现在事件时间线。</div> : <div className="toolCallList">{run.tool_calls.map((call) => {
           const sources = run.evidence.filter((item) => call.evidence_ids.includes(item.id));
-          const navigationUrl = call.navigation_url?.startsWith("https://uri.amap.com/") ? call.navigation_url : null;
+          const navigationUrls = (call.navigation_urls?.length ? call.navigation_urls : call.navigation_url ? [call.navigation_url] : []).filter((url) => url.startsWith("https://uri.amap.com/"));
           return <article key={call.call_id}>
             <div className="toolCallHead"><strong>{call.tool_name}</strong><span className={`softBadge ${call.success ? "" : "amber"}`}>{call.success ? "已完成" : "失败"}</span><small>{call.agent}{call.task_id ? ` · ${call.task_id}` : ""} · {formatDuration(call.duration_ms)}</small></div>
             <p>{call.summary ?? call.error ?? "无结果摘要"}</p>
             {sources.length > 0 && <div className="toolSources">{sources.map((source) => source.uri?.startsWith("https://") || source.uri?.startsWith("http://") ? <a key={source.id} href={source.uri} target="_blank" rel="noreferrer">{source.title} ↗</a> : <span key={source.id}>{source.title}</span>)}</div>}
-            {navigationUrl && <a className="toolNavigation" href={navigationUrl} target="_blank" rel="noreferrer">打开高德导航 ↗</a>}
+            {navigationUrls.map((url, index) => <a key={`${index}-${url}`} className="toolNavigation" href={url} target="_blank" rel="noreferrer">{navigationUrls.length > 1 ? `第 ${index + 1} 段导航` : "打开高德导航"} ↗</a>)}
           </article>;
         })}</div>}
       </Panel>
@@ -121,11 +120,6 @@ export function RunDetail({ runId }: { runId: string }) {
 function ReviewHistory({ run }: { run: NonNullable<ReturnType<typeof useRunStream>["run"]> }) {
   if (!run.critique_history.length && !run.quality_history.length) return <EmptyState title="尚无审查决策" description="Critic 与 Quality 的结构化输出会按版本保留。" />;
   return <div className="reviewColumns"><section><h2>Critic</h2>{run.critique_history.map((item, index) => <article className="reviewCard" key={`critic-${index}`}><div><span className={`decisionTag decision-${item.decision}`}>{item.decision}</span><small>Plan v{item.plan_version}</small></div><p>{item.rationale}</p>{item.replan_reason && <code>reason: {item.replan_reason}</code>}</article>)}</section><section><h2>Quality Gate</h2>{run.quality_history.map((item, index) => <article className="reviewCard" key={`quality-${index}`}><div><span className={`decisionTag decision-${item.decision}`}>{item.decision}</span><small>Plan v{item.plan_version} · Draft v{item.draft_version}</small></div><strong>{item.score !== undefined ? `${item.score}/100` : "评分不可用"}</strong><p>{item.rationale}</p></article>)}</section></div>;
-}
-
-function ReportView({ report }: { report?: string }) {
-  if (!report) return <EmptyState title="报告尚未生成" description="Synthesizer 完成并通过 Quality Gate 后，安全 Markdown 报告会显示在这里。" />;
-  return <article className="markdownReport"><ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={{ a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a> }}>{report}</ReactMarkdown></article>;
 }
 
 function deriveRunFromEvents(run: RunRecord, events: RunEvent[]): RunRecord {
@@ -192,6 +186,8 @@ function parseLiveTask(value: unknown): ResearchTask | null {
     priority: typeof task.priority === "number" ? task.priority : 0,
     dependencies: Array.isArray(task.dependencies) ? task.dependencies.filter((item): item is string => typeof item === "string") : [],
     plan_version: typeof task.plan_version === "number" ? task.plan_version : 1,
+    requires_fresh_data: task.requires_fresh_data === true,
+    required_capabilities: Array.isArray(task.required_capabilities) ? task.required_capabilities.filter((item): item is string => typeof item === "string") : [],
     provenance: typeof task.provenance === "string" ? task.provenance : undefined,
   };
 }

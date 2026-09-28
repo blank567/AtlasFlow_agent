@@ -12,7 +12,7 @@ export function EventTimeline({ events }: { events: RunEvent[] }) {
         const visual = eventVisual(event.event_type);
         return <li key={event.event_id} style={{ "--event-color": visual.color, "--event-tint": visual.tint } as CSSProperties}>
           <div className="eventIcon"><span /></div>
-          <div className="eventBody"><div><strong className="eventTypeLabel" title={event.event_type}>{visual.label}</strong><time>{formatDate(event.created_at)}</time></div><p>{event.message}</p><small>#{event.sequence} · {event.agent ?? event.node ?? "system"}{event.task_id ? ` · ${event.task_id}` : ""}</small></div>
+          <div className="eventBody"><div><strong className="eventTypeLabel" title={event.event_type}>{visual.label}</strong><time>{formatDate(event.created_at)}</time></div><p>{event.message}</p>{typeof event.data.error === "string" && <details><summary>查看错误原因</summary><p className="formError">{event.data.error}</p></details>}<small>#{event.sequence} · {event.agent ?? event.node ?? "system"}{event.task_id ? ` · ${event.task_id}` : ""}</small></div>
         </li>;
       })}
     </ol>

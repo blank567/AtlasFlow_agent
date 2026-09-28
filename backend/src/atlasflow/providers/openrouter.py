@@ -15,6 +15,7 @@ from atlasflow.observability import (
     ProviderUsage,
     record_provider_call,
     redact_sensitive_data,
+    traced,
 )
 from atlasflow.providers.base import RerankResult
 
@@ -63,6 +64,7 @@ class OpenRouterClient:
 
         return tuple(self._recent_calls)
 
+    @traced(name="provider.openrouter.chat", run_type="llm")
     async def chat(
         self,
         *,
@@ -114,9 +116,15 @@ class OpenRouterClient:
                 )
             )
             raise ProviderRequestError("OpenRouter chat response contains no message")
-        self._record_metric(response.metric)
         message = dict(first_choice["message"])
-        message["_atlasflow_provider"] = response.metric.model_dump(mode="json", exclude_none=True)
+        metric = response.metric.model_copy(update={
+            "finish_reason": str(first_choice["finish_reason"])[:80] if first_choice.get("finish_reason") else None,
+            "content_length": len(str(message.get("content") or "")),
+        })
+        self._record_metric(metric)
+        message["_atlasflow_finish_reason"] = first_choice.get("finish_reason")
+        message["_atlasflow_native_finish_reason"] = first_choice.get("native_finish_reason")
+        message["_atlasflow_provider"] = metric.model_dump(mode="json", exclude_none=True)
         return message
 
     async def embed(self, *, model: str, texts: list[str], input_type: str) -> list[list[float]]:

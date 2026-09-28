@@ -3,6 +3,7 @@ import { AppShell } from "../components/app-shell";
 import "@xyflow/react/dist/style.css";
 import "./globals.css";
 import "./visual-system.css";
+import "./report.css";
 
 export const metadata: Metadata = {
   title: { default: "AtlasFlow · Agent Observatory", template: "%s · AtlasFlow" },

@@ -1,0 +1,49 @@
+.reportWorkspace { --report-accent: #244960; padding: 26px; background: #f3f6f9; }
+/* The report uses page scrolling; a clipped ancestor would trap sticky positioning. */
+.visualizationPanel:has(.reportWorkspace) { overflow: visible; }
+.reportToolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 18px; }
+.reportToolbar h2 { margin: 0; font-size: 18px; color: #18354b; }
+.reportToolbar p { margin: 7px 0 0; font-size: 12px; color: #627284; }
+.reportActions { display: flex; flex-wrap: wrap; gap: 8px; }
+.reportActions button { min-height: 38px; font-size: 12px; }
+.reportActions .primaryButton { background: #244960; border-color: #244960; box-shadow: none; }
+.reportActions .primaryButton:hover { background: #18354b; }
+.reportDownloadHint { margin: 14px 0 0; color: #627284; font-size: 12px; line-height: 1.7; }
+.reportActionStatus { margin-top: 6px; color: #235d8c; font-size: 12px; line-height: 1.7; }
+.reportActionStatus:empty { display: none; }
+.reportExportError { color: #a72c31; font-size: 13px; }
+.reportReader { display: grid; grid-template-columns: 180px minmax(0, 900px); justify-content: center; align-items: start; gap: 24px; margin-top: 26px; }
+.reportReaderNoOutline { grid-template-columns: minmax(0, 900px); }
+.reportReader > .reportPaper { border: 1px solid #dce4e9; border-radius: 3px; box-shadow: 0 4px 16px #24496006; }
+.reportOutline { position: sticky; top: 26px; min-width: 0; }
+.reportOutline summary { padding: 10px 0; color: #244960; cursor: pointer; font-size: 12px; font-weight: 650; }
+.reportOutline summary span { margin-left: 6px; color: #627284; font-weight: 400; }
+.reportOutline nav { display: grid; gap: 2px; max-height: 65vh; overflow-y: auto; padding: 6px 0; }
+.reportOutline a { padding: 8px 10px; border-left: 2px solid transparent; color: #526879; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.reportOutline a:hover { color: #18354b; background: #e9eff4; }
+.reportOutline a.active { color: #18354b; background: #e6eef4; border-left-color: #244960; }
+.reportWorkspace :is(button,a,summary):focus-visible { outline: 2px solid #235d8c; outline-offset: 3px; }
+@media (max-width: 1180px) {
+  .reportReader { grid-template-columns: minmax(0, 900px); gap: 18px; }
+  .reportOutline { position: sticky; top: 12px; z-index: 12; padding: 0 12px; background: #f3f6f9; border: 1px solid #dce4e9; border-radius: 4px; }
+  .reportOutline nav { max-height: min(45vh, 280px); }
+}
+@media (max-width: 640px) {
+  .reportWorkspace { padding: 18px 12px; scroll-margin-top: 74px; }
+  .reportToolbar { align-items: stretch; }
+  .reportActions { width: 100%; }
+  .reportActions button { flex: 1 1 auto; }
+  .reportReader { margin-top: 18px; }
+  .reportOutline { top: 62px; }
+}
+/* Print only the report, without reserving space for hidden dashboard sections. */
+@media print {
+  body:has(.reportWorkspace), body:has(.reportWorkspace) .appShell { background: white; }
+  body:has(.reportWorkspace) :is(.sidebar,.mobileNav,.mobileHeader) { display: none !important; }
+  body:has(.reportWorkspace) .pageFrame { margin: 0 !important; }
+  body:has(.reportWorkspace) .runDetailPage { width: 100%; padding: 0; margin: 0; }
+  .runDetailPage:has(.reportWorkspace) > :not(.visualizationPanel),
+  .visualizationPanel:has(.reportWorkspace) > :not(.tabContent),
+  .reportWorkspace > :not(.reportReader), .reportOutline { display: none !important; }
+  .visualizationPanel:has(.reportWorkspace), .reportWorkspace, .reportReader { display: block; padding: 0; margin: 0; border: 0; box-shadow: none; background: white; overflow: visible; }
+}

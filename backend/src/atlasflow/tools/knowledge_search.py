@@ -14,6 +14,8 @@ class KnowledgeSearchArguments(BaseModel):
 
 
 class KnowledgeSearchTool(BaseTool):
+    # RAG is deliberately not enabled in the agent tool stage yet.
+    allowed_agents = ()
     name = "knowledge_search"
     description = "Hybrid-search the internal knowledge base and return traceable evidence."
     risk_level = RiskLevel.LOW
