@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlencode
 
 import httpx
@@ -30,6 +30,7 @@ class WeatherForecastTool(BaseTool):
     arguments_model = WeatherForecastArguments
     capabilities = (Capability("weather_forecast", "获取可注明来源及查询时间的短期天气预报", True),)
     allowed_agents = ("researcher", "critic", "quality_gate")
+    _country_aliases: ClassVar[dict[str, str]] = {"中国": "CN", "china": "CN", "cn": "CN"}
 
     def __init__(
         self,
@@ -42,6 +43,8 @@ class WeatherForecastTool(BaseTool):
 
     async def run(self, arguments: WeatherForecastArguments, context: ToolContext) -> ToolResult:
         paid = bool(self._api_key)
+        city_parts = [part.strip() for part in arguments.city.replace("，", ",").split(",") if part.strip()]
+        city_name = city_parts[0].removesuffix("市")
         geocode_host = (
             "https://customer-geocoding-api.open-meteo.com"
             if paid else "https://geocoding-api.open-meteo.com"
@@ -50,11 +53,16 @@ class WeatherForecastTool(BaseTool):
             "https://customer-api.open-meteo.com" if paid else "https://api.open-meteo.com"
         )
         geocode_params: dict[str, str | int] = {
-            "name": arguments.city,
-            "count": 5,
-            "language": "zh",
+            "name": city_name,
+            "count": 10,
+            "language": "zh" if any("\u4e00" <= char <= "\u9fff" for char in city_name) else "en",
             "format": "json",
         }
+        for qualifier in city_parts[1:]:
+            country_code = self._country_aliases.get(qualifier.casefold())
+            if country_code:
+                geocode_params["countryCode"] = country_code
+                break
         if paid:
             geocode_params["apikey"] = self._api_key
         try:
@@ -176,23 +184,49 @@ class WeatherForecastTool(BaseTool):
             for row in locations
             if isinstance(row, dict) and row.get("latitude") is not None and row.get("longitude") is not None
         ]
-        if len(candidates) == 1:
-            return candidates[0]
-        name = query.split(",", 1)[0].strip().casefold().removesuffix("市")
+        parts = [part.strip() for part in query.replace("，", ",").split(",") if part.strip()]
+        if not parts:
+            return None
+        for qualifier in parts[1:]:
+            normalized = WeatherForecastTool._normalize_name(qualifier)
+            country_code = WeatherForecastTool._country_aliases.get(normalized)
+            candidates = [
+                row
+                for row in candidates
+                if (
+                    (country_code is not None and str(row.get("country_code") or "").upper() == country_code)
+                    or normalized in {
+                        WeatherForecastTool._normalize_name(str(row.get(field) or ""))
+                        for field in ("admin1", "admin2", "admin3", "country", "country_code")
+                    }
+                )
+            ]
+        if not candidates:
+            return None
+        name = WeatherForecastTool._normalize_name(parts[0])
         exact = [
             row
             for row in candidates
-            if str(row.get("name") or "").strip().casefold().removesuffix("市") == name
+            if WeatherForecastTool._normalize_name(str(row.get("name") or "")) == name
         ]
-        if len(exact) == 1:
-            return exact[0]
-        if "," in query:
-            qualifier = query.split(",", 1)[1].strip().casefold()
-            narrowed = [
-                row
-                for row in exact or candidates
-                if qualifier in {str(row.get(field) or "").casefold() for field in ("admin1", "country", "country_code")}
-            ]
-            if len(narrowed) == 1:
-                return narrowed[0]
+        candidates = exact or candidates
+        if len(candidates) == 1:
+            return candidates[0]
+        # A uniquely identified national capital resolves common localized-name
+        # duplicates such as 北京 / Beijing without selecting an arbitrary first hit.
+        capitals = [row for row in candidates if row.get("feature_code") == "PPLC"]
+        if len(capitals) == 1:
+            return capitals[0]
+        # For other duplicate names, select only a clearly dominant large city.
+        ranked = sorted(candidates, key=lambda row: int(row.get("population") or 0), reverse=True)
+        if (
+            len(ranked) >= 2
+            and int(ranked[0].get("population") or 0) >= 1_000_000
+            and int(ranked[0].get("population") or 0) >= 5 * max(1, int(ranked[1].get("population") or 0))
+        ):
+            return ranked[0]
         return None
+
+    @staticmethod
+    def _normalize_name(value: str) -> str:
+        return value.strip().casefold().removesuffix("市")

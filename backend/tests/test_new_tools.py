@@ -14,7 +14,6 @@ from atlasflow.tools.catalog import build_tool_registry
 from atlasflow.tools.poi_details import PoiDetailsArguments, PoiDetailsTool
 from atlasflow.tools.registry import ToolRegistry
 from atlasflow.tools.weather_forecast import WeatherForecastArguments, WeatherForecastTool
-from atlasflow.tools.web_fetch import OpenRouterWebFetchTool, WebFetchArguments
 from atlasflow.tools.web_search import OpenRouterWebSearchTool
 
 
@@ -31,64 +30,6 @@ def _web_client(handler) -> OpenRouterClient:
     )
 
 
-@pytest.mark.asyncio
-async def test_web_fetch_requires_matching_citation_and_rejects_private_urls() -> None:
-    calls = []
-
-    def handler(request):
-        payload = json.loads(request.content)
-        calls.append(payload)
-        return httpx.Response(
-            200,
-            json={
-                "choices": [
-                    {
-                        "message": {
-                            "content": "官网写明周一闭馆。",
-                            "annotations": [
-                                {
-                                    "url_citation": {
-                                        "url": "https://museum.example.org/hours",
-                                        "title": "开放时间",
-                                        "content": "周一闭馆",
-                                    }
-                                }
-                            ],
-                        }
-                    }
-                ]
-            },
-        )
-
-    tool = OpenRouterWebFetchTool(_web_client(handler), "test/model")
-    result = await tool.run(
-        WebFetchArguments(url="https://museum.example.org/hours", focus="营业时间"), _context()
-    )
-    assert result.success and result.evidence[0].content == "周一闭馆"
-    assert result.evidence[0].metadata["content_kind"] == "source_excerpt"
-    assert calls[0]["tools"][0]["parameters"]["allowed_domains"] == ["museum.example.org"]
-    for url in (
-        "http://127.0.0.1/private",
-        "https://localhost/a",
-        "http://0177.0.0.1/private",
-        "https://example.org/?api_key=secret",
-        "file:///secret",
-    ):
-        blocked = await tool.run(WebFetchArguments(url=url), _context())
-        assert not blocked.success
-    assert len(calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_web_fetch_does_not_turn_uncited_answer_into_evidence() -> None:
-    tool = OpenRouterWebFetchTool(
-        _web_client(lambda _: httpx.Response(
-            200, json={"choices": [{"message": {"content": "uncited answer"}}]}
-        )),
-        "test/model",
-    )
-    result = await tool.run(WebFetchArguments(url="https://example.org/page"), _context())
-    assert not result.success and not result.evidence
 
 
 @pytest.mark.asyncio
@@ -133,6 +74,41 @@ async def test_weather_ambiguous_city_fails_without_forecast() -> None:
         WeatherForecastArguments(city="Springfield"), _context()
     )
     assert not result.success and "AMBIGUOUS" in result.error and len(requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("city", ["北京", "北京市", "北京, 中国", "Beijing, China"])
+async def test_weather_beijing_variants_resolve_capital_without_retry(city: str) -> None:
+    geocode_requests = []
+
+    def handler(request):
+        if request.url.path == "/v1/search":
+            geocode_requests.append(request)
+            return httpx.Response(200, json={"results": [
+                {"name": "北京", "admin1": "北京市", "country": "中国",
+                 "country_code": "CN", "feature_code": "PPL", "population": 10000,
+                 "latitude": 39.8, "longitude": 116.3},
+                {"name": "北京", "admin1": "北京市", "country": "中国",
+                 "country_code": "CN", "feature_code": "PPLC", "population": 21000000,
+                 "latitude": 39.9, "longitude": 116.4},
+            ]})
+        assert request.url.params["latitude"] == "39.9"
+        return httpx.Response(200, json={"timezone": "Asia/Shanghai", "daily": {
+            "time": ["2026-09-28"],
+            "temperature_2m_max": [23],
+            "temperature_2m_min": [15],
+            "precipitation_probability_max": [20],
+            "weather_code": [1],
+        }})
+
+    result = await WeatherForecastTool(transport=httpx.MockTransport(handler)).run(
+        WeatherForecastArguments(city=city, days=1), _context()
+    )
+    assert result.success
+    assert len(geocode_requests) == 1
+    assert geocode_requests[0].url.params["name"] in {"北京", "Beijing"}
+    if "China" in city or "中国" in city:
+        assert geocode_requests[0].url.params["countryCode"] == "CN"
 
 
 @pytest.mark.asyncio

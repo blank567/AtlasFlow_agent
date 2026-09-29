@@ -113,6 +113,9 @@ class ToolRegistry:
             return ToolResult(success=False, error=reason)
 
         arguments = tool.arguments_model.model_validate(raw_arguments)
+        constraint_error = tool.validate_context(raw_arguments, context)
+        if constraint_error:
+            return ToolResult(success=False, error=constraint_error)
         started = time.perf_counter()
         last_error: Exception | None = None
         attempts = self.max_retries + 1

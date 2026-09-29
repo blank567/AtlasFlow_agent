@@ -5,6 +5,7 @@ import httpx
 import pytest
 from atlasflow.agents.contracts import (
     CritiqueRoute,
+    DraftVersion,
     ResearchPlan,
     ResearchResult,
     ResearchTask,
@@ -440,3 +441,158 @@ async def test_critic_repairs_a_task_count_based_replan_on_second_review() -> No
     repair_prompt = client.requests[1]["messages"][-1]["content"]
     assert "上次输出未通过格式或契约校验" in repair_prompt
     assert "replan decisions require a critical issue" in repair_prompt
+
+
+@pytest.mark.asyncio
+async def test_non_writing_agents_use_concise_output_contracts() -> None:
+    class RecordingClient:
+        def __init__(self) -> None:
+            self.requests: dict[str, dict[str, Any]] = {}
+            self.text_requests: list[dict[str, Any]] = []
+
+        async def chat(self, **kwargs: Any) -> dict[str, str]:
+            response_format = kwargs.get("response_format")
+            if response_format is None:
+                self.text_requests.append(kwargs)
+                return {
+                    "content": "## 摘要\n结论。\n\n## 局限\n无。\n\n## 来源\n题目直接给出。"
+                }
+            name = response_format["json_schema"]["name"]
+            self.requests[name] = kwargs
+            if name == "research_plan_v03_concise":
+                payload = {
+                    "rationale": "分成两个必要维度。",
+                    "tasks": [
+                        {
+                            "task_id": f"T{index}",
+                            "title": f"维度{index}",
+                            "objective": f"核验维度{index}",
+                            "success_criteria": [f"形成维度{index}结论"],
+                            "priority": index,
+                            "dependencies": [],
+                            "requires_fresh_data": False,
+                            "required_capabilities": [],
+                            "capability_alternatives": [],
+                        }
+                        for index in (1, 2)
+                    ],
+                }
+            elif name == "research_result_v03_concise":
+                payload = {
+                    "summary": "任务完成。",
+                    "findings": ["得到一个可核验结论。"],
+                    "limitations": [],
+                    "confidence": 0.9,
+                }
+            elif name == "critique_decision_v03_concise":
+                payload = {
+                    "decision": "accept",
+                    "rationale": "任务覆盖充分。",
+                    "replan_reason": None,
+                    "issues": [],
+                    "supplemental_tasks": [],
+                }
+            elif name == "quality_decision_v03_concise":
+                payload = {
+                    "decision": "accept",
+                    "score": 90,
+                    "rationale": "报告满足验收标准。",
+                    "issues": [],
+                    "revision_instructions": [],
+                }
+            else:  # pragma: no cover - makes an unexpected schema obvious.
+                raise AssertionError(name)
+            return {"content": json.dumps(payload, ensure_ascii=False)}
+
+    client = RecordingClient()
+    gateway = OpenRouterModelGateway(client, "openrouter/free")  # type: ignore[arg-type]
+    plan = await gateway.create_plan("测试精简输出")
+    results = [await gateway.analyze_task("测试精简输出", task) for task in plan.tasks]
+    context = ReviewContext(
+        review_round=1,
+        plan_version=1,
+        plan_revision=0,
+        initial_task_ids=["T1", "T2"],
+        supplemental_task_ids=[],
+        completed_task_ids=["T1", "T2"],
+        failed_task_ids=[],
+        supplement_rounds_used=0,
+        supplement_rounds_remaining=1,
+        current_task_count=2,
+        expected_task_count=2,
+    )
+    await gateway.review_research("测试精简输出", plan, results, context=context)
+    draft = DraftVersion(
+        version=1,
+        plan_version=1,
+        content="## 摘要\n结论。\n\n## 局限\n无。\n\n## 来源\n题目直接给出。",
+        based_on_task_ids=["T1", "T2"],
+    )
+    await gateway.evaluate_report("测试精简输出", draft, results)
+    await gateway.synthesize_report("测试精简输出", plan, results)
+
+    planning = client.requests["research_plan_v03_concise"]
+    research = client.requests["research_result_v03_concise"]
+    review = client.requests["critique_decision_v03_concise"]
+    quality = client.requests["quality_decision_v03_concise"]
+    assert planning["max_tokens"] == 2400
+    assert research["max_tokens"] == 1600
+    assert review["max_tokens"] == 2200
+    assert quality["max_tokens"] == 1400
+    assert client.text_requests[-1]["max_tokens"] == 7000
+
+    plan_schema = planning["response_format"]["json_schema"]["schema"]
+    task_schema = plan_schema["properties"]["tasks"]["items"]
+    assert plan_schema["properties"]["rationale"]["maxLength"] == 300
+    assert task_schema["properties"]["objective"]["maxLength"] == 500
+    assert task_schema["properties"]["success_criteria"]["maxItems"] == 6
+
+    research_schema = research["response_format"]["json_schema"]["schema"]
+    assert research_schema["properties"]["summary"]["maxLength"] == 400
+    assert research_schema["properties"]["findings"]["maxItems"] == 8
+    assert research_schema["properties"]["limitations"]["maxItems"] == 5
+    assert review["response_format"]["json_schema"]["schema"]["properties"]["issues"]["maxItems"] == 8
+    assert quality["response_format"]["json_schema"]["schema"]["properties"]["revision_instructions"]["maxItems"] == 8
+
+
+@pytest.mark.asyncio
+async def test_researcher_retries_output_that_exceeds_local_concise_limit() -> None:
+    class OversizedClient:
+        def __init__(self) -> None:
+            self.requests: list[dict[str, Any]] = []
+
+        async def chat(self, **kwargs: Any) -> dict[str, str]:
+            self.requests.append(kwargs)
+            summary = "过" * 401 if len(self.requests) == 1 else "精简结论。"
+            return {
+                "content": json.dumps(
+                    {
+                        "summary": summary,
+                        "findings": ["必要事实。"],
+                        "limitations": [],
+                        "confidence": 0.8,
+                    },
+                    ensure_ascii=False,
+                )
+            }
+
+    task = ResearchTask(
+        task_id="T1",
+        title="测试",
+        objective="验证精简限制",
+        success_criteria=["返回必要结论"],
+        priority=1,
+        dependencies=[],
+        requires_fresh_data=False,
+        required_capabilities=[],
+        plan_version=1,
+    )
+    client = OversizedClient()
+    gateway = OpenRouterModelGateway(client, "openrouter/free")  # type: ignore[arg-type]
+
+    result = await gateway.analyze_task("测试", task)
+
+    assert result.summary == "精简结论。"
+    assert len(client.requests) == 2
+    repair_prompt = client.requests[1]["messages"][-1]["content"]
+    assert "summary must not exceed 400 characters" in repair_prompt

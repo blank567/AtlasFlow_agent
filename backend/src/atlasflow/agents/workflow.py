@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import operator
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter
@@ -34,7 +34,12 @@ from atlasflow.agents.contracts import (
 )
 from atlasflow.agents.gateway import ModelGateway
 from atlasflow.agents.report_quality import apply_report_audit, audit_report
-from atlasflow.agents.tool_runtime import RequiredToolError, ToolRuntime, ToolStageResult
+from atlasflow.agents.tool_runtime import (
+    RequiredToolError,
+    ToolBudgetExhausted,
+    ToolRuntime,
+    ToolStageResult,
+)
 from atlasflow.observability import TraceSegmentSink, trace_segment
 from atlasflow.schemas import (
     ApprovalAction,
@@ -522,13 +527,13 @@ class ResearchWorkflow:
         task = state.get("task") if agent == "researcher" else None
         required = task.required_capabilities if task else []
         if self.tool_runtime is None:
-            if required:
+            if required or (task and task.capability_alternatives):
                 raise RequiredToolError(f"required capabilities have no runtime: {required}")
             return ToolStageResult()
         question = state["query"]
         prior_calls = state.get("tool_calls", [])
         prior_evidence = state.get("evidence", [])
-        return await self.tool_runtime.gather(
+        stage = await self.tool_runtime.gather(
             run_id=state["run_id"],
             agent=agent,
             prompt=(f"研究问题：{question}\n当前职责：{focus}"
@@ -539,13 +544,24 @@ class ResearchWorkflow:
             prior_calls=prior_calls,
             prior_evidence=prior_evidence,
             required_capabilities=required,
+            capability_alternatives=task.capability_alternatives if task else [],
+            user_query=question,
             requires_fresh_data=bool(task and task.requires_fresh_data),
             task_id=task_id,
             plan_version=plan_version,
         )
+        if agent == "synthesizer" and state.get("warnings"):
+            stage.context += "\n运行限制（必须在报告中明确，不能声称缺失内容已核实）：\n" + "\n".join(state["warnings"])
+        return stage
 
     def _capability_catalog(self) -> list[dict[str, Any]]:
         return self.tool_runtime.registry.capability_catalog() if self.tool_runtime else []
+
+    def _tool_budget_empty(self, state: AgentState, extra: Sequence[ToolCallRecord] = ()) -> bool:
+        return self.tool_runtime is not None and self.tool_runtime.budget.remaining(
+            state["run_id"], already_used=len(state.get("tool_calls", [])) + len(extra),
+            limit=state.get("policy", RunPolicy()).max_tool_calls_per_run,
+        ) == 0
 
     def validate_plan_capabilities(self, plan: ResearchPlan) -> None:
         validate_task_capabilities(plan.tasks, self._capability_catalog())
@@ -1149,7 +1165,7 @@ class ResearchWorkflow:
                             tool_records.extend(exc.stage.records)
                             tool_evidence.extend(exc.stage.evidence)
                             tool_model_calls += exc.stage.model_calls
-                        retryable = attempt < self.max_research_attempts
+                        retryable = attempt < self.max_research_attempts and not isinstance(exc, ToolBudgetExhausted)
                         error = self._agent_error(
                             agent="researcher",
                             node="researcher",
@@ -1194,7 +1210,7 @@ class ResearchWorkflow:
                             from_node="researcher",
                             to_node="wave_join",
                             reason=(
-                                f"任务 {task.task_id} 已耗尽 {self.max_research_attempts} 次尝试"
+                                f"任务 {task.task_id} 在第 {attempt} 次尝试后停止：{error.message}"
                             ),
                             decision="failed",
                             plan_version=task.plan_version,
@@ -1237,6 +1253,11 @@ class ResearchWorkflow:
                 update["warnings"] = [
                     (f"{len(plan.tasks) - successful} 个研究任务未成功，已按 Quorum 规则继续")
                 ]
+        elif self._tool_budget_empty(state):
+            target = "finalizer"
+            reason = f"工具预算已耗尽，研究 Quorum 未达标（{successful}/{len(plan.tasks)}）；保留已获取结果，不再无效重规划"
+            decision = "tool_budget_exhausted"
+            update = {"fatal_error": reason, "warnings": [reason], "requested_final_status": RunStatus.FAILED.value}
         elif state.get("replan_count", 0) < self.max_replans:
             target = "planner"
             reason = (
@@ -1381,6 +1402,12 @@ class ResearchWorkflow:
             else:
                 target = "synthesizer"
                 reason = "Critic 请求重规划，但全局重规划预算已耗尽"
+                update.update({"warnings": [reason], "synthesis_mode": "fresh"})
+            if target in {"planner", "schedule_wave"} and self._tool_budget_empty(state, tool_stage.records):
+                target = "synthesizer"
+                reason = "工具预算已耗尽，停止补充/重规划；仅整理已有证据并明确未完成事项"
+                for key in ("replan_count", "next_plan_version", "plan", "plans", "plan_lineage", "plan_lineages", "supplement_rounds", "ready_tasks"):
+                    update.pop(key, None)
                 update.update({"warnings": [reason], "synthesis_mode": "fresh"})
             route = await self._record_route(
                 state,
@@ -1656,6 +1683,12 @@ class ResearchWorkflow:
                         "requested_final_status": RunStatus.COMPLETED_WITH_WARNINGS.value,
                     }
                 )
+            if target == "planner" and self._tool_budget_empty(state, tool_stage.records):
+                target = "finalizer"
+                reason = "工具预算已耗尽，无法重新研究；报告仅为部分结果，保留未核实事项"
+                update.pop("replan_count", None)
+                update.pop("next_plan_version", None)
+                update.update({"warnings": [reason], "requested_final_status": RunStatus.COMPLETED_WITH_WARNINGS.value})
             route = await self._record_route(
                 state,
                 from_node="quality_gate",

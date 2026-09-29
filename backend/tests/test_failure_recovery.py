@@ -104,7 +104,7 @@ async def test_json_truncation_retries_with_larger_budget_and_retains_finish_rea
         "原始问题", ResearchTask(**raw_task(), plan_version=1), tool_context="单独的证据"
     )
     assert result.summary == "已完成"
-    assert [item["max_tokens"] for item in requests] == [5000, 10000]
+    assert [item["max_tokens"] for item in requests] == [1600, 3200]
     assert [item.finish_reason for item in client.recent_calls] == ["length", "stop"]
     assert client.recent_calls[0].content_length > 0
     assert "单独的证据" in requests[0]["messages"][1]["content"]
@@ -149,7 +149,7 @@ async def test_native_call_truncation_recovers_without_executing_partial_argumen
         policy=RunPolicy(),
         required_capabilities=["web_search"],
     )
-    assert [x["max_tokens"] for x in requests[:2]] == [3000, 6000]
+    assert [x["max_tokens"] for x in requests[:2]] == [1600, 3200]
     assert len(stage.records) == 1
 
 
@@ -261,8 +261,8 @@ async def test_partial_itinerary_is_failure_not_complete_capability():
         MapItineraryArguments(city="北京", stops=["起点", "景点", "坏地点"], mode="walking"),
         ToolContext(run_id="partial", agent_name="researcher"),
     )
-    assert not result.success and "第 2 段" in result.error
-    assert len(result.data["navigation_urls"]) == 1
+    assert not result.success and "预解析第 3 站" in result.error
+    assert len(result.data["navigation_urls"]) == 0
     assert "distance_m" not in result.model_dump_json()
 
 

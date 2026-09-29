@@ -20,6 +20,7 @@ class RiskLevel(StrEnum):
 class ToolContext(BaseModel):
     run_id: str
     agent_name: str
+    user_query: str = ""
     approved_risks: set[RiskLevel] = Field(default_factory=lambda: {RiskLevel.LOW})
 
 
@@ -62,6 +63,15 @@ class BaseTool(ABC):
 
     def unavailable_reason(self) -> str | None:
         """Local configuration check only; never expose credentials or probe the network."""
+        return None
+
+    @staticmethod
+    def failure_scope(arguments: dict[str, Any]) -> str | None:
+        """Opt in to stopping repeated terminal failures for the same target."""
+        return None
+
+    def validate_context(self, arguments: dict[str, Any], context: ToolContext) -> str | None:
+        """Optional deterministic intent guard, before any execution or budget charge."""
         return None
 
     @staticmethod

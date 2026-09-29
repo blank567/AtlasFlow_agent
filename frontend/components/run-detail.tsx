@@ -188,6 +188,7 @@ function parseLiveTask(value: unknown): ResearchTask | null {
     plan_version: typeof task.plan_version === "number" ? task.plan_version : 1,
     requires_fresh_data: task.requires_fresh_data === true,
     required_capabilities: Array.isArray(task.required_capabilities) ? task.required_capabilities.filter((item): item is string => typeof item === "string") : [],
+    capability_alternatives: Array.isArray(task.capability_alternatives) ? task.capability_alternatives.filter(Array.isArray).map((group) => group.filter((item: unknown): item is string => typeof item === "string")) : [],
     provenance: typeof task.provenance === "string" ? task.provenance : undefined,
   };
 }

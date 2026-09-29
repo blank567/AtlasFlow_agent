@@ -55,8 +55,8 @@ class RunPolicy(ContractModel):
     required_supplement_rounds: int = Field(default=0, ge=0, le=1)
     supplement_task_count: int | None = Field(default=None, ge=1, le=2)
     replan_requires_critical_issue: bool = True
-    max_tool_calls_per_turn: int = Field(default=3, ge=1, le=10)
-    max_tool_calls_per_run: int = Field(default=12, ge=1, le=50)
+    max_tool_calls_per_turn: int = Field(default=5, ge=1, le=10)
+    max_tool_calls_per_run: int = Field(default=20, ge=1, le=50)
     planner_allow_research: bool = False
 
     @model_validator(mode="after")
@@ -78,13 +78,19 @@ class ResearchTask(ContractModel):
     required_capabilities: list[
         Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
     ] = Field(default_factory=list, max_length=16)
+    capability_alternatives: list[list[Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")]]] = Field(default_factory=list, max_length=8)
     plan_version: int = Field(ge=1)
 
     @model_validator(mode="after")
     def validate_dependencies(self) -> Self:
         if len(set(self.required_capabilities)) != len(self.required_capabilities):
             raise ValueError("required capabilities must be unique")
-        if self.requires_fresh_data and not self.required_capabilities:
+        for group in self.capability_alternatives:
+            if not 2 <= len(group) <= 16 or len(group) != len(set(group)):
+                raise ValueError("each capability alternative group needs 2 to 16 unique capabilities")
+            if set(group) & set(self.required_capabilities):
+                raise ValueError("alternative capabilities must not also be mandatory")
+        if self.requires_fresh_data and not (self.required_capabilities or self.capability_alternatives):
             raise ValueError("fresh-data tasks must declare a required capability")
         if any(not criterion for criterion in self.success_criteria):
             raise ValueError("task success criteria must not be blank")
@@ -103,11 +109,13 @@ def validate_task_capabilities(
     """Validate intent against known capabilities, including temporarily unavailable ones."""
     known = {item["id"]: item for item in catalog}
     for task in tasks:
-        unknown = set(task.required_capabilities) - known.keys()
+        all_caps = set(task.required_capabilities) | {cap for group in task.capability_alternatives for cap in group}
+        unknown = all_caps - known.keys()
         if unknown:
             raise ValueError(f"task {task.task_id}: unknown capabilities: {sorted(unknown)}")
-        if task.requires_fresh_data and not any(
-            known[name]["supports_fresh_data"] for name in task.required_capabilities
+        if task.requires_fresh_data and not (
+            any(known[name]["supports_fresh_data"] for name in task.required_capabilities)
+            or any(all(known[name]["supports_fresh_data"] for name in group) for group in task.capability_alternatives)
         ):
             raise ValueError(f"task {task.task_id}: required capabilities cannot fetch fresh data")
 

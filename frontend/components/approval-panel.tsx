@@ -28,12 +28,12 @@ export function ApprovalPanel({ run, onResolved }: { run: RunRecord; onResolved:
     setJson(run.plan ? JSON.stringify(run.plan, null, 2) : "");
   }, [run.plan]);
 
-  function updateTask(index: number, key: "title" | "objective" | "success_criteria" | "dependencies" | "required_capabilities" | "requires_fresh_data", value: string) {
+  function updateTask(index: number, key: "title" | "objective" | "success_criteria" | "dependencies" | "required_capabilities" | "capability_alternatives" | "requires_fresh_data", value: string) {
     setPlan((current) => {
       if (!current) return current;
       const tasks = current.tasks.map((task, taskIndex) => taskIndex === index ? {
         ...task,
-        [key]: key === "requires_fresh_data" ? value === "true" : key === "success_criteria" || key === "dependencies" || key === "required_capabilities" ? value.split("\n").map((item) => item.trim()).filter(Boolean) : value,
+        [key]: key === "capability_alternatives" ? value.split("\n").filter((line) => line.trim()).map((line) => line.split("|").map((item) => item.trim()).filter(Boolean)) : key === "requires_fresh_data" ? value === "true" : key === "success_criteria" || key === "dependencies" || key === "required_capabilities" ? value.split("\n").map((item) => item.trim()).filter(Boolean) : value,
       } : task);
       const next = { ...current, tasks };
       setJson(JSON.stringify(next, null, 2));
@@ -72,6 +72,7 @@ export function ApprovalPanel({ run, onResolved }: { run: RunRecord; onResolved:
                 <label className="field"><span>成功标准（每行一项）</span><textarea rows={3} value={task.success_criteria.join("\n")} onChange={(event) => updateTask(index, "success_criteria", event.target.value)} /></label>
                 <label className="field"><span>依赖 Task ID（每行一项）</span><textarea rows={3} value={task.dependencies.join("\n")} onChange={(event) => updateTask(index, "dependencies", event.target.value)} placeholder="无依赖" /></label>
                 <label className="field"><span>所需能力 ID（每行一项）</span><textarea rows={2} value={(task.required_capabilities ?? []).join("\n")} onChange={(event) => updateTask(index, "required_capabilities", event.target.value)} placeholder="无需工具时留空；填写已注册的能力 ID" /></label>
+                <label className="field"><span>可选能力组（每行一组，组内任选一种）</span><textarea rows={2} value={(task.capability_alternatives ?? []).map((group) => group.join(" | ")).join("\n")} onChange={(event) => updateTask(index, "capability_alternatives", event.target.value)} placeholder="map_route | map_itinerary" /></label>
                 <label className="field"><span>数据时效要求</span><select value={String(task.requires_fresh_data ?? false)} onChange={(event) => updateTask(index, "requires_fresh_data", event.target.value)}><option value="false">无需新获取数据</option><option value="true">必须新获取数据</option></select></label>
               </div>
             </article>

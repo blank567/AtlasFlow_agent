@@ -17,8 +17,8 @@ export function CreateRunForm() {
     required_supplement_rounds: 1,
     supplement_task_count: 1,
     replan_requires_critical_issue: true,
-    max_tool_calls_per_turn: 3,
-    max_tool_calls_per_run: 12,
+    max_tool_calls_per_turn: 5,
+    max_tool_calls_per_run: 20,
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,7 +32,7 @@ export function CreateRunForm() {
     event.preventDefault();
     setBusy(true);
     setError(null);
-    if ((policy.max_tool_calls_per_run ?? 12) < (policy.max_tool_calls_per_turn ?? 3)) {
+    if ((policy.max_tool_calls_per_run ?? 20) < (policy.max_tool_calls_per_turn ?? 5)) {
       setError("整个 Run 的工具次数不能小于每次 Agent 决策的次数。");
       setBusy(false);
       return;
@@ -80,8 +80,8 @@ export function CreateRunForm() {
           <label className="field"><span>要求补充轮次（0–1）</span><input type="number" min={0} max={1} value={policy.required_supplement_rounds ?? 0} onChange={(event) => updateNumber("required_supplement_rounds", event.target.value)} /></label>
           <label className="field"><span>每轮补充任务数（1–2）</span><input type="number" min={1} max={2} value={policy.supplement_task_count ?? ""} onChange={(event) => updateNumber("supplement_task_count", event.target.value)} placeholder="Critic 决定" /></label>
           <label className="checkField"><input type="checkbox" checked={policy.replan_requires_critical_issue ?? true} onChange={(event) => { setCustomPolicy((current) => ({ ...(preset === "custom" ? current : policy), replan_requires_critical_issue: event.target.checked })); setPreset("custom"); }} /><span><strong>Replan 需要关键问题</strong><small>防止仅因任务数量变化触发整轮重规划。</small></span></label>
-          <label className="field"><span>每次 Agent 决策的工具次数（1–10）</span><input type="number" min={1} max={10} required value={policy.max_tool_calls_per_turn ?? 3} onChange={(event) => updateNumber("max_tool_calls_per_turn", event.target.value)} /></label>
-          <label className="field"><span>整个 Run 的工具次数（1–50）</span><input type="number" min={1} max={50} required value={policy.max_tool_calls_per_run ?? 12} onChange={(event) => updateNumber("max_tool_calls_per_run", event.target.value)} /><small>所有 Agent 共享，运行开始后固定。</small></label>
+          <label className="field"><span>每次 Agent 决策的工具次数（1–10）</span><input type="number" min={1} max={10} required value={policy.max_tool_calls_per_turn ?? 5} onChange={(event) => updateNumber("max_tool_calls_per_turn", event.target.value)} /></label>
+          <label className="field"><span>整个 Run 的工具次数（1–50）</span><input type="number" min={1} max={50} required value={policy.max_tool_calls_per_run ?? 20} onChange={(event) => updateNumber("max_tool_calls_per_run", event.target.value)} /><small>所有 Agent 共享，运行开始后固定。</small></label>
         </div>
       )}
 

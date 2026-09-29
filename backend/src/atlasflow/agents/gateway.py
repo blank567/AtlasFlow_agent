@@ -90,6 +90,30 @@ class ModelGateway(Protocol):
 T = TypeVar("T")
 
 
+# Non-writing agents should return the smallest complete decision payload.  The
+# report writer keeps its larger budget because prose quality is its actual job.
+_PLAN_MAX_TOKENS = 2_400
+_RESEARCH_MAX_TOKENS = 1_600
+_REVIEW_MAX_TOKENS = 2_200
+_QUALITY_MAX_TOKENS = 1_400
+
+_PLAN_RATIONALE_MAX_CHARS = 300
+_TASK_TITLE_MAX_CHARS = 80
+_TASK_OBJECTIVE_MAX_CHARS = 500
+_TASK_CRITERION_MAX_CHARS = 300
+_TASK_CRITERIA_MAX_ITEMS = 6
+_RESEARCH_SUMMARY_MAX_CHARS = 400
+_RESEARCH_FINDING_MAX_CHARS = 600
+_RESEARCH_FINDINGS_MAX_ITEMS = 8
+_RESEARCH_LIMITATION_MAX_CHARS = 400
+_RESEARCH_LIMITATIONS_MAX_ITEMS = 5
+_DECISION_RATIONALE_MAX_CHARS = 400
+_ISSUE_TEXT_MAX_CHARS = 400
+_ISSUES_MAX_ITEMS = 8
+_REVISION_INSTRUCTION_MAX_CHARS = 400
+_REVISION_INSTRUCTIONS_MAX_ITEMS = 8
+
+
 _TASK_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -99,13 +123,25 @@ _TASK_SCHEMA: dict[str, Any] = {
             "maxLength": 64,
             "pattern": r"^[A-Za-z0-9][A-Za-z0-9_.-]*$",
         },
-        "title": {"type": "string", "minLength": 1, "maxLength": 200},
-        "objective": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": _TASK_TITLE_MAX_CHARS,
+        },
+        "objective": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": _TASK_OBJECTIVE_MAX_CHARS,
+        },
         "success_criteria": {
             "type": "array",
-            "items": {"type": "string", "minLength": 1, "maxLength": 1000},
+            "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": _TASK_CRITERION_MAX_CHARS,
+            },
             "minItems": 1,
-            "maxItems": 10,
+            "maxItems": _TASK_CRITERIA_MAX_ITEMS,
         },
         "priority": {"type": "integer", "minimum": 1, "maximum": 5},
         "dependencies": {
@@ -131,14 +167,22 @@ _ISSUE_SCHEMA: dict[str, Any] = {
     "properties": {
         "severity": {"type": "string", "enum": ["info", "warning", "critical"]},
         "code": {"type": "string", "minLength": 1, "maxLength": 80},
-        "message": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": _ISSUE_TEXT_MAX_CHARS,
+        },
         "task_id": {
             "anyOf": [
                 {"type": "string", "minLength": 1, "maxLength": 64},
                 {"type": "null"},
             ]
         },
-        "recommendation": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "recommendation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": _ISSUE_TEXT_MAX_CHARS,
+        },
     },
     "required": ["severity", "code", "message", "task_id", "recommendation"],
     "additionalProperties": False,
@@ -156,6 +200,11 @@ def _task_schema(catalog: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "maxItems": min(16, len(ids)),
     }
     schema["required"].extend(["requires_fresh_data", "required_capabilities"])
+    schema["properties"]["capability_alternatives"] = {
+        "type": "array", "maxItems": 8,
+        "items": {"type": "array", "minItems": 2, "maxItems": 16, "uniqueItems": True,
+                  "items": {"type": "string", **({"enum": ids} if ids else {})}},
+    }
     return schema
 
 
@@ -163,6 +212,58 @@ def _validate_explicit_capabilities(raw_tasks: Sequence[dict[str, Any]]) -> None
     for task in raw_tasks:
         if not {"requires_fresh_data", "required_capabilities"} <= task.keys():
             raise ValueError("every new task must explicitly declare requires_fresh_data and required_capabilities")
+
+
+def _validate_text_limit(value: Any, field: str, limit: int) -> None:
+    if isinstance(value, str) and len(value) > limit:
+        raise ValueError(f"{field} must not exceed {limit} characters")
+
+
+def _validate_string_list_limits(
+    value: Any,
+    field: str,
+    *,
+    max_items: int,
+    max_chars: int,
+) -> None:
+    if not isinstance(value, list):
+        return
+    if len(value) > max_items:
+        raise ValueError(f"{field} must not contain more than {max_items} items")
+    for index, item in enumerate(value):
+        _validate_text_limit(item, f"{field}[{index}]", max_chars)
+
+
+def _validate_concise_tasks(raw_tasks: Sequence[dict[str, Any]]) -> None:
+    for index, task in enumerate(raw_tasks):
+        _validate_text_limit(
+            task.get("title"), f"tasks[{index}].title", _TASK_TITLE_MAX_CHARS
+        )
+        _validate_text_limit(
+            task.get("objective"),
+            f"tasks[{index}].objective",
+            _TASK_OBJECTIVE_MAX_CHARS,
+        )
+        _validate_string_list_limits(
+            task.get("success_criteria"),
+            f"tasks[{index}].success_criteria",
+            max_items=_TASK_CRITERIA_MAX_ITEMS,
+            max_chars=_TASK_CRITERION_MAX_CHARS,
+        )
+
+
+def _validate_concise_issues(raw_issues: Sequence[dict[str, Any]]) -> None:
+    if len(raw_issues) > _ISSUES_MAX_ITEMS:
+        raise ValueError(f"issues must not contain more than {_ISSUES_MAX_ITEMS} items")
+    for index, issue in enumerate(raw_issues):
+        _validate_text_limit(
+            issue.get("message"), f"issues[{index}].message", _ISSUE_TEXT_MAX_CHARS
+        )
+        _validate_text_limit(
+            issue.get("recommendation"),
+            f"issues[{index}].recommendation",
+            _ISSUE_TEXT_MAX_CHARS,
+        )
 
 
 def _capability_instructions(catalog: Sequence[dict[str, Any]]) -> str:
@@ -177,6 +278,10 @@ def _capability_instructions(catalog: Sequence[dict[str, Any]]) -> str:
         "模型负责具体调用参数及动态补充工具。调用成功不代表证据已满足成功标准。"
         "只规划研究和核验任务，不生成整合报告、撰写报告任务；成稿由 Synthesizer 负责。"
         "路线任务必须依赖已经确定站点顺序的任务，多个路段优先使用多站点行程能力。"
+        "required_capabilities 表示全部必须成功；任选其一用 capability_alternatives，组内 OR、组间 AND。"
+        '例如搜索加路线二选一：required_capabilities=["web_search"]，'
+        'capability_alternatives=[["map_route","map_itinerary"]]。不能把二选一同时写成必需。'
+        "只要求确实必要的能力，复杂任务适当拆分；POI 商业字段不能替代官网开放与预约证据。"
     )
 
 
@@ -240,6 +345,12 @@ class OpenRouterModelGateway:
         def validate(payload: dict[str, Any]) -> ResearchPlan:
             raw_tasks = self._require_object_list(payload, "tasks")
             _validate_explicit_capabilities(raw_tasks)
+            _validate_text_limit(
+                payload.get("rationale"),
+                "rationale",
+                _PLAN_RATIONALE_MAX_CHARS,
+            )
+            _validate_concise_tasks(raw_tasks)
             if not min_tasks <= len(raw_tasks) <= max_tasks:
                 if min_tasks == max_tasks:
                     raise ValueError(
@@ -275,7 +386,10 @@ class OpenRouterModelGateway:
                         "若提供了工具核验材料，可据此确定任务范围。涉及导航时规划专门的路线任务，"
                         "成功标准使用有效导航链接，路线距离和耗时不写入报告。"
                         "只返回符合给定 JSON Schema 的对象。"
-                        "当前是测试阶段，只要求简单的任务回答来节省agent回复时间和token消耗。"
+                        "计划保持紧凑：rationale 用一两句话，每项成功标准通常2至4条，"
+                        "不输出研究结论或详细行程正文，但不得省略用户约束和必填字段。"
+                        "遵循最小充分原则：rationale 最多两句，title 使用短语，objective 一句话；"
+                        "success_criteria 每条只写一个可验收条件。不要复述问题、解释推理过程或写背景介绍。"
                         + _capability_instructions(capability_catalog)
                     ),
                 },
@@ -289,12 +403,16 @@ class OpenRouterModelGateway:
                 },
             ],
             temperature=0.1,
-            max_tokens=4096,
-            schema_name="research_plan_v02",
+            max_tokens=_PLAN_MAX_TOKENS,
+            schema_name="research_plan_v03_concise",
             schema={
                 "type": "object",
                 "properties": {
-                    "rationale": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "rationale": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": _PLAN_RATIONALE_MAX_CHARS,
+                    },
                     "tasks": {
                         "type": "array",
                         "items": _task_schema(capability_catalog),
@@ -326,6 +444,23 @@ class OpenRouterModelGateway:
                 )
 
         def validate(payload: dict[str, Any]) -> ResearchResult:
+            _validate_text_limit(
+                payload.get("summary"),
+                "summary",
+                _RESEARCH_SUMMARY_MAX_CHARS,
+            )
+            _validate_string_list_limits(
+                payload.get("findings"),
+                "findings",
+                max_items=_RESEARCH_FINDINGS_MAX_ITEMS,
+                max_chars=_RESEARCH_FINDING_MAX_CHARS,
+            )
+            _validate_string_list_limits(
+                payload.get("limitations"),
+                "limitations",
+                max_items=_RESEARCH_LIMITATIONS_MAX_ITEMS,
+                max_chars=_RESEARCH_LIMITATION_MAX_CHARS,
+            )
             return ResearchResult.model_validate(
                 {
                     **payload,
@@ -348,7 +483,9 @@ class OpenRouterModelGateway:
                         "地图只输出给定导航链接并提示打开查看最新路线，不保留路线距离和耗时。只返回符合"
                         "给定 JSON Schema 的对象。"
                         "必须包含 summary、findings、limitations、confidence，不要输出任务定义字段。"
-                        "摘要和发现应简短，不输出推理过程、不使用省略号占位；缺证据时明确局限。"
+                        "遵循最小充分原则：summary 最多两句；findings 只保留满足成功标准所需的"
+                        "可核验事实，一条一个结论；limitations 只列真实缺口。不要复述任务、输出"
+                        "推理过程、背景科普、客套话或省略号占位。准确性和来源不得因精简而省略。"
                     ),
                 },
                 {
@@ -361,22 +498,34 @@ class OpenRouterModelGateway:
                 },
             ],
             temperature=0.2,
-            max_tokens=5000,
-            schema_name="research_result_v02",
+            max_tokens=_RESEARCH_MAX_TOKENS,
+            schema_name="research_result_v03_concise",
             schema={
                 "type": "object",
                 "properties": {
-                    "summary": {"type": "string", "minLength": 1, "maxLength": 8000},
+                    "summary": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": _RESEARCH_SUMMARY_MAX_CHARS,
+                    },
                     "findings": {
                         "type": "array",
-                        "items": {"type": "string", "minLength": 1, "maxLength": 3000},
+                        "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": _RESEARCH_FINDING_MAX_CHARS,
+                        },
                         "minItems": 1,
-                        "maxItems": 20,
+                        "maxItems": _RESEARCH_FINDINGS_MAX_ITEMS,
                     },
                     "limitations": {
                         "type": "array",
-                        "items": {"type": "string", "minLength": 1, "maxLength": 3000},
-                        "maxItems": 20,
+                        "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": _RESEARCH_LIMITATION_MAX_CHARS,
+                        },
+                        "maxItems": _RESEARCH_LIMITATIONS_MAX_ITEMS,
                     },
                     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                 },
@@ -445,7 +594,15 @@ class OpenRouterModelGateway:
 
         def validate(payload: dict[str, Any]) -> CritiqueDecision:
             supplemental = self._require_object_list(payload, "supplemental_tasks")
+            issues = self._require_object_list(payload, "issues")
             _validate_explicit_capabilities(supplemental)
+            _validate_concise_tasks(supplemental)
+            _validate_concise_issues(issues)
+            _validate_text_limit(
+                payload.get("rationale"),
+                "rationale",
+                _DECISION_RATIONALE_MAX_CHARS,
+            )
             decision = CritiqueDecision.model_validate(
                 {
                     **payload,
@@ -481,7 +638,10 @@ class OpenRouterModelGateway:
                         "当策略要求 critical issue 时，至少一个 critical issue 的 code "
                         "必须与 replan_reason 完全一致。"
                         f"{critical_requirement}"
-                        "只返回符合 JSON Schema 与语义约束的对象。"
+                        "只返回符合 JSON Schema 与语义约束的对象。遵循最小充分原则：rationale"
+                        "只用一句话说明路由依据；issues 只列会影响本次决策的具体问题，一项问题"
+                        "对应一项建议；accept 时没有实际问题就返回空数组。不要复述计划、研究结果"
+                        "或输出审查思考过程。"
                         + _capability_instructions(capability_catalog)
                     ),
                 },
@@ -510,8 +670,8 @@ class OpenRouterModelGateway:
                 },
             ],
             temperature=0.0,
-            max_tokens=5000,
-            schema_name="critique_decision_v02",
+            max_tokens=_REVIEW_MAX_TOKENS,
+            schema_name="critique_decision_v03_concise",
             schema={
                 "type": "object",
                 "properties": {
@@ -519,7 +679,11 @@ class OpenRouterModelGateway:
                         "type": "string",
                         "enum": ["accept", "supplement", "replan"],
                     },
-                    "rationale": {"type": "string", "minLength": 1, "maxLength": 4000},
+                    "rationale": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": _DECISION_RATIONALE_MAX_CHARS,
+                    },
                     "replan_reason": {
                         "description": (
                             "decision 为 replan 时必须选择一个原因；"
@@ -533,7 +697,7 @@ class OpenRouterModelGateway:
                     "issues": {
                         "type": "array",
                         "items": _ISSUE_SCHEMA,
-                        "maxItems": 20,
+                        "maxItems": _ISSUES_MAX_ITEMS,
                     },
                     "supplemental_tasks": {
                         "type": "array",
@@ -609,6 +773,28 @@ class OpenRouterModelGateway:
         if any(result.plan_version != draft.plan_version for result in results):
             raise ValueError("quality inputs must use the draft plan version")
 
+        def validate(payload: dict[str, Any]) -> QualityDecision:
+            issues = self._require_object_list(payload, "issues")
+            _validate_concise_issues(issues)
+            _validate_text_limit(
+                payload.get("rationale"),
+                "rationale",
+                _DECISION_RATIONALE_MAX_CHARS,
+            )
+            _validate_string_list_limits(
+                payload.get("revision_instructions"),
+                "revision_instructions",
+                max_items=_REVISION_INSTRUCTIONS_MAX_ITEMS,
+                max_chars=_REVISION_INSTRUCTION_MAX_CHARS,
+            )
+            return QualityDecision.model_validate(
+                {
+                    **payload,
+                    "plan_version": draft.plan_version,
+                    "draft_version": draft.version,
+                }
+            )
+
         return await self._request_json(
             operation="quality evaluation",
             messages=[
@@ -625,6 +811,9 @@ class OpenRouterModelGateway:
                         "按问题严重程度给 0 到 100 整数分；只有至少 80 且无 critical issue"
                         " 才能 accept。仅结构、表述或可局部修正的引用问题选 revise，研究基础不足"
                         "选 replan。只返回符合 JSON Schema 的对象。"
+                        "遵循最小充分原则：rationale 只用一句话说明验收依据；issues 只列影响"
+                        "验收的具体缺陷；revision_instructions 使用可直接执行的短句，不复述报告、"
+                        "研究结果或评分规则，不输出审查思考过程。"
                     ),
                 },
                 {
@@ -637,8 +826,8 @@ class OpenRouterModelGateway:
                 },
             ],
             temperature=0.0,
-            max_tokens=5000,
-            schema_name="quality_decision_v02",
+            max_tokens=_QUALITY_MAX_TOKENS,
+            schema_name="quality_decision_v03_concise",
             schema={
                 "type": "object",
                 "properties": {
@@ -647,16 +836,24 @@ class OpenRouterModelGateway:
                         "enum": ["accept", "revise", "replan"],
                     },
                     "score": {"type": "integer", "minimum": 0, "maximum": 100},
-                    "rationale": {"type": "string", "minLength": 1, "maxLength": 4000},
+                    "rationale": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": _DECISION_RATIONALE_MAX_CHARS,
+                    },
                     "issues": {
                         "type": "array",
                         "items": _ISSUE_SCHEMA,
-                        "maxItems": 20,
+                        "maxItems": _ISSUES_MAX_ITEMS,
                     },
                     "revision_instructions": {
                         "type": "array",
-                        "items": {"type": "string", "minLength": 1, "maxLength": 2000},
-                        "maxItems": 20,
+                        "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": _REVISION_INSTRUCTION_MAX_CHARS,
+                        },
+                        "maxItems": _REVISION_INSTRUCTIONS_MAX_ITEMS,
                     },
                 },
                 "required": [
@@ -668,13 +865,7 @@ class OpenRouterModelGateway:
                 ],
                 "additionalProperties": False,
             },
-            validator=lambda payload: QualityDecision.model_validate(
-                {
-                    **payload,
-                    "plan_version": draft.plan_version,
-                    "draft_version": draft.version,
-                }
-            ),
+            validator=validate,
         )
 
     @traced(name="model.openrouter.revise", run_type="llm")
@@ -741,8 +932,11 @@ class OpenRouterModelGateway:
         validator: Callable[[dict[str, Any]], T],
     ) -> T:
         last_error: ProviderRequestError | None = None
+        history: list[str] = []
+        failures = {"truncation": 0, "validation": 0}
         output_limit = max_tokens
-        for attempt in range(2):
+        # One truncation recovery and one format/contract repair, at most three requests.
+        for attempt in range(3):
             request_messages = list(messages)
             if attempt:
                 error_detail = str(last_error)[:1_000] if last_error else "未知契约错误"
@@ -773,26 +967,66 @@ class OpenRouterModelGateway:
                     },
                 },
             )
-            if message.get("_atlasflow_finish_reason") == "length":
+            content = self._content(message)
+            finish = message.get("_atlasflow_finish_reason")
+            bucket = "validation"
+            code = "VALID"
+            if finish == "length":
+                bucket, code = "truncation", "OUTPUT_TRUNCATED"
                 last_error = ProviderRequestError(
                     f"OpenRouter {operation} output truncated (finish_reason=length, max_tokens={output_limit})"
                 )
+            elif not content.strip() or len(content.strip()) < 2:
+                code = "EMPTY_CONTENT" if not content.strip() else "CONTENT_TOO_SHORT"
+                last_error = ProviderRequestError(f"OpenRouter {operation} {code}: 未返回完整 JSON 正文")
+            else:
+                phase = "parse"
+                try:
+                    payload = self._parse_json_object(content, operation=operation)
+                    phase = "contract"
+                    result = validator(payload)
+                except ProviderRequestError as exc:
+                    code = "INVALID_JSON" if phase == "parse" else "CONTRACT_INVALID"
+                    last_error = exc
+                except (ValidationError, ValueError, TypeError, KeyError) as exc:
+                    code = "CONTRACT_INVALID"
+                    if isinstance(exc, ValidationError):
+                        detail = "; ".join(
+                            f"{'.'.join(map(str, item['loc']))}: {item['type']}"
+                            for item in exc.errors(include_input=False, include_url=False)[:8]
+                        )
+                    else:
+                        detail = str(exc)[:600]
+                    last_error = ProviderRequestError(
+                        f"OpenRouter {operation} response violates the Agent contract: {detail}"
+                    )
+                else:
+                    self._record_json_attempt(operation=operation, attempt=attempt + 1,
+                        outcome=code, finish_reason=str(finish or "unknown"),
+                        content_length=len(content), max_tokens=output_limit)
+                    return result
+            self._record_json_attempt(operation=operation, attempt=attempt + 1,
+                outcome=code, finish_reason=str(finish or "unknown"),
+                content_length=len(content), max_tokens=output_limit)
+            history.append(f"#{attempt + 1} {code}(finish={finish or 'unknown'}, chars={len(content)}, max_tokens={output_limit})")
+            failures[bucket] += 1
+            if failures[bucket] >= 2:
+                break
+            if bucket == "truncation":
                 output_limit = min(output_limit * 2, 16000)
-                continue
-            try:
-                payload = self._parse_json_object(
-                    self._content(message), operation=operation
-                )
-                return validator(payload)
-            except ProviderRequestError as exc:
-                last_error = exc
-            except (ValidationError, ValueError, TypeError, KeyError) as exc:
-                last_error = ProviderRequestError(
-                    f"OpenRouter {operation} response violates the Agent contract: {exc}"
-                )
-        raise last_error or ProviderRequestError(
-            f"OpenRouter {operation} response is not valid JSON"
-        )
+        raise ProviderRequestError(
+            f"{last_error}; structured-output attempts: {' -> '.join(history)}"
+        ) from last_error
+
+    @traced(name="model.structured-output.validation", run_type="chain")
+    def _record_json_attempt(
+        self, *, operation: str, attempt: int, outcome: str,
+        finish_reason: str, content_length: int, max_tokens: int,
+    ) -> dict[str, Any]:
+        """Trace safe diagnostics, including recovered attempts, without raw model text."""
+        return {"operation": operation, "attempt": attempt, "outcome": outcome,
+                "finish_reason": finish_reason, "content_length": content_length,
+                "max_tokens": max_tokens}
 
     async def _request_text(
         self,
@@ -865,6 +1099,8 @@ class OpenRouterModelGateway:
     @staticmethod
     def _content(message: dict[str, Any]) -> str:
         content = message.get("content", "")
+        if content is None:
+            return ""
         if isinstance(content, str):
             return content
         if isinstance(content, list):

@@ -8,8 +8,7 @@ from atlasflow.tools.map_route import AmapRequestLimiter, AmapRouteTool
 from atlasflow.tools.poi_details import PoiDetailsTool
 from atlasflow.tools.registry import ToolRegistry
 from atlasflow.tools.weather_forecast import WeatherForecastTool
-from atlasflow.tools.web_fetch import OpenRouterWebFetchTool
-from atlasflow.tools.web_search import OpenRouterWebSearchTool
+from atlasflow.tools.web_fetch import WebFetchTool
 
 
 def build_tool_registry(settings: Settings, *, web_search: BaseTool | None) -> ToolRegistry:
@@ -19,8 +18,7 @@ def build_tool_registry(settings: Settings, *, web_search: BaseTool | None) -> T
     )
     if web_search is not None:
         registry.register(web_search)
-        if isinstance(web_search, OpenRouterWebSearchTool):
-            registry.register(OpenRouterWebFetchTool(web_search.client, web_search.model))
+    registry.register(WebFetchTool())
     registry.register(CalculatorTool())
     amap_limiter = AmapRequestLimiter()
     registry.register(AmapRouteTool(settings.amap_api_key, request_limiter=amap_limiter))

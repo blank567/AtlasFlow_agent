@@ -96,6 +96,10 @@ class ToolCallRecord(BaseModel):
     plan_version: int | None = None
     capabilities: list[str] = Field(default_factory=list)
     reused_from_call_id: str | None = None
+    # None preserves historical records whose retry semantics were not recorded.
+    retryable: bool | None = None
+    # Map tools supply only a hash; no raw location/candidate data is retained.
+    failure_scope: str | None = None
     arguments: dict[str, Any]
     success: bool
     duration_ms: int

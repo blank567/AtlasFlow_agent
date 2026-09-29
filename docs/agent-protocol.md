@@ -126,3 +126,23 @@ ToolRegistry、`knowledge_search`、`web_search`、`calculator` 与 HybridRetrie
 协议和 API，便于下一阶段接回。但 v0.2 主图不向 Researcher 注入 registry，也不把工具调用或
 Evidence 放进 Agent state。这样可以先验证多 Agent 编排，再独立设计工具选择、风险审批、证据
 引用和 RAG 质量门。
+
+## v5.0 非成稿阶段的精简输出契约（2026-09-29）
+
+当前实现以“最小充分”为默认输出策略。Planner、Researcher、Critic、QualityGate 和工具决策只
+返回后续状态流转需要的结构化数据，不返回问候、背景科普、输入复述、思考过程或报告式正文。
+Synthesizer 的首次合稿与修订仍保留完整 Markdown 写作预算。
+
+| 阶段 | 初始输出 Token 上限 | 主要精简约束 |
+| --- | ---: | --- |
+| Planner | 2400 | rationale 最多 300 字；任务标题 80 字、目标 500 字；成功标准最多 6 条、每条 300 字 |
+| Researcher | 1600 | summary 最多 400 字；findings 最多 8 条；limitations 最多 5 条 |
+| Critic | 2200 | rationale 最多 400 字；只列影响路由的问题，issues 最多 8 条 |
+| QualityGate | 1400 | rationale 最多 400 字；issues 和 revision instructions 各最多 8 条 |
+| 工具决策 | 1600 | 只返回下一步需要的原生 tool_calls，不附分析或结论正文 |
+| Synthesizer / 修订 | 7000 | 保留完整报告正文能力，篇幅仍随用户问题复杂度变化 |
+
+结构化阶段的 Provider JSON Schema 和应用本地校验执行同一组上限。即使供应商忽略部分 Schema，
+超长结果也会被拒绝并触发一次格式／契约修复。截断恢复可以临时提高 Token 预算，但字段和数组
+硬上限不变。内部 Pydantic 模型继续兼容历史 Run 的较长记录，因此升级后不会因读取旧数据失败。
+精简不能删除用户约束、任务成功标准、动态事实来源、真实局限、路由依据或可执行修订要求。

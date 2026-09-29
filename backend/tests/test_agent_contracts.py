@@ -40,6 +40,12 @@ def test_research_plan_rejects_cycles() -> None:
         )
 
 
+def test_default_tool_budgets_allow_five_per_decision_and_twenty_per_run() -> None:
+    policy = RunPolicy()
+    assert policy.max_tool_calls_per_turn == 5
+    assert policy.max_tool_calls_per_run == 20
+
+
 def test_quality_accept_requires_score_at_least_eighty() -> None:
     with pytest.raises(ValidationError, match="at least 80"):
         QualityDecision(

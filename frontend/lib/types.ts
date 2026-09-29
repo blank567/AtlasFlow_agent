@@ -36,6 +36,7 @@ export type ResearchTask = {
   dependencies: string[];
   requires_fresh_data?: boolean;
   required_capabilities?: string[];
+  capability_alternatives?: string[][];
   plan_version: number;
   provenance?: "initial" | "supplement" | "replan" | string;
 };
@@ -179,6 +180,8 @@ export type ToolCallRecord = {
   plan_version?: number | null;
   capabilities?: string[];
   reused_from_call_id?: string | null;
+  retryable?: boolean | null;
+  failure_scope?: string | null;
   arguments: Record<string, unknown>;
   success: boolean;
   duration_ms: number;

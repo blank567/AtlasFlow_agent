@@ -163,3 +163,64 @@ class WeatherTool(BaseTool):
 天气 API 默认不需要 Key；`OPEN_METEO_API_KEY` 仅用于已订阅的商业 API。高德 Key 与 Open-Meteo Key 均只从配置注入，不写到工具文件；安全测试检查结果和 LangSmith 脱敏。Open-Meteo 资料需在报告中署名，并注明查询时间。高德许可限制保存其 POI 和天气等数据，因此本项目不把高德 POI 字段做成可引用的持久化证据；营业、预约和门票以官方场馆页面为准。
 
 新增离线测试在 `backend/tests/test_new_tools.py`。本轮没有真实服务联调；OpenRouter server tool、Open-Meteo 和高德 Key 的在线可用性仍须在运行环境中检验。若 OpenRouter 当前模型或账户不支持 `web_fetch`，该能力会明确失败，不伪造页面证据。
+
+## 10. v5.0 后续修补：天气地名与工具预算
+
+2026-09-28 北京三日游 Run 暴露出 `weather_forecast` 的地理编码歧义：以完整输入直接查询时，“北京市”可能无结果；“北京”可能返回多个同名候选，旧选择器不看地点类型。修补后先规范化“市”后缀，拆出并核对国家／行政区，按城市输入语言发起地理编码；若存在唯一国家首都则选它，其他城市只在显著人口优势时自动选取。不能判定时仍明确失败，避免把错误地点的天气写入报告。
+
+`RunPolicy` 及前端三个预设的默认工具预算改为每次 Agent 决策 5 次、全程 20 次。Planner 仍最多一次背景查询；失败请求仍占工具槽，所有并发研究任务共享全程预算。运行中的和历史 Run 不会自动继承新默认值；重跑或新建 Run 才会应用。遇到反复失败应先检查工具参数、供应商错误码和地点解析，而不只提高预算。
+
+## 11. v5.0 后续修补：HTTP 网页证据与失败作用范围
+
+web_fetch 当前由独立 WebFetchTool 实现，与 OpenRouter 搜索工具分别注册。它读取 HTTP 响应并提取原文，再返回 ToolResult／Evidence；model_calls_per_execution 为 0。旧章节中关于 OpenRouter fetch、annotations 和 PDF 支持的内容仅描述历史实现。
+
+每次跳转都重新验证目的地址，实际连接使用已检查的 IP，Host／TLS SNI 保持原域名，证书验证始终启用。无 JavaScript 浏览器、登录会话或 PDF 解析能力；不可读页面应换用合适来源。来源记录保留 requested_url、final_url、redirect_chain、retrieved_at、content_kind=source_excerpt 和摘录范围。网页请求成功不等于成功标准已满足。
+
+新增可选扩展点 BaseTool.failure_scope(arguments)：返回字符串表示不可重试失败所作用的目标，默认 None 表示不启用。web_fetch 返回规范化 URL，忽略 focus；这个钩子与成功结果去重的 cache_identical_calls 分开。ToolCallRecord.retryable 默认 None 兼容历史数据，新失败记录从 ToolResult.retryable 写入。运行器依据本阶段与 prior_calls 中明确不可重试的失败判断重复目标；重复请求会触发 suppressed=true 的 tool_failed 事件、停止当前工具阶段，不再次发出请求，也不占工具预算。必需能力尚未完成时仍保持任务失败，不能把跳过请求当成成功。并行且尚未合并记录的分支不保证共享这项失败抑制。
+
+回归测试见 backend/tests/test_web_fetch.py，覆盖不含模型引用字段的 HTML、相对重定向、中文编码、正文摘录、内网／混合 DNS 拒绝、连接 IP 与 Host/SNI 一致性、重定向限制、HTTP 错误、流式大小限制、重复失败抑制和其他来源恢复。协议依据：[HTTPCore SNI 扩展](https://www.encode.io/httpcore/extensions/#sni_hostname)。
+
+## 12. v5.0 后续修补：结构化导航地点
+
+`map_route.py` 新增 `AmapPlace` 与 `PlaceInput`，由工具的 JSON Schema 自动暴露给模型。两点路线与多站行程共用此契约，不需要额外正则判断任务语义：
+
+```json
+{
+  "city": "北京市",
+  "origin": {"name": "王府井", "district": "东城区"},
+  "destination": {"name": "中国国家博物馆", "district": "东城区"},
+  "mode": "driving"
+}
+```
+
+地点可选字段为 `district`、`address`、`entrance`，未知用 null 或省略；不接受模型自填坐标或 POI ID。保留旧字符串输入。`map_itinerary.stops` 同样支持结构化地点与字符串混合，仍为 2–6 站、返回逐段链接，不声称生成一条包含所有途经点的链接。`poi_details` 的参数契约本轮未改动。
+
+解析流程：拼接已知约束检索 → 校验有效坐标 → 去除同 ID 且关键字段相同的重复项 → 严格核对区县／地址 → 唯一名称（包含指定入口）匹配。完整行政市名前缀和括号／连字符可规范化，但不抹掉门号、方向或附属设施名称。旧完整地址字符串仅在供应商地址精确匹配时接受。地址不做模糊包含判断，避免把 1 号误认为 11 号。接口限定 keywords 最长 80 字符，page_size 最大 25；本工具遵循该限制。参数与响应字段依据：[高德搜索 POI 2.0 官方文档](https://lbs.amap.com/api/webservice/guide/api-advanced/newpoisearch)。
+
+歧义返回只含应用生成的安全提示、端点角色和路段编号，原始候选不回传模型或持久化。模型依据自己的原始请求和上游任务修正限定条件；不足以修正时保留缺口。当前不包含候选选择 UI、用户交互暂停或候选 LLM 排序，也不自动选第一个结果。
+
+`ToolCallRecord.failure_scope` 为可选的失败作用域标识，运行器优先使用已存标识，旧记录仍尝试从安全参数计算。地图实现返回规范化请求的 SHA-256（包含出行模式与地点限定），使脱敏后的调用记录也能跨阶段识别同一失败请求；该指纹不替代成功结果缓存。网页工具仍使用其规范化 URL 作为作用域。未知重试语义的历史记录不追溯锁定，暂时性错误不锁定。仍使用 5／20 工具预算与已有失败事件展示。
+
+## 13. v5.0 后续修补：组合能力、临时结果与拒绝预算
+
+任务新增 `capability_alternatives: list[list[str]]`，默认 `[]` 兼容旧数据。`required_capabilities` 为 AND；每个 alternatives 内层数组为 OR，外层为 AND。每组 2–16 个不同能力，最多 8 组，不能与全部必需项重叠；目录校验拒绝未知能力。要求 fresh data 时必须存在必需的新数据能力，或存在所有分支均能获取新数据的可选组。每个可选组至少要有一个可用实现。扩展工具不需要修改能力 ID 枚举，Schema 继续由目录生成。
+
+Runtime 保持完整的角色已授权可用目录，用 `tool_choice` 引导缺失能力；角色权限、配置可用性和执行前校验不取消。临时工具向后续模型只发送安全摘要和空 `data`，不发送候选或供应商原始字段，从而允许 POI→路线等组合任务继续；原始高德数据仍只在单次工具执行内存中使用。导航链接仅通过既有安全记录／成稿上下文输出。
+
+新增 `BaseTool.validate_context(arguments, context)` 钩子，默认无附加约束；`ToolContext.user_query` 保留原始问题供工具做确定性安全检查。地图实现目前仅识别显式“从…方向门出发”入口格式，防止把同一地点降级为整体或地铁站，不声称解决所有自然语言地理约束。
+
+未通过参数／上下文／可用目录校验的调用只形成拒绝事件，带 `executed=false` 和 `budget_counted=false`；最多 3 次拒绝后结束该工具阶段。它们不写入 ToolCallRecord，因此实际工具次数与拒绝事件次数不同。有效执行沿用原预算和历史记录计数；成功缓存复用仍沿用既有计数语义。`ToolBudgetExhausted` 是 RequiredToolError 的子类，供编排器停止无效任务重试。ToolBudget.remaining 检查不能替代原子 reserve，两个都保留，确保并行分支不突破 Run 上限。
+
+回归见 `backend/tests/test_composite_tool_recovery.py`；运行说明和未完成的真实联调范围见 README 最新追加记录。
+
+## 14. v5.0 后续修补：POI 预解析与正式名称
+
+地图工具的地点处理顺序统一为：`PlaceInput` → 高德 `/v5/place/text` 候选 → 硬约束过滤 → `_poi_score()` 排序 → 高德正式 POI → 路径规划。`map_itinerary` 会先解析全部站点，再对相邻正式 POI 调用路径接口；站点解析缓存在单次工具调用的内存字典中，不跨调用保存。
+
+硬约束包括区县／完整地址、有效坐标、入口方向及门号、目标类型。评分优先级为正式名称完全匹配、入口锚定匹配、完整地址精确匹配、限阈值名称相似；显式区县和地址加分。同分采用供应商响应顺序。实现使用 Python `SequenceMatcher` 计算局部文本相似度，该得分仅用于本次候选排序，不应显示为置信度、供应商评分或研究事实。
+
+路线请求与高德 URI 使用选中结果的正式 `name`、`id`、`location`。这些字段和 `match_score` 属于临时数据，仍受地图输出脱敏策略约束；安全记录只允许导航 URL、调用状态和应用生成的摘要。新增地图扩展若复用该解析器，不得把内部候选或分数写入 Evidence、ToolCallRecord、Event、报告或 Trace。
+
+入口匹配允许供应商在目标场所名与方向门之间加入校区／园区限定词，但不得改变场所锚点、方向或显式门号，也不得把场所入口降级为同名交通、停车、售票、餐饮或零售设施。没有有效候选时保持失败；自动最高分策略不是允许低相关候选兜底。
+
+回归见 `backend/tests/test_poi_preflight.py` 和 `backend/tests/test_map_disambiguation.py`。

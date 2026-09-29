@@ -95,7 +95,7 @@ async def test_native_call_round_trip_uses_validated_result_and_preserves_call_i
         run_id="native",
         agent="researcher",
         prompt="1+1=?",
-        policy=RunPolicy(max_tool_calls_per_turn=1, max_tool_calls_per_run=1),
+        policy=RunPolicy(max_tool_calls_per_turn=1, max_tool_calls_per_run=2),
         required_capabilities=["calculator"],
     )
     assert result.model_calls == 2
@@ -266,7 +266,7 @@ async def test_disallowed_tool_and_bad_arguments_are_audited_failures() -> None:
         [
             _call("unregistered_shell", {"command": "anything"}),
             _call("calculator", {"expression": "1+1", "unexpected": True}),
-            {"content": "done"},
+            _call("calculator", {"expression": "1+1", "unexpected": True}),
         ]
     )
     runtime, events = _runtime(registry, lambda _: _response(next(calls)))
@@ -279,9 +279,10 @@ async def test_disallowed_tool_and_bad_arguments_are_audited_failures() -> None:
             required_capabilities=["calculator"],
         )
     assert error.value.stage is not None
-    assert len(error.value.stage.records) == 2
-    assert not any(record.success for record in error.value.stage.records)
-    assert sum(event.event_type is RunEventType.TOOL_FAILED for event in events) == 2
+    assert error.value.stage.records == []
+    assert sum(event.event_type is RunEventType.TOOL_FAILED for event in events) == 3
+    assert all(event.data.get("budget_counted") is False for event in events)
+    assert runtime.budget.remaining("invalid", already_used=0, limit=20) == 20
 
 
 @pytest.mark.asyncio
