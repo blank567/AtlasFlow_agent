@@ -540,6 +540,11 @@ async def test_non_writing_agents_use_concise_output_contracts() -> None:
     assert review["max_tokens"] == 2200
     assert quality["max_tokens"] == 1400
     assert client.text_requests[-1]["max_tokens"] == 7000
+    assert planning["reasoning_effort"] == "low"
+    assert research["reasoning_effort"] == "low"
+    assert review["reasoning_effort"] == "low"
+    assert quality["reasoning_effort"] == "minimal"
+    assert client.text_requests[-1]["reasoning_effort"] == "low"
 
     plan_schema = planning["response_format"]["json_schema"]["schema"]
     task_schema = plan_schema["properties"]["tasks"]["items"]

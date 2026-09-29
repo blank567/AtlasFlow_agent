@@ -6,6 +6,8 @@ import httpx
 import pytest
 from atlasflow.agents.contracts import ResearchTask, RunPolicy
 from atlasflow.agents.gateway import OpenRouterModelGateway
+from atlasflow.agents.tool_runtime import RequiredToolError, ToolStageResult
+from atlasflow.agents.workflow import ResearchWorkflow
 from atlasflow.config import Settings
 from atlasflow.observability import _sanitize_trace_outputs, configure_langsmith, trace_segment
 from atlasflow.providers.openrouter import ProviderRequestError
@@ -108,6 +110,151 @@ async def test_json_truncation_retries_with_larger_budget_and_retains_finish_rea
     assert [item.finish_reason for item in client.recent_calls] == ["length", "stop"]
     assert client.recent_calls[0].content_length > 0
     assert "单独的证据" in requests[0]["messages"][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_json_reasoning_exhaustion_disables_reasoning_without_growing_budget():
+    requests = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        if len(requests) == 1:
+            message, finish = {
+                "content": None,
+                "reasoning": "内部推理" * 100,
+                "reasoning_details": [{"type": "reasoning.text", "text": "省略"}],
+            }, "length"
+        else:
+            message, finish = {
+                "content": json.dumps(
+                    {
+                        "summary": "已精简完成",
+                        "findings": ["结论"],
+                        "limitations": [],
+                        "confidence": 0.8,
+                    }
+                )
+            }, "stop"
+        return httpx.Response(
+            200, json={"choices": [{"message": message, "finish_reason": finish}]}
+        )
+
+    result = await OpenRouterModelGateway(_client(handler), "test").analyze_task(
+        "原始问题", ResearchTask(**raw_task(), plan_version=1)
+    )
+
+    assert result.summary == "已精简完成"
+    assert [item["max_tokens"] for item in requests] == [1600, 1600]
+    assert [item["reasoning_effort"] for item in requests] == ["low", "none"]
+
+
+@pytest.mark.asyncio
+async def test_tool_reasoning_exhaustion_never_executes_an_incomplete_call():
+    registry = ToolRegistry()
+    registry.register(FakeWebSearchTool())
+    requests = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": None,
+                            "reasoning": "内部推理" * 100,
+                            "reasoning_details": [
+                                {"type": "reasoning.text", "text": "省略"}
+                            ],
+                        },
+                        "finish_reason": "length",
+                    }
+                ]
+            },
+        )
+
+    runtime, _ = _runtime(registry, handler)
+
+    with pytest.raises(RequiredToolError, match="REASONING_BUDGET_EXHAUSTED") as error:
+        await runtime.gather(
+            run_id="reasoning-tool",
+            agent="researcher",
+            prompt="查询",
+            policy=RunPolicy(),
+            required_capabilities=["web_search"],
+        )
+
+    assert not error.value.stage.records
+    assert [item["max_tokens"] for item in requests] == [1600, 1600]
+    assert [item["reasoning_effort"] for item in requests] == ["minimal", "none"]
+
+
+@pytest.mark.asyncio
+async def test_optional_critic_tool_failure_degrades_but_required_research_stays_strict():
+    events = []
+
+    async def sink(_run_id, event):
+        events.append(event)
+
+    class FailingRuntime:
+        async def gather(self, **_kwargs):
+            raise RequiredToolError(
+                "REASONING_BUDGET_EXHAUSTED: no tool calls",
+                ToolStageResult(model_calls=2),
+            )
+
+        def context_for(self, _evidence, _records):
+            return "已有安全证据上下文"
+
+    workflow = ResearchWorkflow(
+        model=FakeModelGateway(),
+        event_sink=sink,
+        tool_runtime=FailingRuntime(),  # type: ignore[arg-type]
+    )
+    state = {
+        "run_id": "optional-tool",
+        "query": "测试",
+        "policy": RunPolicy(),
+        "tool_calls": [],
+        "evidence": [],
+        "dependency_results": [],
+    }
+
+    stage = await workflow._tool_stage(
+        state, "critic", focus="复核已有研究", plan_version=1
+    )
+
+    assert stage.context == "已有安全证据上下文"
+    assert stage.model_calls == 2
+    assert stage.warnings and "已使用现有证据继续" in stage.warnings[0]
+    assert events[-1].event_type.value == "tool_failed"
+    assert events[-1].data["optional"] is True
+
+    required_state = {
+        **state,
+        "task": ResearchTask(
+            task_id="T1",
+            title="必须搜索",
+            objective="获取外部证据",
+            success_criteria=["取得来源"],
+            priority=1,
+            dependencies=[],
+            requires_fresh_data=True,
+            required_capabilities=["web_search"],
+            plan_version=1,
+        ),
+    }
+    with pytest.raises(RequiredToolError, match="REASONING_BUDGET_EXHAUSTED"):
+        await workflow._tool_stage(
+            required_state,
+            "researcher",
+            focus="执行必需搜索",
+            task_id="T1",
+            plan_version=1,
+        )
 
 
 @pytest.mark.asyncio

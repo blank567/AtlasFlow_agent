@@ -300,6 +300,25 @@ async def test_provider_failure_keeps_already_executed_tool_records() -> None:
 
 def _amap_handler(request: httpx.Request) -> httpx.Response:
     assert request.url.params["key"] == "amap-test-key"
+    if request.url.path == "/v3/assistant/inputtips":
+        assert request.url.params["city"] == "北京"
+        keyword = request.url.params["keywords"]
+        official = "北京大学(东门)" if keyword == "北京大学东门" else keyword
+        return httpx.Response(
+            200,
+            json={
+                "status": "1",
+                "tips": [
+                    {
+                        "name": official,
+                        "location": "116.4,39.9",
+                        "id": "test-poi",
+                        "district": "北京市海淀区",
+                        "typecode": "991400",
+                    }
+                ],
+            },
+        )
     if request.url.path == "/v5/place/text":
         assert request.url.params["region"] == "北京"
         assert request.url.params["city_limit"] == "true"

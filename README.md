@@ -1384,3 +1384,29 @@ Critic、Synthesizer 和 Quality Gate 仍可以调用工具。`requires_fresh_da
 - Synthesizer 的首次合稿和报告修订仍保留 7000 Token，不压缩最终 Markdown 报告。内部 Pydantic 存储契约保留原有兼容上限，旧 Run 不会因本次收紧而无法读取；新模型输出同时经过 Provider JSON Schema 与本地长度校验，端点忽略 Schema 时也会被拒绝并自动要求精简重试。
 
 验证：E 盘 `langchain` 环境后端 **201 passed**。新增测试覆盖五个阶段的独立 Token 预算、结构化字段上限、Synthesizer 详细输出预算不变，以及供应商返回 401 字摘要时本地拒绝并成功精简重试。重启后端和 Studio、创建新 Run 后生效；历史 Run 中已保存的长回复不会自动重写。
+
+### v5.0 修补 — 推理预算耗尽与可选工具阶段降级（2026-09-29）
+
+对应 Run `cf4a57b5-fba7-420f-9993-8c479e42e6a1`、Trace `0dbac438-b8cb-47e9-99e6-ebffa6edabbd`：4 个研究任务均已成功，累计完成 11 次工具执行并取得 36 条证据，但 Critic 的可选工具决策连续两次把全部输出预算用于模型内部推理，返回 `finish_reason=length` 且没有正文或 `tool_calls`。旧流程把这一可选补充失败当作 Critic 节点失败，导致已有研究成果无法进入正式审查。本次仍属 `5.0.0`，只追加记录，不改写历史 Run。
+
+- OpenRouter 客户端新增阶段级 `reasoning_effort`。Planner、Researcher、Critic 的结构化决策默认使用 `low`，QualityGate 使用 `minimal`，原生工具决策使用 `minimal`；Synthesizer 仍保留 7000 Token 的完整报告预算。当前配置模型 `~deepseek/deepseek-v4-flash-latest` 的公开元数据已确认同时支持 `reasoning_effort`、工具调用和结构化输出。
+- 网关识别“`finish_reason=length`、正文为空、存在 reasoning”的组合为 `REASONING_BUDGET_EXHAUSTED`，与普通正文截断分开处理。第一次出现时不再盲目把 Token 上限翻倍，而是在相同输出预算下将推理强度切为 `none` 后重试；普通正文截断仍按原规则扩大预算。
+- 工具决策采用同样恢复策略：首次纯推理耗尽时从 `minimal` 切换为 `none`，连续两次仍无完整 `tool_calls` 才失败。残缺调用永远不会执行，因而不会误耗工具预算或产生伪造工具记录。
+- Planner、Critic、QualityGate 与 Synthesizer 的工具阶段属于可选补充。其工具决策失败时记录 `tool_failed` 降级事件和 warning，并使用现有安全证据上下文继续进入该 Agent 的正式结构化决策或成稿；Researcher 声明的 `required_capabilities`／`capability_alternatives` 仍保持严格失败语义，不能在必需实时证据缺失时静默放行。
+- 角色级工具上限与 RunPolicy 分离：Planner 仍最多执行 1 次，Critic 和 QualityGate 各最多执行 2 次；Researcher 仍受单次决策与整个 Run 的 5／20 默认预算控制。提高全局预算不会让审查阶段无边界地追加工具。
+- LangSmith 的结构化恢复诊断现在记录安全的 `reasoning_effort`、finish reason、正文长度与 Token 上限，不保存内部推理正文；前端会看到可选工具失败后的降级事件，而不是整个 Critic 节点直接终止。
+
+验证：E 盘 `langchain` 环境后端 **204 passed**、Ruff 通过。新增回归覆盖“结构化 JSON 纯推理耗尽后同预算关闭推理并成功恢复”“工具决策连续纯推理时不执行残缺调用”“Critic 可选工具失败后继续、Researcher 必需工具仍严格失败”。本轮没有重新发起付费端到端研究；需重启后端和 Studio，并创建新 Run 验证。原失败 Run 不会自动续跑或重写。
+
+### v5.0 修补 — 官方 POI 前置解析与行程猜测循环终止（2026-09-29）
+
+对应 Run `8dbdd8de-d700-4481-8db5-9e6427c663fd`、Trace `6270a283-26e7-40ae-a156-38cbba23f5ab`：T4 首轮先把城市错误写成 `北京市海淀区`，随后连续 10 次改写整条 `map_itinerary`，依次猜测“北京大学医院(东门)”“北京大学医院”、颐和园入口和地址，耗尽单轮工具预算后才在 Researcher 第二次尝试成功。更严重的是，旧匹配器把用户指定的“北京大学东门”接受成了“北京大学医院(东门)”，最终导航虽然成功，却违反了明确的起点约束。本次仍属 `5.0.0`，历史 Run、事件和报告不改写。
+
+- 城市参数在 Pydantic 参数校验阶段规范到城市级。`北京市海淀区`、`北京海淀区` 等明确直辖市写法会转换为 `北京`；其他包含地级市的行政区字符串提取城市，不再把区县组合直接传给高德 `region`／`city`。
+- 校门、公园门等带方向入口的地点在路线查询前优先调用高德官方输入提示接口 `/v3/assistant/inputtips`。该接口能返回普通 v5 文本检索遗漏的正式入口 POI；只有未取得可用精确候选时才回退到 `/v5/place/text`。所有站点仍必须先完成 POI 解析，之后才允许请求任何相邻路段。
+- POI 评分同时校验正式名称、方向入口、区县、地址与高德类型码。没有明确要求交通或医疗设施时，地铁／公交和医院类候选不参与排名；入口前插入“医院”“物理系”等附属机构名称也不再被当成校园入口。允许的校园限定词保持窄范围白名单，不能靠名称前缀相似绕过约束。
+- 用户问题明确“从某入口出发”时，工具执行前只核对第一站，并要求模型参数与该入口完全一致。场所整体、附属医院、其他门和同名地铁站都会在 HTTP 请求和工具预算扣除前拒绝。
+- `map_itinerary` 继续在单次工具内部完成 2–6 个站点的全量预解析，但现在每个 Agent 工具阶段最多实际执行一次。确定性 POI 失败后直接保留缺口或进入既有 Researcher 重试，不再让模型在同一阶段连续猜 10 组地点；普通网络瞬时错误仍由工具注册表内部的有限重试处理。
+- 高德候选、坐标、匹配分和 API Key 仍不进入 RunRecord、事件、报告或 LangSmith。持久化内容仍只有安全状态、失败说明和导航链接；成功链接使用高德返回的正式 POI 名称。
+
+验证：E 盘 `langchain` 环境后端 **207 passed**、Ruff 通过。真实高德只读冒烟测试故意使用 `city="北京市海淀区"`，一次完成 **5 个站点、4 段路线**，正式站点为 `北京大学(东门) → 颐和园 → 圆明园遗址公园 → 清华大学 → 北京中关村北京大学逸扉酒店`，未再选择北京大学医院。重启后端和 Studio、创建新 Run 后生效；旧 Run 中错误的导航链接不会自动替换。

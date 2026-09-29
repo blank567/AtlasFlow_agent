@@ -4,10 +4,16 @@ from itertools import pairwise
 from typing import Any, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from atlasflow.tools.base import Capability, ToolContext, ToolResult
-from atlasflow.tools.map_route import AmapPlace, AmapRouteTool, MapServiceError, PlaceInput
+from atlasflow.tools.map_route import (
+    AmapPlace,
+    AmapRouteTool,
+    MapServiceError,
+    PlaceInput,
+    normalize_amap_city,
+)
 
 
 class MapItineraryArguments(BaseModel):
@@ -19,6 +25,11 @@ class MapItineraryArguments(BaseModel):
         description="按顺序填写2至6个结构化地点（name/district/address/entrance），未知条件留空；兼容完整名称字符串。返回起点时末尾重复起点",
     )
     mode: Literal["driving", "walking"]
+
+    @field_validator("city")
+    @classmethod
+    def normalize_city(cls, value: str) -> str:
+        return normalize_amap_city(value)
 
     @model_validator(mode="after")
     def validate_stops(self):
@@ -38,6 +49,7 @@ class MapItineraryTool(AmapRouteTool):
         Capability("map_itinerary", "多站点顺序行程及返回起点的逐段导航；最多6站点", True),
     )
     arguments_model = MapItineraryArguments
+    max_executions_per_stage = 1
 
     @staticmethod
     def safe_arguments(arguments: dict[str, Any]) -> dict[str, Any]:

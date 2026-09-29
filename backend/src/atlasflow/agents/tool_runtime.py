@@ -41,6 +41,7 @@ class ToolStageResult:
     evidence: list[Evidence] = field(default_factory=list)
     model_calls: int = 0
     context: str = ""
+    warnings: list[str] = field(default_factory=list)
 
 
 class ToolBudget:
@@ -101,7 +102,8 @@ class ToolRuntime:
             return ToolStageResult()
         if agent == "synthesizer":
             return ToolStageResult(context=self._context(prior_evidence, prior_calls))
-        turn_limit = min(policy.max_tool_calls_per_turn, 1 if agent == "planner" else 10)
+        role_limit = {"planner": 1, "critic": 2, "quality_gate": 2}.get(agent, 10)
+        turn_limit = min(policy.max_tool_calls_per_turn, role_limit)
         available = self.registry.available_for(agent)
         catalog = {item["id"]: item for item in self.registry.capability_catalog(agent)}
         unavailable = [
@@ -168,6 +170,7 @@ class ToolRuntime:
         ]
         stage = ToolStageResult()
         execution_cache: dict[tuple[str, str], tuple[ToolResult, str]] = {}
+        executions_by_tool: dict[str, int] = {}
         terminal_failures: dict[tuple[str, str], str] = {}
         for previous in prior_calls:
             scope = previous.failure_scope or self._tool_policy(previous.tool_name).failure_scope(previous.arguments)
@@ -196,6 +199,7 @@ class ToolRuntime:
         rejected_calls = 0
         run_budget_blocked = False
         output_limit = 1600
+        reasoning_effort = "minimal"
         for _ in range(turn_limit + 2):
             choice: str | dict[str, Any] = "auto"
             missing = [cap for cap in required if cap not in succeeded]
@@ -221,6 +225,7 @@ class ToolRuntime:
                     messages=messages,
                     temperature=0,
                     max_tokens=output_limit,
+                    reasoning_effort=reasoning_effort,
                     tools=request_definitions,
                     tool_choice=choice,
                     # Providers may support tools but not parallel_tool_calls.
@@ -233,6 +238,30 @@ class ToolRuntime:
                 ) from exc
             raw_calls = response.get("tool_calls") or []
             if response.get("_atlasflow_finish_reason") == "length":
+                reasoning_exhausted = (
+                    not raw_calls
+                    and not str(response.get("content") or "").strip()
+                    and bool(response.get("_atlasflow_reasoning_present"))
+                )
+                if reasoning_exhausted:
+                    if reasoning_effort != "none":
+                        reasoning_effort = "none"
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "上次输出预算全部用于内部推理，未生成工具调用。"
+                                    "请关闭额外推理，只返回必要的原生 tool_calls；"
+                                    "若无需工具则返回空结果。"
+                                ),
+                            }
+                        )
+                        continue
+                    raise RequiredToolError(
+                        "REASONING_BUDGET_EXHAUSTED: 工具决策连续两次只返回内部推理，"
+                        "未生成正文或 tool_calls；未执行不完整调用",
+                        stage,
+                    )
                 if output_limit < 3200:
                     output_limit = 3200
                     messages.append({"role": "user", "content": "上次输出被截断。仅返回简短完整的工具调用参数，不解释推理过程。"})
@@ -389,6 +418,7 @@ class ToolRuntime:
                             result = await self.registry.execute(
                                 name, arguments, context
                             )
+                            executions_by_tool[name] = executions_by_tool.get(name, 0) + 1
                             if cache_key and result.success:
                                 execution_cache[cache_key] = (result, call_id)
                     except Exception as exc:  # noqa: BLE001 - surface tool failure to the model.
@@ -427,6 +457,14 @@ class ToolRuntime:
                 if result.success:
                     succeeded.update(record.capabilities)
                     transient_succeeded |= self._tool_policy(name).transient_output
+                execution_limit = self._tool_policy(name).max_executions_per_stage
+                if (
+                    executed
+                    and not result.success
+                    and execution_limit is not None
+                    and executions_by_tool.get(name, 0) >= execution_limit
+                ):
+                    repeated_failure = True
                 await self._emit(
                     run_id,
                     RunEventType.TOOL_SUCCEEDED if result.success else RunEventType.TOOL_FAILED,
@@ -508,6 +546,13 @@ class ToolRuntime:
 
     def _safe_summary(self, name: str, result: ToolResult) -> str | None:
         return self._tool_policy(name).safe_summary(result)
+
+    def context_for(
+        self, evidence: Sequence[Evidence], records: Sequence[ToolCallRecord]
+    ) -> str:
+        """Build the safe evidence context used when an optional tool stage degrades."""
+
+        return self._context(evidence, records)
 
     def _transient_result(
         self, name: str, result: ToolResult, evidence: Sequence[Evidence]

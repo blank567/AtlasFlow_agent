@@ -12,7 +12,7 @@ from atlasflow.agents.contracts import (
     validate_task_capabilities,
 )
 from atlasflow.agents.gateway import _task_schema
-from atlasflow.agents.tool_runtime import ToolBudgetExhausted, ToolRuntime
+from atlasflow.agents.tool_runtime import RequiredToolError, ToolBudgetExhausted, ToolRuntime
 from atlasflow.schemas import RunEventType, RunStatus
 from atlasflow.tools.base import BaseTool, Capability, ToolContext, ToolResult
 from atlasflow.tools.calculator import CalculatorTool
@@ -123,6 +123,24 @@ def test_explicit_campus_gate_cannot_be_downgraded(replacement):
     assert tool.validate_context({"city": "北京", "origin": {"name": "北京大学", "entrance": "东门"}, "destination": "北京大学中关新园"}, context) is None
 
 
+def test_explicit_campus_gate_cannot_be_replaced_by_affiliated_hospital():
+    tool = AmapRouteTool("test")
+    context = ToolContext(
+        run_id="gate-hospital",
+        agent_name="researcher",
+        user_query="从北大东门出发",
+    )
+    error = tool.validate_context(
+        {
+            "city": "北京",
+            "origin": {"name": "北京大学医院", "entrance": "东门"},
+            "destination": "颐和园",
+        },
+        context,
+    )
+    assert error and "MAP_LOCATION_CONSTRAINT" in error
+
+
 @pytest.mark.asyncio
 async def test_gate_guard_before_http_and_budget_then_corrected_request():
     replies = iter([_call("map_route", {"city": "北京", "origin": origin, "destination": "终点", "mode": "walking"}) for origin in ["北京大学", "北京大学东门"]])
@@ -130,6 +148,63 @@ async def test_gate_guard_before_http_and_budget_then_corrected_request():
     stage = await runtime.gather(run_id="gate", agent="researcher", prompt="行程", user_query="从北大东门出发", policy=RunPolicy(), required_capabilities=["map_route"])
     assert len(stage.records) == 1 and stage.records[0].success
     assert "MAP_LOCATION_CONSTRAINT" in events[0].data["error"]
+
+
+@pytest.mark.asyncio
+async def test_itinerary_preflight_failure_does_not_trigger_llm_guess_loop():
+    amap_requests = []
+    model_requests = []
+
+    def amap_handler(request):
+        amap_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "status": "1",
+                "pois": [
+                    {
+                        "name": "完全无关地点",
+                        "location": "116.4,39.9",
+                        "id": "unrelated",
+                    }
+                ],
+            },
+        )
+
+    tools = ToolRegistry()
+    tools.register(
+        MapItineraryTool(
+            "amap-test-key", transport=httpx.MockTransport(amap_handler)
+        )
+    )
+
+    def decide(request):
+        model_requests.append(request)
+        return _response(
+            _call(
+                "map_itinerary",
+                {
+                    "city": "北京",
+                    "stops": ["不存在的起点", "不存在的终点"],
+                    "mode": "walking",
+                },
+            )
+        )
+
+    runtime, _ = _runtime(tools, decide)
+    with pytest.raises(RequiredToolError) as error:
+        await runtime.gather(
+            run_id="single-itinerary-preflight",
+            agent="researcher",
+            prompt="规划路线",
+            policy=RunPolicy(max_tool_calls_per_turn=10, max_tool_calls_per_run=20),
+            required_capabilities=["map_itinerary"],
+        )
+
+    assert len(model_requests) == 1
+    assert len(amap_requests) == 1
+    assert len(error.value.stage.records) == 1
+    assert not error.value.stage.records[0].success
 
 
 @pytest.mark.asyncio

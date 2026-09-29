@@ -15,7 +15,7 @@ from typing import Annotated, Any, ClassVar, Literal
 from urllib.parse import urlencode
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from atlasflow.schemas import Evidence
 from atlasflow.tools.base import BaseTool, Capability, RiskLevel, ToolContext, ToolResult
@@ -44,6 +44,17 @@ class AmapPlace(BaseModel):
 PlaceInput = AmapPlace | Annotated[str, Field(min_length=1, max_length=120)]
 
 
+def normalize_amap_city(value: str) -> str:
+    """Keep AMap's city parameter at city level, never at district level."""
+
+    value = re.sub(r"\s+", "", value.strip())
+    for municipality in ("北京", "上海", "天津", "重庆"):
+        if value.startswith(municipality):
+            return municipality
+    matches = re.findall(r"([^省区县]+市)", value)
+    return matches[-1] if matches else value
+
+
 class AmapRouteArguments(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -59,6 +70,11 @@ class AmapRouteArguments(BaseModel):
         description="终点：优先提供 name/district/address/entrance 对象；兼容完整名称字符串"
     )
     mode: Literal["driving", "walking"] = Field(description="驾车或步行")
+
+    @field_validator("city")
+    @classmethod
+    def normalize_city(cls, value: str) -> str:
+        return normalize_amap_city(value)
 
 
 class MapServiceError(RuntimeError):
@@ -117,21 +133,19 @@ class AmapRouteTool(BaseTool):
         for gate in gates:
             expected = self._place_name(gate.replace("北大", "北京大学"))
             expected = self._local_name(expected, arguments.get("city", ""), None)
-            base = re.sub(r"(?:东|西|南|北)(?:[一二三四五六七八九0-9])?门$", "", expected)
-            for place in places:
-                if isinstance(place, str):
-                    name, entrance = place, ""
-                elif isinstance(place, dict):
-                    name, entrance = place.get("name", ""), place.get("entrance") or ""
-                else:
-                    continue
-                actual = self._place_name(name.replace("北大", "北京大学"))
-                if entrance and not actual.endswith(self._place_name(entrance)):
-                    actual += self._place_name(entrance)
-                actual = self._local_name(actual, arguments.get("city", ""), None)
-                is_same_site = actual == base or actual.startswith(expected) or bool(re.fullmatch(re.escape(base) + r"(?:东|西|南|北)[一二三四五六七八九0-9]?门.*", actual))
-                if base and is_same_site and actual != expected:
-                    return "MAP_LOCATION_CONSTRAINT: 用户明确指定的出发入口不可替换为场所整体、其他门或同名地铁站；请保留原入口，无法核验时报告缺口"
+            first = places[0] if isinstance(places, list) and places else None
+            if isinstance(first, str):
+                name, entrance = first, ""
+            elif isinstance(first, dict):
+                name, entrance = first.get("name", ""), first.get("entrance") or ""
+            else:
+                name, entrance = "", ""
+            actual = self._place_name(str(name).replace("北大", "北京大学"))
+            if entrance and not actual.endswith(self._place_name(str(entrance))):
+                actual += self._place_name(str(entrance))
+            actual = self._local_name(actual, arguments.get("city", ""), None)
+            if actual != expected:
+                return "MAP_LOCATION_CONSTRAINT: 第一站必须与用户明确指定的出发入口完全一致；不可替换为场所整体、附属医院、其他门或同名地铁站"
         return None
 
     @staticmethod
@@ -259,6 +273,7 @@ class AmapRouteTool(BaseTool):
         self, client: httpx.AsyncClient, city: str, name: PlaceInput, *, label: str = "地点"
     ) -> dict[str, str]:
         place = AmapPlace(name=name) if isinstance(name, str) else name
+        city = normalize_amap_city(city)
         target = place.name
         if place.entrance and not self._place_name(target).endswith(
             self._place_name(place.entrance)
@@ -270,31 +285,61 @@ class AmapRouteTool(BaseTool):
             raise MapServiceError(
                 f"AMAP_QUERY_TOO_LONG: {label}检索条件超过80字符，请精简，保留地点全称与必要限定"
             )
-        data = await self._get_json(
-            client,
-            "/v5/place/text",
-            {
-                "key": self._api_key,
-                "keywords": keywords,
-                "region": city,
-                "city_limit": "true",
-                "page_size": "25",
-                "page_num": "1",
-            },
-        )
-        raw = data.get("pois", [])
-        pois = (
-            [
-                item
-                for item in raw
-                if isinstance(item, dict)
-                and isinstance(item.get("name"), str)
-                and isinstance(item.get("location"), str)
-                and self._valid_location(item["location"])
-            ]
-            if isinstance(raw, list)
-            else []
-        )
+        pois: list[dict[str, Any]] = []
+        # Entrance POIs are often absent from v5 text search but present in
+        # AMap's official input-tip index. Resolve those before route planning.
+        if re.search(r"(?:东|西|南|北)(?:[一二三四五六七八九0-9])?门$", self._place_name(target)):
+            tips_data = await self._get_json(
+                client,
+                "/v3/assistant/inputtips",
+                {
+                    "key": self._api_key,
+                    "keywords": target,
+                    "city": city,
+                    "citylimit": "true",
+                    "datatype": "all",
+                },
+            )
+            tips = tips_data.get("tips", [])
+            if isinstance(tips, list):
+                for tip in tips:
+                    if not isinstance(tip, dict):
+                        continue
+                    district = tip.get("district")
+                    pois.append(
+                        {
+                            **tip,
+                            "adname": self._district_name(district),
+                        }
+                    )
+        if not any(
+            isinstance(item.get("location"), str)
+            and self._valid_location(item["location"])
+            and self._poi_score(item, place, city) is not None
+            for item in pois
+        ):
+            data = await self._get_json(
+                client,
+                "/v5/place/text",
+                {
+                    "key": self._api_key,
+                    "keywords": keywords,
+                    "region": city,
+                    "city_limit": "true",
+                    "page_size": "25",
+                    "page_num": "1",
+                },
+            )
+            raw = data.get("pois", [])
+            pois.extend(raw if isinstance(raw, list) else [])
+        pois = [
+            item
+            for item in pois
+            if isinstance(item, dict)
+            and isinstance(item.get("name"), str)
+            and isinstance(item.get("location"), str)
+            and self._valid_location(item["location"])
+        ]
         if not pois:
             raise MapServiceError(
                 f"AMAP_POI_NOT_FOUND: {label}未找到有效地点，请核对城市、地点全称或入口"
@@ -339,6 +384,15 @@ class AmapRouteTool(BaseTool):
         for kind in ("地铁站", "公交", "停车场", "售票", "餐厅", "饭店", "酒店", "便利店", "商店"):
             if kind in actual and kind not in target:
                 return None
+        typecode = str(item.get("typecode") or "")
+        if typecode.startswith("15") and not any(
+            kind in target for kind in ("地铁", "公交", "车站", "机场")
+        ):
+            return None
+        if typecode.startswith("09") and not any(
+            kind in target for kind in ("医院", "诊所", "卫生")
+        ):
+            return None
         gate_pattern = r"(东北|东南|西北|西南|东|西|南|北)([一二三四五六七八九0-9]*)门"
         gate = re.search(gate_pattern, target)
         actual_gate = re.search(gate_pattern, actual)
@@ -352,6 +406,9 @@ class AmapRouteTool(BaseTool):
             # Provider names can insert campus/site qualifiers before the gate.
             # Keep the complete requested site as an anchor; score the extra qualifier.
             if not base or not actual_base.startswith(base):
+                return None
+            qualifier = actual_base[len(base) :]
+            if qualifier not in {"", "燕园", "燕园校区", "本部", "主校区"}:
                 return None
         elif actual_gate:
             # An unspecified entrance must not silently replace a requested whole site.
@@ -388,9 +445,9 @@ class AmapRouteTool(BaseTool):
     def _matches_qualifiers(cls, item: dict[str, Any], place: AmapPlace, city: str) -> bool:
         if place.district:
             district = item.get("adname")
-            if not isinstance(district, str) or cls._place_name(district) != cls._place_name(
-                place.district
-            ):
+            actual_district = cls._place_name(district) if isinstance(district, str) else ""
+            expected_district = cls._place_name(place.district)
+            if not actual_district.endswith(expected_district):
                 return False
         if place.address:
             address = item.get("address")
@@ -402,6 +459,13 @@ class AmapRouteTool(BaseTool):
             if expected != actual:
                 return False
         return True
+
+    @staticmethod
+    def _district_name(value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        match = re.search(r"([^省市自治区特别行政区]+(?:区|县))$", value)
+        return match.group(1) if match else value
 
     @staticmethod
     def _valid_location(value: str) -> bool:

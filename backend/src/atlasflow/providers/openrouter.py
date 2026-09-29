@@ -5,7 +5,7 @@ import math
 from collections import deque
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -77,6 +77,10 @@ class OpenRouterClient:
         tool_choice: str | dict[str, Any] | None = None,
         parallel_tool_calls: bool | None = None,
         max_tool_calls: int | None = None,
+        reasoning_effort: Literal[
+            "none", "minimal", "low", "medium", "high", "xhigh", "max"
+        ]
+        | None = None,
     ) -> dict[str, Any]:
         if not model.strip():
             raise ProviderConfigurationError("LLM model is required")
@@ -105,6 +109,8 @@ class OpenRouterClient:
             payload["parallel_tool_calls"] = parallel_tool_calls
         if max_tool_calls is not None:
             payload["max_tool_calls"] = max_tool_calls
+        if reasoning_effort is not None:
+            payload["reasoning_effort"] = reasoning_effort
         response = await self._post("/chat/completions", payload)
         data = response.data
         choices = data.get("choices") or []
@@ -124,6 +130,10 @@ class OpenRouterClient:
         self._record_metric(metric)
         message["_atlasflow_finish_reason"] = first_choice.get("finish_reason")
         message["_atlasflow_native_finish_reason"] = first_choice.get("native_finish_reason")
+        message["_atlasflow_reasoning_present"] = bool(
+            str(message.get("reasoning") or "").strip()
+            or message.get("reasoning_details")
+        )
         message["_atlasflow_provider"] = metric.model_dump(mode="json", exclude_none=True)
         return message
 

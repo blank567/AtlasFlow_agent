@@ -60,6 +60,10 @@ class BaseTool(ABC):
     cache_identical_calls: ClassVar[bool] = False
     transient_output: ClassVar[bool] = False
     transient_notice: ClassVar[str | None] = None
+    # Some aggregate tools already perform their own deterministic recovery and
+    # preflight. Re-running the whole aggregate with LLM-guessed parameters is
+    # both expensive and unsafe, so they may opt into a per-stage execution cap.
+    max_executions_per_stage: ClassVar[int | None] = None
 
     def unavailable_reason(self) -> str | None:
         """Local configuration check only; never expose credentials or probe the network."""

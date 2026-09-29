@@ -48,6 +48,22 @@ async def test_preflight_all_stops_once_then_route_uses_official_poi_ids():
 
     def handler(request):
         requests.append(request)
+        if request.url.path == "/v3/assistant/inputtips":
+            name = request.url.params["keywords"]
+            official = "北京大学(东门)" if name == "北京大学东门" else name
+            return httpx.Response(
+                200,
+                json={
+                    "status": "1",
+                    "tips": [
+                        {
+                            **poi(official, id=name),
+                            "district": "北京市海淀区",
+                            "typecode": "991400",
+                        }
+                    ],
+                },
+            )
         if request.url.path == "/v5/place/text":
             name = request.url.params["keywords"]
             official = "北京大学燕园(东门)" if name == "北京大学东门" else name
@@ -58,11 +74,77 @@ async def test_preflight_all_stops_once_then_route_uses_official_poi_ids():
     tool = MapItineraryTool("amap-test-key", transport=httpx.MockTransport(handler))
     result = await tool.run(MapItineraryArguments(city="北京", mode="walking", stops=["北京大学东门", "景点", "北京大学东门"]), ToolContext(run_id="preflight", agent_name="researcher"))
     assert result.success and len(result.data["navigation_urls"]) == 2
-    assert [request.url.path for request in requests] == ["/v5/place/text"] * 2 + ["/v5/direction/walking"] * 2
+    assert [request.url.path for request in requests] == [
+        "/v3/assistant/inputtips",
+        "/v5/place/text",
+        "/v5/direction/walking",
+        "/v5/direction/walking",
+    ]
     from urllib.parse import unquote
 
-    assert "北京大学燕园(东门)" in unquote(result.data["navigation_urls"][0])
+    assert "北京大学(东门)" in unquote(result.data["navigation_urls"][0])
     assert "match_score" not in result.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_official_input_tip_beats_hospital_and_city_is_normalized_before_preflight():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.url.path == "/v3/assistant/inputtips":
+            assert request.url.params["city"] == "北京"
+            return httpx.Response(
+                200,
+                json={
+                    "status": "1",
+                    "tips": [
+                        {
+                            **poi("北京大学医院(东门)", id="hospital"),
+                            "district": "北京市海淀区",
+                            "typecode": "090100",
+                        },
+                        {
+                            **poi("北京大学(东门)", id="campus-gate"),
+                            "district": "北京市海淀区",
+                            "typecode": "991400",
+                        },
+                    ],
+                },
+            )
+        if request.url.path == "/v5/place/text":
+            return httpx.Response(
+                200,
+                json={"status": "1", "pois": [poi("颐和园", id="palace")]},
+            )
+        return _amap_handler(request)
+
+    tool = MapItineraryTool("amap-test-key", transport=httpx.MockTransport(handler))
+    arguments = MapItineraryArguments(
+        city="北京市海淀区",
+        stops=["北京大学东门", "颐和园"],
+        mode="walking",
+    )
+    result = await tool.run(
+        arguments,
+        ToolContext(
+            run_id="official-gate",
+            agent_name="researcher",
+            user_query="从北大东门出发",
+        ),
+    )
+
+    assert arguments.city == "北京"
+    assert result.success
+    from urllib.parse import unquote
+
+    navigation_url = unquote(result.data["navigation_urls"][0])
+    assert "北京大学(东门)" in navigation_url
+    assert "北京大学医院" not in navigation_url
+    assert [request.url.path for request in requests[:2]] == [
+        "/v3/assistant/inputtips",
+        "/v5/place/text",
+    ]
 
 
 @pytest.mark.asyncio
