@@ -90,6 +90,11 @@ export function ReportView({ run }: { run: RunRecord }) {
         </header>
         <div className="reportProse"><ReactMarkdown remarkPlugins={[remarkGfm, reportHeadingIds]} skipHtml urlTransform={(url) => safeReportUrl(url) ?? ""} components={{
           a: ({ href, children }) => href ? <a href={href} target={href.startsWith("#") ? undefined : "_blank"} rel={href.startsWith("#") ? undefined : "noopener noreferrer"}>{children}</a> : <span>{children}</span>,
+          p: ({ children }) => {
+            const first = Array.isArray(children) ? children[0] : children;
+            const reference = typeof first === "string" && /^\[\d+\]\s/.test(first);
+            return <p className={reference ? "reportReferenceEntry" : undefined}>{children}</p>;
+          },
           table: ({ children }) => <div className="reportTableScroll" role="region" aria-label="报告数据表格" tabIndex={0}><table>{children}</table></div>,
           img: ({ src, alt }) => typeof src === "string" && safeReportUrl(src) ? <a href={src} target="_blank" rel="noopener noreferrer">图片：{alt || "查看原图"}</a> : <span>{alt}</span>,
         }}>{report}</ReactMarkdown></div>

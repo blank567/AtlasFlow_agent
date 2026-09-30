@@ -16,6 +16,7 @@ export const REPORT_DOCUMENT_STYLES = `
 .reportProse h3 { margin: 26px 0 10px; font-size: 17px; }
 .reportProse :is(h4,h5,h6) { margin: 22px 0 8px; font-size: 15px; }
 .reportProse p { margin: 12px 0; }
+.reportProse .reportReferenceEntry { margin: 9px 0; padding-left: 2.4em; color: #4f6272; font-size: 13px; line-height: 1.8; text-indent: -2.4em; }
 .reportProse :is(ul,ol) { margin: 14px 0; padding-left: 1.7em; }
 .reportProse li { margin: 7px 0; padding-left: .25em; }
 .reportProse li::marker { color: #58758a; }

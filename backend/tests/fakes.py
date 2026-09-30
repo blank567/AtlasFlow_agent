@@ -281,15 +281,16 @@ class FakeModelGateway:
     ) -> DraftVersion:
         self._called("synthesize_report")
         self._maybe_fail("synthesize_report")
-        references = " ".join(f"[task:{result.task_id}]" for result in results)
+        citation = " [1]" if "\n[1] " in tool_context else ""
         return DraftVersion(
             version=draft_version,
             plan_version=plan.plan_version,
             content=(
-                f"## 摘要\n\n{query}。{references}\n\n"
+                f"## 摘要\n\n{query}。{citation}\n\n"
                 "## 分析\n\n研究任务已完成。\n\n"
+                "## 结论\n\n测试结论成立。\n\n"
                 "## 局限\n\n离线测试结果，不代表实时资料。\n\n"
-                "## 来源\n\n本测试不使用外部来源。"
+                "## 参考文献\n\n本测试不使用外部来源。"
             ),
             based_on_task_ids=[result.task_id for result in results],
         )
@@ -357,15 +358,16 @@ class FakeModelGateway:
         del decision
         self._called("revise_report")
         self._maybe_fail("revise_report")
-        references = " ".join(f"[task:{result.task_id}]" for result in results)
+        citation = " [1]" if "\n[1] " in tool_context else ""
         return DraftVersion(
             version=draft.version + 1,
             plan_version=draft.plan_version,
             content=(
-                f"## 摘要\n\n{query}。{references}\n\n"
+                f"## 摘要\n\n{query}。{citation}\n\n"
                 "## 分析\n\n按质量意见修订后的测试结论。\n\n"
+                "## 结论\n\n修订后的结论成立。\n\n"
                 "## 局限\n\n离线测试结果，不代表实时资料。\n\n"
-                "## 来源\n\n本测试不使用外部来源。"
+                "## 参考文献\n\n本测试不使用外部来源。"
             ),
             based_on_task_ids=[result.task_id for result in results],
         )

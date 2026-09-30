@@ -14,7 +14,7 @@ _SKILL_ROOT = Path(__file__).resolve().parents[1] / "skills" / "academic-report"
 _FRONTMATTER = re.compile(r"\A---\s*\n.*?\n---\s*\n", re.DOTALL)
 _REFERENCE_HEADING = re.compile(r"^##\s+(?:来源|参考文献)\s*$", re.MULTILINE)
 _NEXT_HEADING = re.compile(r"^##\s+", re.MULTILINE)
-_NUMERIC_CITATION = re.compile(r"(?<![\w[])\[(\d{1,3})\](?!\()")
+_NUMERIC_CITATION = re.compile(r"(?<![\w\[])\[(\d{1,3})\](?!\()")
 _LINK_SAFE_CHARS = "/:#?&=@%+;,"
 
 
@@ -128,7 +128,7 @@ def render_academic_references(
         title = re.sub(r"[\[\]\r\n<>]", " ", item.title).strip()[:200]
         url = quote(item.url, safe=_LINK_SAFE_CHARS)
         medium = "[地图/OL]" if item.kind == "navigation" else "[EB/OL]"
-        entries.append(f"[{number}] {title}{medium}. {url}")
+        entries.append(f"[{number}] {title}{medium}. [访问链接]({url})")
     if not entries and not catalog:
         entries = ["本报告基于题目给定信息与直接计算，不引用外部资料。"]
     elif not entries:

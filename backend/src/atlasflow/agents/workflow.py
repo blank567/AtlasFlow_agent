@@ -34,6 +34,7 @@ from atlasflow.agents.contracts import (
 )
 from atlasflow.agents.gateway import ModelGateway
 from atlasflow.agents.report_quality import apply_report_audit, audit_report
+from atlasflow.agents.report_skill import build_report_context, render_academic_references
 from atlasflow.agents.tool_runtime import (
     RequiredToolError,
     ToolBudgetExhausted,
@@ -1532,6 +1533,13 @@ class ResearchWorkflow:
                 plan_version=plan.plan_version,
             )
             grounded_query = state["query"]
+            report_evidence = [*state.get("evidence", []), *tool_stage.evidence]
+            report_records = [*state.get("tool_calls", []), *tool_stage.records]
+            report_context = build_report_context(
+                report_evidence,
+                report_records,
+                fallback=tool_stage.context,
+            )
             decision_calls += 1
             if mode == "revise":
                 if not drafts or not state.get("quality_history"):
@@ -1541,12 +1549,12 @@ class ResearchWorkflow:
                     drafts[-1],
                     state["quality_history"][-1],
                     results,
-                    tool_context=tool_stage.context,
+                    tool_context=report_context,
                 )
             else:
                 raw = await self.model.synthesize_report(
                     grounded_query, plan, results, draft_version=version,
-                    tool_context=tool_stage.context,
+                    tool_context=report_context,
                 )
             draft = DraftVersion.model_validate(raw)
             if draft.version != version:
@@ -1560,16 +1568,15 @@ class ResearchWorkflow:
                 raise ValueError(
                     f"draft references unavailable task results: {sorted(unknown_ids)}"
                 )
-            if self.tool_runtime is not None:
-                draft = draft.model_copy(
-                    update={
-                        "content": self.tool_runtime.append_references(
-                            draft.content,
-                            [*state.get("evidence", []), *tool_stage.evidence],
-                            [*state.get("tool_calls", []), *tool_stage.records],
-                        ),
-                    }
-                )
+            draft = draft.model_copy(
+                update={
+                    "content": render_academic_references(
+                        draft.content,
+                        report_evidence,
+                        report_records,
+                    )
+                }
+            )
             route = await self._record_route(
                 state,
                 from_node="synthesizer",
@@ -1645,10 +1652,19 @@ class ResearchWorkflow:
                 focus=f"复核报告中的动态事实与来源。报告：{draft.content[:3500]}",
                 plan_version=plan.plan_version,
             )
+            report_evidence = [*state.get("evidence", []), *tool_stage.evidence]
+            report_records = [*state.get("tool_calls", []), *tool_stage.records]
             decision_calls += 1
             decision = QualityDecision.model_validate(
                 await self.model.evaluate_report(
-                    state["query"], draft, results, tool_context=tool_stage.context
+                    state["query"],
+                    draft,
+                    results,
+                    tool_context=build_report_context(
+                        report_evidence,
+                        report_records,
+                        fallback=tool_stage.context,
+                    ),
                 )
             )
             if decision.plan_version != plan.plan_version:
@@ -1661,8 +1677,8 @@ class ResearchWorkflow:
                     draft.content,
                     plan,
                     results,
-                    [*state.get("evidence", []), *tool_stage.evidence],
-                    [*state.get("tool_calls", []), *tool_stage.records],
+                    report_evidence,
+                    report_records,
                 ),
                 threshold=self.quality_threshold,
             )

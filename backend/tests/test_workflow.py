@@ -40,7 +40,8 @@ async def test_direct_path_is_auditable_and_has_one_terminal_event() -> None:
     assert run.plan is not None
     assert len(run.plan.tasks) == 3
     assert len(run.research_results) == 3
-    assert run.report and "[task:p1-t1]" in run.report
+    assert run.report and "[task:" not in run.report
+    assert "## 参考文献" in run.report
     assert run.metrics.total_tasks == 3
     assert run.metrics.successful_tasks == 3
     assert run.metrics.failed_tasks == 0

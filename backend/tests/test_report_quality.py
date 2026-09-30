@@ -11,6 +11,7 @@ from atlasflow.agents.contracts import (
     Severity,
 )
 from atlasflow.agents.report_quality import apply_report_audit, audit_report
+from atlasflow.agents.report_skill import render_academic_references
 from atlasflow.agents.tool_runtime import ToolRuntime
 from atlasflow.schemas import Evidence, RunStatus
 
@@ -59,10 +60,11 @@ def _accepted() -> QualityDecision:
 def test_report_audit_keeps_simple_arithmetic_without_external_citations() -> None:
     plan, results = _research()
     report = (
-        "## 摘要\n\n1+1=2。 [task:T1]\n\n"
+        "## 摘要\n\n1+1=2。\n\n"
         "## 分析\n\n直接相加。\n\n"
+        "## 结论\n\n结果为 2。\n\n"
         "## 局限\n\n无外部数据依赖。\n\n"
-        "## 来源\n\n由题目与计算直接推导。"
+        "## 参考文献\n\n由题目与计算直接推导。"
     )
     assert audit_report(report, plan, results, [], []) == []
     assert apply_report_audit(_accepted(), [], threshold=80).decision is QualityRoute.ACCEPT
@@ -81,9 +83,9 @@ def test_report_audit_rejects_fenced_fake_headings_and_fabricated_links() -> Non
     codes = {item.code for item in issues}
     assert {
         "report_missing_sections",
-        "report_unknown_task_reference",
-        "report_missing_task_reference",
+        "report_internal_task_reference",
         "report_unknown_source",
+        "report_nonacademic_inline_link",
         "report_missing_source",
     } <= codes
     decision = apply_report_audit(_accepted(), issues, threshold=80)
@@ -94,13 +96,45 @@ def test_report_audit_rejects_fenced_fake_headings_and_fabricated_links() -> Non
 
 def test_fresh_data_without_source_cannot_be_accepted() -> None:
     plan, results = _research(fresh=True)
-    report = "## 摘要\n\n当前值未知。[task:T1]\n\n## 局限\n\n未核实。\n\n## 来源\n\n无"
+    report = (
+        "## 摘要\n\n当前值未知。\n\n"
+        "## 结论\n\n缺少当前数据，不能得出结论。\n\n"
+        "## 局限\n\n未核实。\n\n"
+        "## 参考文献\n\n无"
+    )
     issues = audit_report(report, plan, results, [], [])
     assert [item.code for item in issues] == ["report_missing_fresh_evidence"]
     assert issues[0].severity is Severity.CRITICAL
     decision = apply_report_audit(_accepted(), issues, threshold=80)
     assert decision.decision is QualityRoute.REPLAN
     assert decision.score < 80
+
+
+def test_numbered_citation_must_map_to_verified_catalog_and_reference_entry() -> None:
+    plan, results = _research()
+    evidence = [
+        Evidence(
+            source_id="s1",
+            title="可核查来源",
+            content="报告所述结论",
+            uri="https://example.test/source",
+        )
+    ]
+    report = render_academic_references(
+        "## 摘要\n\n报告所述结论。[1]\n\n"
+        "## 分析\n\n证据支持结论。[1]\n\n"
+        "## 结论\n\n结论成立。\n\n"
+        "## 局限\n\n仅使用一个来源。\n\n"
+        "## 参考文献\n",
+        evidence,
+        [],
+    )
+
+    assert audit_report(report, plan, results, evidence, []) == []
+
+    invalid = report.replace("证据支持结论。[1]", "证据支持结论。[9]")
+    codes = {item.code for item in audit_report(invalid, plan, results, evidence, [])}
+    assert "report_unknown_citation" in codes
 
 
 def test_reference_appendix_joins_existing_source_section() -> None:
@@ -141,7 +175,12 @@ async def test_workflow_keeps_unverified_draft_unaccepted_when_revision_exhauste
         async def synthesize_report(self, *args, **kwargs) -> DraftVersion:
             draft = await super().synthesize_report(*args, **kwargs)
             return draft.model_copy(
-                update={"content": draft.content + "\n\n[虚构来源](https://invented.test/)"}
+                update={
+                    "content": draft.content.replace(
+                        "## 结论",
+                        "[虚构来源](https://invented.test/)\n\n## 结论",
+                    )
+                }
             )
 
     container = make_test_container(model=InventedSource())

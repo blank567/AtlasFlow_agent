@@ -14,11 +14,14 @@ from atlasflow.agents.contracts import (
     ReviewIssue,
     Severity,
 )
+from atlasflow.agents.report_skill import build_citation_catalog, cited_numbers
 from atlasflow.schemas import Evidence, ToolCallRecord
 
 _TASK_REFERENCE = re.compile(r"\[task:([A-Za-z0-9][A-Za-z0-9_.-]*)\]")
 _MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\((https?://[^)\s]+)\)")
-_SOURCE_HEADING = {"摘要", "局限", "来源"}
+_REFERENCE_ENTRY = re.compile(r"^\[(\d{1,3})\]\s+", re.MULTILINE)
+_REFERENCE_SECTION = re.compile(r"^##\s+(?:来源|参考文献)\s*$", re.MULTILINE)
+_REQUIRED_HEADINGS = {"摘要", "结论", "局限", "参考文献"}
 _LINK_SAFE_CHARS = "/:#?&=@%+;,"
 
 
@@ -66,31 +69,22 @@ def audit_report(
         match.group(1).strip()
         for match in re.finditer(r"^##\s+(.+?)\s*#*\s*$", prose, flags=re.MULTILINE)
     }
-    missing = _SOURCE_HEADING - headings
+    missing = _REQUIRED_HEADINGS - headings
     if missing:
         issue(
             Severity.WARNING,
             "report_missing_sections",
             f"报告缺少必要二级章节：{', '.join(sorted(missing))}",
-            "补全 ## 摘要、## 局限、## 来源；正文其他章节按研究问题组织",
+            "补全 ## 摘要、## 结论、## 局限、## 参考文献；正文其他章节按研究问题组织",
         )
 
-    known_tasks = {result.task_id for result in results}
     cited_tasks = set(_TASK_REFERENCE.findall(prose))
-    unknown_tasks = cited_tasks - known_tasks
-    if unknown_tasks:
+    if cited_tasks:
         issue(
             Severity.WARNING,
-            "report_unknown_task_reference",
-            f"引用了不存在的研究任务：{', '.join(sorted(unknown_tasks))}",
-            "删除无效任务引用，并在相关论断附近引用真实任务 ID",
-        )
-    if known_tasks and not cited_tasks.intersection(known_tasks):
-        issue(
-            Severity.WARNING,
-            "report_missing_task_reference",
-            "报告没有引用任何已完成的研究任务",
-            "在研究结论附近添加真实的 [task:任务ID] 引用",
+            "report_internal_task_reference",
+            "报告暴露了内部研究任务标记",
+            "删除所有 [task:任务ID]；读者可见引用只能使用系统引用目录中的编号",
         )
 
     source_urls = {
@@ -105,6 +99,8 @@ def audit_report(
         if url.startswith(("https://", "http://"))
     )
     allowed_urls = source_urls | {quote(url, safe=_LINK_SAFE_CHARS) for url in source_urls}
+    reference_match = _REFERENCE_SECTION.search(prose)
+    body = prose[: reference_match.start()] if reference_match else prose
     cited_urls = set(_MARKDOWN_LINK.findall(prose))
     unknown_urls = cited_urls - allowed_urls
     if unknown_urls:
@@ -114,12 +110,55 @@ def audit_report(
             f"报告有 {len(unknown_urls)} 个链接不在已获取的工具证据或导航结果中",
             "核对并替换未验证链接；不得编造来源或导航地址",
         )
-    if source_urls and not cited_urls.intersection(allowed_urls):
+    if _MARKDOWN_LINK.search(body):
+        issue(
+            Severity.WARNING,
+            "report_nonacademic_inline_link",
+            "正文使用了 Markdown 链接而不是编号引用",
+            "将正文链接替换为与系统引用目录对应的 [数字]，URL 仅保留在参考文献",
+        )
+
+    catalog = build_citation_catalog(list(evidence), list(records))
+    known_numbers = {item.number for item in catalog}
+    used_numbers = cited_numbers(prose)
+    unknown_numbers = used_numbers - known_numbers
+    if unknown_numbers:
+        issue(
+            Severity.WARNING,
+            "report_unknown_citation",
+            "报告使用了引用目录中不存在的编号："
+            + ", ".join(str(number) for number in sorted(unknown_numbers)),
+            "删除或替换无效编号；不得自行新增、重排或复用引用编号",
+        )
+    reference_numbers = {
+        int(number)
+        for number in _REFERENCE_ENTRY.findall(
+            prose[reference_match.end() :] if reference_match else ""
+        )
+    }
+    valid_used = used_numbers & known_numbers
+    if valid_used - reference_numbers:
+        issue(
+            Severity.WARNING,
+            "report_citation_missing_reference",
+            "正文编号没有对应的参考文献条目",
+            "根据系统引用目录重建参考文献，并保持编号一一对应",
+        )
+    if source_urls and not valid_used:
         issue(
             Severity.WARNING,
             "report_missing_source",
-            "已有工具来源或导航链接，但报告没有引用任何一个",
-            "在相关事实附近添加真实来源，并在 ## 来源列出完整链接",
+            "已有可核查来源，但正文没有使用有效的编号引用",
+            "在相关事实附近添加最小充分的 [数字] 引用，并在参考文献列出对应来源",
+        )
+
+    body_chars = len(re.sub(r"\s+", "", body))
+    if len(results) >= 3 and source_urls and body_chars < 1_200:
+        issue(
+            Severity.WARNING,
+            "report_too_brief",
+            f"多任务研究报告正文仅约 {body_chars} 个非空白字符，缺少充分展开",
+            "围绕核心发现补充证据解释、比较、影响、可执行建议和结论，避免只拼接任务摘要",
         )
 
     if any(task.requires_fresh_data for task in plan.tasks) and not source_urls:
