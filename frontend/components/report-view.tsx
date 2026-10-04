@@ -86,7 +86,7 @@ export function ReportView({ run }: { run: RunRecord }) {
           <h1>{run.query}</h1>
           <div className="reportPaperMeta"><span>{stateLabel}</span>{date && <time dateTime={date}>{run.completed_at ? "完成于" : "记录更新于"} {formatDate(date)}</time>}</div>
           {!completed && <p className="reportPaperNotice">当前内容尚未完成最终验收，仅供参考；HTML 与打印版本会保留此提示，Markdown 仅包含报告原文。</p>}
-          {run.status === "completed_with_warnings" && <p className="reportPaperNotice">本次研究未通过最终验收；以下是保留的草稿，请结合局限与来源阅读。{run.warnings.length > 0 && run.warnings.join("；")}</p>}
+          {run.status === "completed_with_warnings" && <p className="reportPaperNotice">本次研究未通过最终验收；以下是保留的草稿，请结合局限与参考文献阅读。{run.warnings.length > 0 && run.warnings.join("；")}</p>}
         </header>
         <div className="reportProse"><ReactMarkdown remarkPlugins={[remarkGfm, reportHeadingIds]} skipHtml urlTransform={(url) => safeReportUrl(url) ?? ""} components={{
           a: ({ href, children }) => href ? <a href={href} target={href.startsWith("#") ? undefined : "_blank"} rel={href.startsWith("#") ? undefined : "noopener noreferrer"}>{children}</a> : <span>{children}</span>,
@@ -98,7 +98,7 @@ export function ReportView({ run }: { run: RunRecord }) {
           table: ({ children }) => <div className="reportTableScroll" role="region" aria-label="报告数据表格" tabIndex={0}><table>{children}</table></div>,
           img: ({ src, alt }) => typeof src === "string" && safeReportUrl(src) ? <a href={src} target="_blank" rel="noopener noreferrer">图片：{alt || "查看原图"}</a> : <span>{alt}</span>,
         }}>{report}</ReactMarkdown></div>
-        <footer className="reportPaperFooter"><span>AtlasFlow 多 Agent 研究</span><span>运行编号 {run.id}</span><span>信息时效与适用范围请以报告来源为准。</span></footer>
+        <footer className="reportPaperFooter"><span>AtlasFlow 多 Agent 研究</span><span>运行编号 {run.id}</span><span>信息时效与适用范围请以报告参考文献为准。</span></footer>
       </article>
     </div>
   </section>;
