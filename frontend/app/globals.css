@@ -178,6 +178,74 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .dangerIcon { display: grid; place-items: center; width: 36px; height: 36px; color: var(--red); background: var(--red-soft); border-radius: 10px; font-weight: 900; }
 .modalActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
 
+/* Knowledge workspace: a quiet ledger with one expressive ranking trace. */
+.knowledgeLoading { display: grid; place-items: center; min-height: 320px; color: var(--muted); }
+.knowledgeToolbar { display: grid; grid-template-columns: minmax(240px, 1fr) auto auto auto; align-items: end; gap: 22px; min-height: 74px; padding: 13px 18px; margin-bottom: 14px; background: white; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+.knowledgeToolbar label { display: grid; gap: 6px; color: var(--muted); font-size: 10px; font-weight: 700; }
+.knowledgeToolbar select { height: 36px; padding: 0 10px; color: var(--ink); background: white; border: 1px solid var(--line-strong); border-radius: 8px; }
+.knowledgeToolbar > div { display: grid; gap: 2px; min-width: 88px; padding-bottom: 3px; }
+.knowledgeToolbar > div strong { font-size: 18px; letter-spacing: -.03em; }
+.knowledgeToolbar > div span { color: var(--muted); font-size: 9px; }
+.knowledgeGrid { display: grid; grid-template-columns: minmax(230px, .62fr) minmax(430px, 1.45fr) minmax(210px, .55fr); min-height: 560px; overflow: hidden; background: white; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+.knowledgeIndex, .knowledgeLedger, .knowledgePulse { min-width: 0; padding: 22px; }
+.knowledgeIndex { background: #fafbfc; border-right: 1px solid var(--line); }
+.knowledgePulse { background: #fbfcfd; border-left: 1px solid var(--line); }
+.knowledgeSectionHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 20px; }
+.knowledgeSectionHead h2 { margin: 0; font-size: 14px; }
+.knowledgeSectionHead p { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
+.knowledgeSectionHead > span { color: var(--muted); font-size: 10px; }
+.knowledgeDefinition { margin: 0; }
+.knowledgeDefinition > div { display: grid; grid-template-columns: 82px 1fr; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.knowledgeDefinition dt { color: var(--muted); font-size: 9px; }
+.knowledgeDefinition dd { overflow: hidden; margin: 0; color: var(--ink-soft); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.knowledgeDrop { display: grid; gap: 9px; margin-top: 24px; padding: 15px; background: white; border: 1px dashed #bec6d3; border-radius: 10px; }
+.knowledgeDrop input { width: 100%; color: transparent; font-size: 0; }
+.knowledgeDrop input::file-selector-button { min-height: 32px; padding: 0 11px; color: var(--ink-soft); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 7px; font: 700 10px inherit; cursor: pointer; }
+.knowledgeDrop > span { overflow: hidden; color: var(--ink-soft); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.knowledgeDrop > small { color: var(--muted); font-size: 9px; line-height: 1.5; }
+.spaceCreate { display: grid; gap: 7px; padding: 11px; margin: -8px 0 16px; background: white; border: 1px solid var(--line); border-radius: 9px; }
+.spaceCreate input { height: 34px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 7px; outline: none; }
+.knowledgeRows { display: grid; }
+.knowledgeRows article { display: grid; grid-template-columns: minmax(0, 1fr) 120px auto; align-items: center; gap: 18px; min-height: 67px; border-bottom: 1px solid var(--line); }
+.knowledgeRows article:last-child { border-bottom: 0; }
+.knowledgeRows article > div:first-child { min-width: 0; }
+.knowledgeRows article strong { display: block; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.knowledgeRows article div > span { display: block; overflow: hidden; margin-top: 5px; color: var(--muted); font: 9px "SFMono-Regular", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.knowledgeDocState, .jobLedger article > span { display: flex; align-items: center; gap: 7px; color: var(--ink-soft); font-size: 10px; }
+.knowledgeState { display: inline-block; width: 7px; height: 7px; flex: 0 0 7px; background: var(--amber); border-radius: 50%; box-shadow: 0 0 0 3px var(--amber-soft); }
+.knowledgeState.ready { background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+.knowledgeState.failed { background: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
+.knowledgeState.archived { background: #8992a0; box-shadow: 0 0 0 3px #edf0f3; }
+.knowledgeEmpty { display: grid; place-items: center; align-content: center; min-height: 330px; text-align: center; }
+.knowledgeEmpty strong { font-size: 13px; }
+.knowledgeEmpty p, .quietCopy { max-width: 360px; margin: 7px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.jobPulse { display: grid; grid-template-columns: 1fr auto; gap: 7px; padding: 11px 0; border-bottom: 1px solid var(--line); }
+.jobPulse span { display: flex; align-items: center; gap: 7px; color: var(--ink-soft); font-size: 9px; }
+.jobPulse strong { color: var(--muted); font-size: 9px; }
+.jobPulse progress, .jobLedger progress { grid-column: 1 / -1; width: 100%; height: 3px; overflow: hidden; border: 0; border-radius: 9px; background: #e8ebef; }
+progress::-webkit-progress-value { background: var(--primary); } progress::-moz-progress-bar { background: var(--primary); }
+.jobLedger { overflow: hidden; background: white; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+.jobLedger > header, .jobLedger > article { display: grid; grid-template-columns: 100px minmax(220px, 1fr) 150px minmax(120px, .5fr) 60px; align-items: center; gap: 18px; padding: 0 20px; }
+.jobLedger > header { min-height: 42px; color: var(--muted); background: var(--surface-soft); border-bottom: 1px solid var(--line); font-size: 9px; }
+.jobLedger > article { position: relative; min-height: 64px; border-bottom: 1px solid var(--line); }
+.jobLedger article code { color: var(--primary); font-size: 9px; }.jobLedger article strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.jobLedger article progress { grid-column: auto; }.jobLedger article > p { grid-column: 2 / -1; margin: -8px 0 10px; color: var(--red); font-size: 9px; }
+.retrievalLab { padding: 22px; background: white; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+.retrievalLab > form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+.retrievalLab > form label { display: grid; gap: 7px; color: var(--ink-soft); font-size: 10px; font-weight: 700; }
+.retrievalLab > form input { height: 42px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 9px; outline: none; }
+.retrievalDecision { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 13px 15px; margin: 18px 0 8px; background: var(--green-soft); border-left: 3px solid var(--green); }
+.retrievalDecision strong { font-size: 11px; }.retrievalDecision span { color: var(--muted); font-size: 9px; }.decision-partial { background: var(--amber-soft); border-left-color: var(--amber); }.decision-insufficient { background: var(--red-soft); border-left-color: var(--red); }
+.rankTracks { display: grid; }
+.rankTracks article { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(260px, 1.4fr) minmax(330px, 1fr); gap: 24px; padding: 19px 4px; border-bottom: 1px solid var(--line); }
+.rankTracks article > header { display: grid; grid-template-columns: 28px 1fr; gap: 10px; min-width: 0; }
+.rankTracks header > span { display: grid; place-items: center; width: 25px; height: 25px; color: var(--primary); background: var(--primary-soft); border-radius: 7px; font-size: 10px; font-weight: 800; }
+.rankTracks header strong { display: block; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.rankTracks header small { display: block; margin-top: 5px; color: var(--muted); font-size: 9px; line-height: 1.4; }
+.rankTracks article > p { max-height: 74px; overflow: hidden; margin: 0; color: var(--ink-soft); font-size: 10px; line-height: 1.7; }
+.scoreTrack { display: grid; align-content: center; gap: 7px; }.scoreTrack > div { display: grid; grid-template-columns: 30px 1fr 42px; align-items: center; gap: 7px; }.scoreTrack span, .scoreTrack em { color: var(--muted); font-size: 8px; font-style: normal; }.scoreTrack em { text-align: right; font-family: monospace; }.scoreTrack i { height: 5px; overflow: hidden; background: #edf0f3; border-radius: 9px; }.scoreTrack b { display: block; height: 100%; background: #8997dd; border-radius: inherit; }.scoreTrack b.vector { background: #4f9b83; }.scoreTrack b.fusion { background: #b8873c; }.scoreTrack b.rerank { background: var(--primary); }
+
+@media (max-width: 1080px) { .knowledgeGrid { grid-template-columns: 260px 1fr; }.knowledgePulse { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); }.knowledgeToolbar { grid-template-columns: 1fr auto auto; }.knowledgeToolbar > button { grid-column: 1 / -1; justify-self: end; }.rankTracks article { grid-template-columns: 1fr 1.5fr; }.scoreTrack { grid-column: 1 / -1; }.jobLedger > header, .jobLedger > article { grid-template-columns: 80px minmax(180px, 1fr) 130px 110px 40px; } }
+@media (max-width: 720px) { .knowledgeToolbar { grid-template-columns: 1fr 1fr; }.knowledgeToolbar label { grid-column: 1 / -1; }.knowledgeGrid { display: block; }.knowledgeIndex, .knowledgePulse { border: 0; border-bottom: 1px solid var(--line); }.knowledgeRows article { grid-template-columns: 1fr auto; }.knowledgeDocState { grid-column: 1; }.jobLedger { overflow-x: auto; }.jobLedger > header, .jobLedger > article { min-width: 760px; }.retrievalLab > form { grid-template-columns: 1fr; }.rankTracks article { grid-template-columns: 1fr; }.scoreTrack { grid-column: auto; } }
+
 .breadcrumb { display: flex; align-items: center; gap: 8px; margin-bottom: 22px; color: var(--muted); font-size: 11px; }
 .breadcrumb a:hover { color: var(--primary); }
 .runHeader { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 22px; }

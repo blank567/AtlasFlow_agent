@@ -94,6 +94,50 @@ async def test_auth_failure_is_not_retried_or_leaked() -> None:
 
 
 @pytest.mark.asyncio
+async def test_provider_error_includes_safe_upstream_detail() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            400,
+            json={
+                "error": {
+                    "message": "Provider returned error",
+                    "code": 400,
+                    "metadata": {
+                        "provider_name": "Example Provider",
+                        "raw": json.dumps(
+                            {
+                                "error": {
+                                    "message": "Invalid response_format for secret-test-key",
+                                    "code": "invalid_schema",
+                                    "request": "private prompt must stay hidden",
+                                }
+                            }
+                        ),
+                    },
+                }
+            },
+        )
+
+    client = OpenRouterClient(
+        api_key="secret-test-key",
+        base_url="https://openrouter.test/api/v1",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ProviderRequestError) as error:
+        await client.chat(model="test/model", messages=[{"role": "user", "content": "hello"}])
+
+    detail = str(error.value)
+    assert "Provider returned error" in detail
+    assert "provider=Example Provider" in detail
+    assert "upstream=Invalid response_format" in detail
+    assert "upstream_code=invalid_schema" in detail
+    assert "secret-test-key" not in detail
+    assert "private prompt" not in detail
+
+
+@pytest.mark.asyncio
 async def test_rate_limit_is_retried() -> None:
     calls = 0
 

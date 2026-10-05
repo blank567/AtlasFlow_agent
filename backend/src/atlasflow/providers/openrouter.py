@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 from collections import deque
 from dataclasses import dataclass
@@ -430,11 +431,43 @@ class OpenRouterClient:
         except ValueError:
             return ""
         error = payload.get("error", {}) if isinstance(payload, dict) else {}
-        message = error.get("message", "") if isinstance(error, dict) else ""
-        if not isinstance(message, str):
+        if not isinstance(error, dict):
             return ""
-        sanitized = redact_sensitive_data(message.replace(self._api_key, "***"))
-        return str(sanitized)[:300]
+
+        # OpenRouter may wrap the provider's actionable error in metadata.raw.
+        # Only extract known scalar fields; never expose the raw response, which
+        # could contain request data or credentials.
+        parts: list[str] = []
+        message = error.get("message")
+        if isinstance(message, str) and message.strip():
+            parts.append(message.strip())
+        code = error.get("code")
+        if isinstance(code, (str, int)) and not isinstance(code, bool):
+            parts.append(f"code={code}")
+
+        metadata = error.get("metadata")
+        if isinstance(metadata, dict):
+            provider = metadata.get("provider_name")
+            if isinstance(provider, str) and provider.strip():
+                parts.append(f"provider={provider.strip()}")
+            raw = metadata.get("raw")
+            if isinstance(raw, str) and len(raw) <= 4096:
+                try:
+                    raw = json.loads(raw)
+                except ValueError:
+                    raw = None
+            if isinstance(raw, dict):
+                upstream = raw.get("error", raw)
+                if isinstance(upstream, dict):
+                    upstream_message = upstream.get("message")
+                    upstream_code = upstream.get("code")
+                    if isinstance(upstream_message, str) and upstream_message.strip():
+                        parts.append(f"upstream={upstream_message.strip()}")
+                    if isinstance(upstream_code, (str, int)) and not isinstance(upstream_code, bool):
+                        parts.append(f"upstream_code={upstream_code}")
+
+        sanitized = redact_sensitive_data("; ".join(parts).replace(self._api_key, "***"))
+        return str(sanitized)[:500]
 
 
 class OpenRouterEmbeddingProvider:

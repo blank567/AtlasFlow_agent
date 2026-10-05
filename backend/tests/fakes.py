@@ -46,9 +46,7 @@ class FakeEmbeddingProvider:
 
 
 class FakeRerankProvider:
-    async def rerank(
-        self, query: str, documents: list[str], *, top_n: int
-    ) -> list[RerankResult]:
+    async def rerank(self, query: str, documents: list[str], *, top_n: int) -> list[RerankResult]:
         query_characters = set(query.lower())
         scored = [
             RerankResult(
@@ -107,9 +105,7 @@ class FakeModelGateway:
         del query
         self._called("create_plan")
         self._maybe_fail("create_plan")
-        self.plan_policies.append(
-            policy.model_copy(deep=True) if policy is not None else None
-        )
+        self.plan_policies.append(policy.model_copy(deep=True) if policy is not None else None)
         policy_count = policy.initial_task_count if policy is not None else None
         count = self.scenario.plan_task_counts.get(
             plan_version,
@@ -160,22 +156,16 @@ class FakeModelGateway:
         started = perf_counter()
         async with self._concurrency_lock:
             self.active_researchers += 1
-            self.peak_researchers = max(
-                self.peak_researchers, self.active_researchers
-            )
+            self.peak_researchers = max(self.peak_researchers, self.active_researchers)
         try:
             if self.scenario.research_delay_seconds:
                 await asyncio.sleep(self.scenario.research_delay_seconds)
             self._maybe_fail("analyze_task")
-            transient_failures = self.scenario.transient_research_failures.get(
-                task.task_id, 0
-            )
+            transient_failures = self.scenario.transient_research_failures.get(task.task_id, 0)
             if task.task_id in self.scenario.permanent_research_failures:
                 raise RuntimeError(f"permanent research failure: {task.task_id}")
             if attempt <= transient_failures:
-                raise RuntimeError(
-                    f"transient research failure {attempt}: {task.task_id}"
-                )
+                raise RuntimeError(f"transient research failure {attempt}: {task.task_id}")
             return ResearchResult(
                 task_id=task.task_id,
                 plan_version=task.plan_version,
@@ -205,15 +195,12 @@ class FakeModelGateway:
         self._maybe_fail("review_research")
         self.review_contexts.append(context.model_copy(deep=True))
         self.review_plans.append(plan.model_copy(deep=True))
-        route = self._sequence_value(
-            self.scenario.critique_routes, index, CritiqueRoute.ACCEPT
-        )
+        route = self._sequence_value(self.scenario.critique_routes, index, CritiqueRoute.ACCEPT)
         supplemental_tasks: list[ResearchTask] = []
         if route is CritiqueRoute.SUPPLEMENT:
             start = len(plan.tasks) + 1
             supplement_count = (
-                context.policy.supplement_task_count
-                or self.scenario.supplement_task_count
+                context.policy.supplement_task_count or self.scenario.supplement_task_count
             )
             for offset in range(supplement_count):
                 number = start + offset
@@ -229,7 +216,8 @@ class FakeModelGateway:
                         required_capabilities=self.scenario.task_capabilities.get(
                             f"p{plan.plan_version}-t{number}", []
                         ),
-                        requires_fresh_data=f"p{plan.plan_version}-t{number}" in self.scenario.fresh_tasks,
+                        requires_fresh_data=f"p{plan.plan_version}-t{number}"
+                        in self.scenario.fresh_tasks,
                     )
                 )
         issues: list[ReviewIssue] = []
@@ -264,9 +252,7 @@ class FakeModelGateway:
             issues=issues,
             supplemental_tasks=supplemental_tasks,
             replan_reason=(
-                ReplanReason.INVALID_DECOMPOSITION
-                if route is CritiqueRoute.REPLAN
-                else None
+                ReplanReason.INVALID_DECOMPOSITION if route is CritiqueRoute.REPLAN else None
             ),
         )
 
@@ -306,25 +292,19 @@ class FakeModelGateway:
         del query, results
         index = self._called("evaluate_report") - 1
         self._maybe_fail("evaluate_report")
-        route = self._sequence_value(
-            self.scenario.quality_routes, index, QualityRoute.ACCEPT
-        )
+        route = self._sequence_value(self.scenario.quality_routes, index, QualityRoute.ACCEPT)
         default_score = {
             QualityRoute.ACCEPT: 90,
             QualityRoute.REVISE: 70,
             QualityRoute.REPLAN: 40,
         }[route]
-        score = self._sequence_value(
-            self.scenario.quality_scores, index, default_score
-        )
+        score = self._sequence_value(self.scenario.quality_scores, index, default_score)
         issues = []
         if route is not QualityRoute.ACCEPT:
             issues = [
                 ReviewIssue(
                     severity=(
-                        Severity.CRITICAL
-                        if route is QualityRoute.REPLAN
-                        else Severity.WARNING
+                        Severity.CRITICAL if route is QualityRoute.REPLAN else Severity.WARNING
                     ),
                     code="quality_gap",
                     message="报告未达到验收标准",
@@ -340,9 +320,7 @@ class FakeModelGateway:
             rationale=f"QualityGate 选择 {route.value}",
             issues=issues,
             revision_instructions=(
-                ["补充缺失分析并改善结构"]
-                if route is QualityRoute.REVISE
-                else []
+                ["补充缺失分析并改善结构"] if route is QualityRoute.REVISE else []
             ),
         )
 
@@ -435,6 +413,8 @@ def make_test_settings() -> Settings:
         langsmith_api_key="",
         langsmith_endpoint="https://api.smith.langchain.com",
         database_path=":memory:",
+        knowledge_backend="memory",
+        knowledge_worker_enabled=False,
         tool_timeout_seconds=2,
     )
 

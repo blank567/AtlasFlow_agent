@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { href: "/", label: "工作台" },
   { href: "/runs", label: "运行记录" },
   { href: "/analytics", label: "统计分析" },
+  { href: "/knowledge", label: "知识库" },
   { href: "/settings", label: "系统设置" },
 ];
 
@@ -33,7 +34,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="sidebarFoot">
           <span className="onlineDot" />
           <span>本地工作区</span>
-          <small>v5.0.0</small>
+          <small>v0.6.0</small>
         </div>
       </aside>
       <div className="pageFrame">

@@ -36,28 +36,69 @@ def test_health_tools_and_document_ingestion() -> None:
     assert document.json()["chunks_created"] == 1
 
 
+def test_knowledge_api_starts_empty_and_explains_hybrid_search() -> None:
+    app = create_app(settings=make_test_settings(), container=make_test_container())
+    with TestClient(app) as client:
+        spaces = client.get("/api/v1/knowledge/spaces")
+        empty_documents = client.get("/api/v1/knowledge/spaces/user-default/documents")
+        ingested = client.post(
+            "/api/v1/documents",
+            json={
+                "title": "Vector Notes",
+                "source_id": "vector-notes",
+                "content": "向量检索用于查找语义相近的知识片段。",
+                "metadata": {"language": "zh", "tags": ["rag"]},
+            },
+        )
+        search = client.post(
+            "/api/v1/knowledge/search/debug",
+            json={"space": "user-default", "query": "什么是向量检索？"},
+        )
+        archived = client.post(
+            f"/api/v1/knowledge/documents/{ingested.json()['document_id']}/archive"
+        )
+        after_archive = client.post(
+            "/api/v1/knowledge/search",
+            json={"space": "user-default", "query": "什么是向量检索？"},
+        )
+
+    assert spaces.status_code == 200
+    assert [item["slug"] for item in spaces.json()] == ["user-default"]
+    assert empty_documents.json() == []
+    assert search.status_code == 200
+    assert search.json()["hits"]
+    assert search.json()["trace"]["lexical_candidates"] == 1
+    assert "rerank_applied" in search.json()["trace"]
+    assert archived.json()["status"] == "archived"
+    assert after_archive.json()["decision"]["status"] == "insufficient"
+
+
 def test_capability_catalog_and_invalid_approval_edit() -> None:
     with TestClient(
         create_app(settings=make_test_settings(), container=make_test_container())
     ) as client:
         catalog = client.get("/api/v1/capabilities")
         assert catalog.status_code == 200
-        assert {item["id"] for item in catalog.json()} >= {"calculator", "web_search", "map_route"}
+        assert {item["id"] for item in catalog.json()} >= {
+            "calculator",
+            "web_search",
+            "map_route",
+            "knowledge_search",
+        }
         created = client.post("/api/v1/runs", json={"query": "解释概念", "auto_approve": False})
         run_id = created.json()["id"]
         run = _wait_for_status(client, run_id, {"waiting_approval"})
         edited = run["plan"]
         edited["tasks"][0]["required_capabilities"] = ["unknown_capability"]
-        response = client.post(f"/api/v1/runs/{run_id}/approval",
-                               json={"action": "edit", "edited_plan": edited})
+        response = client.post(
+            f"/api/v1/runs/{run_id}/approval", json={"action": "edit", "edited_plan": edited}
+        )
         assert response.status_code == 422
         assert "unknown capabilities" in response.json()["detail"]
         assert client.get(f"/api/v1/runs/{run_id}").json()["status"] == "waiting_approval"
 
 
-def _wait_for_status(
-    client: TestClient, run_id: str, expected: set[str]
-) -> dict[str, object]:
+def _wait_for_status(client: TestClient, run_id: str, expected: set[str]) -> dict[str, object]:
     for _ in range(300):
         response = client.get(f"/api/v1/runs/{run_id}")
         assert response.status_code == 200
@@ -97,9 +138,7 @@ def test_run_api_and_sse_have_ordered_single_done_event() -> None:
         for line in body.splitlines()
         if line.startswith("data: {") and '"event_type"' in line
     ]
-    assert [item["sequence"] for item in event_payloads] == list(
-        range(1, len(event_payloads) + 1)
-    )
+    assert [item["sequence"] for item in event_payloads] == list(range(1, len(event_payloads) + 1))
 
 
 def test_run_api_propagates_structured_policy_to_the_workflow() -> None:
@@ -110,9 +149,7 @@ def test_run_api_propagates_structured_policy_to_the_workflow() -> None:
         "replan_requires_critical_issue": True,
     }
     gateway = FakeModelGateway(
-        GatewayScenario(
-            critique_routes=[CritiqueRoute.SUPPLEMENT, CritiqueRoute.ACCEPT]
-        )
+        GatewayScenario(critique_routes=[CritiqueRoute.SUPPLEMENT, CritiqueRoute.ACCEPT])
     )
     app = create_app(
         settings=make_test_settings(),
@@ -178,9 +215,7 @@ def test_manual_approval_api_and_conflict_semantics() -> None:
         waiting = _wait_for_status(client, run_id, {"waiting_approval"})
         assert waiting["plan"]
 
-        approved = client.post(
-            f"/api/v1/runs/{run_id}/approval", json={"action": "approve"}
-        )
+        approved = client.post(f"/api/v1/runs/{run_id}/approval", json={"action": "approve"})
         assert approved.status_code == 202
         assert approved.json()["status"] == "running"
 
@@ -189,12 +224,8 @@ def test_manual_approval_api_and_conflict_semantics() -> None:
             run_id,
             {"completed", "completed_with_warnings", "failed", "cancelled"},
         )
-        duplicate = client.post(
-            f"/api/v1/runs/{run_id}/approval", json={"action": "approve"}
-        )
-        missing = client.post(
-            "/api/v1/runs/not-found/approval", json={"action": "approve"}
-        )
+        duplicate = client.post(f"/api/v1/runs/{run_id}/approval", json={"action": "approve"})
+        missing = client.post("/api/v1/runs/not-found/approval", json={"action": "approve"})
 
     assert final["status"] == "completed"
     assert duplicate.status_code == 409

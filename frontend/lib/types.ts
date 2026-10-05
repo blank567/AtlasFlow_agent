@@ -295,3 +295,57 @@ export const TERMINAL_STATUSES = new Set([
   "failed",
   "cancelled",
 ]);
+
+export type KnowledgeSpace = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  visibility: "private" | "internal" | "public";
+  embedding_profile: string;
+  retrieval_profile: string;
+  active_generation_id?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type KnowledgeDocument = {
+  id: string;
+  space_id: string;
+  source_id: string;
+  title: string;
+  canonical_uri?: string | null;
+  current_version_id?: string | null;
+  status: "active" | "archived";
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type KnowledgeJob = {
+  id: string;
+  space_id: string;
+  document_id: string;
+  version_id: string;
+  status: string;
+  stage: string;
+  attempt: number;
+  progress: number;
+  error_code?: string | null;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type KnowledgeSearchResult = {
+  query: string;
+  decision: { status: "sufficient" | "partial" | "insufficient"; reasons: string[]; coverage: number; evidence_count: number };
+  hits: Array<{
+    chunk: { id: string; title: string; content: string; heading_path: string[]; page_number?: number | null; metadata: Record<string, unknown> };
+    lexical_score: number;
+    vector_score: number;
+    fusion_score: number;
+    rerank_score?: number | null;
+  }>;
+  trace: { profile_id: string; generation_id?: string | null; lexical_candidates: number; vector_candidates: number; fused_candidates: number; rerank_applied: boolean; degraded: string[]; duration_ms: number };
+};

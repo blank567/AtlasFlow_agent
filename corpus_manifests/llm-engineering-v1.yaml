@@ -1,0 +1,184 @@
+schema_version: "1"
+space: llm-engineering-v1
+name: LLM Engineering v1
+description: >-
+  First high-density paper and official-document corpus for LLM fundamentals,
+  training, serving, RAG and agents. This manifest never downloads content automatically.
+auto_download: false
+sources:
+  - source_id: llm-survey-2026
+    title: A Survey of Large Language Models
+    topic: fundamentals
+    source_type: paper
+    canonical_uri: https://doi.org/10.1007/s11704-026-60308-3
+    doi: 10.1007/s11704-026-60308-3
+    ingestion_policy: redistributable_with_notice
+    license_spdx_id: CC-BY-4.0
+    license_evidence_uri: https://link.springer.com/article/10.1007/s11704-026-60308-3
+    priority: P0
+  - source_id: attention-is-all-you-need
+    title: Attention Is All You Need
+    topic: fundamentals
+    source_type: paper
+    canonical_uri: https://arxiv.org/abs/1706.03762
+    arxiv_id: "1706.03762"
+    ingestion_policy: private_index_only
+    priority: P0
+  - source_id: chinchilla
+    title: Training Compute-Optimal Large Language Models
+    topic: training_alignment
+    source_type: paper
+    canonical_uri: https://arxiv.org/abs/2203.15556
+    arxiv_id: "2203.15556"
+    ingestion_policy: private_index_only
+    aliases: [An Empirical Analysis of Compute-Optimal Large Language Model Training]
+    priority: P0
+  - source_id: instructgpt
+    title: Training Language Models to Follow Instructions with Human Feedback
+    topic: training_alignment
+    source_type: paper
+    canonical_uri: https://arxiv.org/abs/2203.02155
+    arxiv_id: "2203.02155"
+    ingestion_policy: private_index_only
+    priority: P0
+  - source_id: lora
+    title: "LoRA: Low-Rank Adaptation of Large Language Models"
+    topic: training_alignment
+    source_type: paper
+    canonical_uri: https://openreview.net/forum?id=nZeVKeeFYf9
+    arxiv_id: "2106.09685"
+    ingestion_policy: private_index_only
+    priority: P0
+  - source_id: flashattention
+    title: "FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness"
+    topic: inference_serving
+    source_type: paper
+    canonical_uri: https://arxiv.org/abs/2205.14135
+    arxiv_id: "2205.14135"
+    ingestion_policy: private_index_only
+    priority: P0
+  - source_id: pagedattention
+    title: Efficient Memory Management for Large Language Model Serving with PagedAttention
+    topic: inference_serving
+    source_type: paper
+    canonical_uri: https://doi.org/10.1145/3600006.3613165
+    doi: 10.1145/3600006.3613165
+    arxiv_id: "2309.06180"
+    ingestion_policy: redistributable_with_notice
+    license_spdx_id: CC-BY-4.0
+    license_evidence_uri: https://arxiv.org/abs/2309.06180
+    priority: P0
+  - source_id: rag-survey
+    title: "Retrieval-Augmented Generation for Large Language Models: A Survey"
+    topic: rag
+    source_type: paper
+    canonical_uri: https://arxiv.org/abs/2312.10997
+    arxiv_id: "2312.10997"
+    ingestion_policy: private_index_only
+    priority: P0
+  - source_id: react
+    title: "ReAct: Synergizing Reasoning and Acting in Language Models"
+    topic: agents
+    source_type: paper
+    canonical_uri: https://arxiv.org/abs/2210.03629
+    arxiv_id: "2210.03629"
+    ingestion_policy: redistributable_with_notice
+    license_spdx_id: CC-BY-4.0
+    license_evidence_uri: https://arxiv.org/abs/2210.03629
+    priority: P0
+  - source_id: multi-agent-survey
+    title: "Large Language Model based Multi-Agents: A Survey of Progress and Challenges"
+    topic: agents
+    source_type: paper
+    canonical_uri: https://arxiv.org/abs/2402.01680
+    arxiv_id: "2402.01680"
+    ingestion_policy: private_index_only
+    priority: P1
+  - source_id: qwen2.5-report
+    title: Qwen2.5 Technical Report
+    topic: model_reports
+    source_type: paper
+    canonical_uri: https://arxiv.org/abs/2412.15115
+    arxiv_id: "2412.15115"
+    ingestion_policy: private_index_only
+    priority: P1
+  - source_id: deepseek-v3-report
+    title: DeepSeek-V3 Technical Report
+    topic: model_reports
+    source_type: paper
+    canonical_uri: https://arxiv.org/abs/2412.19437
+    arxiv_id: "2412.19437"
+    ingestion_policy: private_index_only
+    priority: P1
+  - source_id: transformers-kv-cache
+    title: Transformers KV Cache
+    topic: inference_serving
+    source_type: github_document
+    canonical_uri: https://github.com/huggingface/transformers/blob/main/docs/source/en/kv_cache.md
+    repository: https://github.com/huggingface/transformers
+    upstream_ref: main
+    path: docs/source/en/kv_cache.md
+    ingestion_policy: redistributable_with_notice
+    license_spdx_id: Apache-2.0
+    license_evidence_uri: https://github.com/huggingface/transformers/blob/main/LICENSE
+    priority: P0
+  - source_id: transformers-cache-explanation
+    title: Transformers Cache Explanation
+    topic: inference_serving
+    source_type: github_document
+    canonical_uri: https://github.com/huggingface/transformers/blob/main/docs/source/en/cache_explanation.md
+    repository: https://github.com/huggingface/transformers
+    upstream_ref: main
+    path: docs/source/en/cache_explanation.md
+    ingestion_policy: redistributable_with_notice
+    license_spdx_id: Apache-2.0
+    license_evidence_uri: https://github.com/huggingface/transformers/blob/main/LICENSE
+    priority: P0
+  - source_id: transformers-optimization
+    title: Transformers Optimization Overview
+    topic: inference_serving
+    source_type: github_document
+    canonical_uri: https://github.com/huggingface/transformers/blob/main/docs/source/en/optimization_overview.md
+    repository: https://github.com/huggingface/transformers
+    upstream_ref: main
+    path: docs/source/en/optimization_overview.md
+    ingestion_policy: redistributable_with_notice
+    license_spdx_id: Apache-2.0
+    license_evidence_uri: https://github.com/huggingface/transformers/blob/main/LICENSE
+    priority: P0
+  - source_id: transformers-continuous-batching
+    title: Transformers Continuous Batching
+    topic: inference_serving
+    source_type: github_document
+    canonical_uri: https://github.com/huggingface/transformers/blob/main/docs/source/en/continuous_batching.md
+    repository: https://github.com/huggingface/transformers
+    upstream_ref: main
+    path: docs/source/en/continuous_batching.md
+    ingestion_policy: redistributable_with_notice
+    license_spdx_id: Apache-2.0
+    license_evidence_uri: https://github.com/huggingface/transformers/blob/main/LICENSE
+    priority: P0
+  - source_id: microsoft-llmwiki-readme
+    title: Microsoft LLMWiki README
+    topic: knowledge_compilation
+    source_type: github_document
+    canonical_uri: https://github.com/microsoft/llmwiki/blob/main/README.md
+    repository: https://github.com/microsoft/llmwiki
+    upstream_ref: main
+    path: README.md
+    ingestion_policy: redistributable_with_notice
+    license_spdx_id: MIT
+    license_evidence_uri: https://github.com/microsoft/llmwiki/blob/main/LICENSE
+    priority: P1
+  - source_id: microsoft-llmwiki-architecture
+    title: Microsoft LLMWiki Architecture
+    topic: knowledge_compilation
+    source_type: github_document
+    canonical_uri: https://github.com/microsoft/llmwiki/blob/main/ARCHITECTURE.md
+    repository: https://github.com/microsoft/llmwiki
+    upstream_ref: main
+    path: ARCHITECTURE.md
+    ingestion_policy: redistributable_with_notice
+    license_spdx_id: MIT
+    license_evidence_uri: https://github.com/microsoft/llmwiki/blob/main/LICENSE
+    priority: P1

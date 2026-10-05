@@ -7,6 +7,10 @@ import {
   RunPolicy,
   RunRecord,
   SettingsStatus,
+  KnowledgeDocument,
+  KnowledgeJob,
+  KnowledgeSearchResult,
+  KnowledgeSpace,
 } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
@@ -21,7 +25,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     headers: {
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(init?.body && !(init.body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
       ...init?.headers,
     },
     cache: "no-store",
@@ -212,4 +216,36 @@ export async function getSettingsStatus() {
 
 export async function checkLangSmith() {
   return request<SettingsStatus | SettingsStatus["langsmith"]>("/settings/langsmith/check", { method: "POST" });
+}
+
+export function listKnowledgeSpaces() {
+  return request<KnowledgeSpace[]>("/knowledge/spaces");
+}
+
+export function createKnowledgeSpace(payload: { slug: string; name: string; description?: string }) {
+  return request<KnowledgeSpace>("/knowledge/spaces", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function listKnowledgeDocuments(space: string) {
+  return request<KnowledgeDocument[]>(`/knowledge/spaces/${encodeURIComponent(space)}/documents`);
+}
+
+export function uploadKnowledgeDocument(space: string, file: File) {
+  const body = new FormData();
+  body.set("file", file);
+  body.set("title", file.name);
+  body.set("source_id", `${file.name}:${file.size}:${file.lastModified}`);
+  return request<KnowledgeJob>(`/knowledge/spaces/${encodeURIComponent(space)}/upload`, { method: "POST", body });
+}
+
+export function listKnowledgeJobs(space?: string) {
+  return request<KnowledgeJob[]>(`/knowledge/jobs${space ? `?space=${encodeURIComponent(space)}` : ""}`);
+}
+
+export function archiveKnowledgeDocument(documentId: string) {
+  return request<KnowledgeDocument>(`/knowledge/documents/${encodeURIComponent(documentId)}/archive`, { method: "POST" });
+}
+
+export function searchKnowledge(payload: { query: string; space?: string; result_limit?: number }) {
+  return request<KnowledgeSearchResult>("/knowledge/search/debug", { method: "POST", body: JSON.stringify(payload) });
 }

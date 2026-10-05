@@ -6,6 +6,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "atlasflow.sqlite3"
+DEFAULT_KNOWLEDGE_BLOB_ROOT = PROJECT_ROOT / "data" / "knowledge" / "blobs"
+DEFAULT_KNOWLEDGE_WORK_ROOT = Path("E:/codex/tmp/atlasflow-rag")
 
 
 class Settings(BaseSettings):
@@ -50,6 +52,14 @@ class Settings(BaseSettings):
 
     database_path: str = str(DEFAULT_DATABASE_PATH)
     redis_url: str = "redis://localhost:6379/0"
+
+    knowledge_backend: str = "postgres"
+    knowledge_database_url: str = "postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/atlasflow"
+    knowledge_blob_root: str = str(DEFAULT_KNOWLEDGE_BLOB_ROOT)
+    knowledge_work_root: str = str(DEFAULT_KNOWLEDGE_WORK_ROOT)
+    knowledge_default_space: str = "user-default"
+    knowledge_worker_enabled: bool = True
+    knowledge_worker_poll_seconds: float = Field(default=0.5, ge=0.1, le=30.0)
 
     sse_heartbeat_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
     sse_poll_seconds: float = Field(default=0.25, ge=0.05, le=2.0)

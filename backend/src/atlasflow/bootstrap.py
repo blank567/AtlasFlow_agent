@@ -6,6 +6,16 @@ from atlasflow.agents.gateway import ModelGateway, OpenRouterModelGateway
 from atlasflow.agents.tool_runtime import ToolRuntime
 from atlasflow.agents.workflow import ResearchWorkflow
 from atlasflow.config import Settings
+from atlasflow.knowledge.application import KnowledgePlatform
+from atlasflow.knowledge.infrastructure import (
+    InMemoryKnowledgeRepository,
+    LocalBlobStore,
+    MemoryBlobStore,
+)
+from atlasflow.knowledge.infrastructure.postgres_repository import (
+    PostgresKnowledgeRepository,
+)
+from atlasflow.knowledge.retrieval import RetrievalService
 from atlasflow.observability import configure_langsmith
 from atlasflow.providers import EmbeddingProvider, RerankProvider
 from atlasflow.providers.openrouter import (
@@ -14,7 +24,6 @@ from atlasflow.providers.openrouter import (
     OpenRouterRerankProvider,
     ProviderConfigurationError,
 )
-from atlasflow.rag import HybridRetriever
 from atlasflow.service import RunService
 from atlasflow.storage import SQLiteRunStore
 from atlasflow.tools import BaseTool, ToolRegistry
@@ -26,7 +35,7 @@ from atlasflow.tools.web_search import OpenRouterWebSearchTool
 @dataclass(slots=True)
 class Container:
     settings: Settings
-    retriever: HybridRetriever
+    knowledge: KnowledgePlatform
     registry: ToolRegistry
     store: SQLiteRunStore
     run_service: RunService
@@ -43,14 +52,33 @@ class ProviderBundle:
 def build_container(settings: Settings, providers: ProviderBundle | None = None) -> Container:
     configure_langsmith(settings)
     providers = providers or build_openrouter_providers(settings)
-    retriever = HybridRetriever(
+    if settings.knowledge_backend.lower() == "memory":
+        knowledge_repository = InMemoryKnowledgeRepository()
+        blob_store = MemoryBlobStore()
+    elif settings.knowledge_backend.lower() == "postgres":
+        knowledge_repository = PostgresKnowledgeRepository(settings.knowledge_database_url)
+        blob_store = LocalBlobStore(settings.knowledge_blob_root)
+    else:
+        raise ProviderConfigurationError(
+            f"Knowledge backend '{settings.knowledge_backend}' is unsupported"
+        )
+    retrieval = RetrievalService(
+        repository=knowledge_repository,
         embedding_provider=providers.embedding,
         rerank_provider=providers.reranker,
     )
-    _seed_demo_knowledge(retriever)
+    knowledge = KnowledgePlatform(
+        repository=knowledge_repository,
+        blob_store=blob_store,
+        embedding_provider=providers.embedding,
+        retrieval=retrieval,
+        default_space=settings.knowledge_default_space,
+        worker_enabled=settings.knowledge_worker_enabled,
+        worker_poll_seconds=settings.knowledge_worker_poll_seconds,
+    )
 
     registry = build_tool_registry(settings, web_search=providers.web_search_tool)
-    registry.register(KnowledgeSearchTool(retriever))
+    registry.register(KnowledgeSearchTool(knowledge))
 
     store = SQLiteRunStore(settings.database_path)
 
@@ -80,7 +108,7 @@ def build_container(settings: Settings, providers: ProviderBundle | None = None)
     )
     return Container(
         settings=settings,
-        retriever=retriever,
+        knowledge=knowledge,
         registry=registry,
         store=store,
         run_service=RunService(store, workflow),
@@ -150,38 +178,4 @@ def _client(settings: Settings, *, api_key: str, base_url: str, purpose: str) ->
         timeout_seconds=settings.provider_timeout_seconds,
         app_name=settings.app_name,
         max_retries=settings.max_tool_retries,
-    )
-
-
-def _seed_demo_knowledge(retriever: HybridRetriever) -> None:
-    retriever.ingest(
-        source_id="architecture-overview",
-        title="AtlasFlow 架构说明",
-        content=(
-            "AtlasFlow 使用 Supervisor、Planner、Researcher、Writer、Critic 和 Reporter 协作。"
-            "LangGraph 负责状态流转与条件分支。所有外部能力均通过 Tool Registry 调用，"
-            "工具执行器负责参数校验、权限、超时、重试和审计。LangSmith 记录 Agent、"
-            "模型、检索和工具调用的嵌套 Trace。"
-        ),
-        metadata={"kind": "architecture", "language": "zh-CN"},
-    )
-    retriever.ingest(
-        source_id="rag-design",
-        title="RAG 检索设计",
-        content=(
-            "RAG 流程包含文档清洗、语义切块、Embedding、关键词检索、向量检索、"
-            "Reciprocal Rank Fusion、Reranker 和引用校验。检索结果保留文档编号、"
-            "Chunk 编号、各阶段分数和元数据，以支持可解释回答与离线评测。"
-        ),
-        metadata={"kind": "rag", "language": "zh-CN"},
-    )
-    retriever.ingest(
-        source_id="safety-policy",
-        title="工具安全策略",
-        content=(
-            "工具按 low、medium、high 三个风险等级分类。读取和检索属于低风险；"
-            "代码执行和数据库查询属于中风险；写入外部系统和发送消息属于高风险。"
-            "中高风险工具必须经过显式授权，高风险工具还应进入人工审批节点。"
-        ),
-        metadata={"kind": "security", "language": "zh-CN"},
     )

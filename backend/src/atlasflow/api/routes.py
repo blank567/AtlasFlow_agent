@@ -47,9 +47,11 @@ def container_from(request: Request) -> Container:
 @router.get("/health")
 async def health(request: Request) -> dict[str, object]:
     container = container_from(request)
+    knowledge = await container.knowledge.stats()
     return {
         "status": "ok",
-        "knowledge_chunks": container.retriever.chunk_count,
+        "knowledge": knowledge,
+        "knowledge_chunks": knowledge["chunks"],
         "tools": len(container.registry.describe()),
     }
 
@@ -68,13 +70,18 @@ async def list_capabilities(request: Request) -> list[dict[str, object]]:
 async def ingest_document(
     payload: IngestDocumentRequest, request: Request
 ) -> IngestDocumentResponse:
-    document_id, count = container_from(request).retriever.ingest(
+    knowledge = container_from(request).knowledge
+    job = await knowledge.submit(
+        space=knowledge.default_space,
         title=payload.title,
-        content=payload.content,
+        content=payload.content.encode("utf-8"),
+        mime_type="text/plain",
         source_id=payload.source_id,
         metadata=payload.metadata,
     )
-    return IngestDocumentResponse(document_id=document_id, chunks_created=count)
+    job = await knowledge.process_job(job.id)
+    count = await knowledge.repository.count_version_chunks(job.version_id)
+    return IngestDocumentResponse(document_id=job.document_id, chunks_created=count)
 
 
 @router.post("/runs", response_model=RunRecord, status_code=status.HTTP_202_ACCEPTED)
@@ -124,9 +131,7 @@ async def list_runs(
 @router.get("/analytics", response_model=AnalyticsResponse)
 async def analytics(
     request: Request,
-    selected_range: Literal["7d", "30d", "all"] = Query(
-        default="30d", alias="range"
-    ),
+    selected_range: Literal["7d", "30d", "all"] = Query(default="30d", alias="range"),
 ) -> AnalyticsResponse:
     return await container_from(request).run_service.analytics(selected_range)
 
@@ -217,9 +222,7 @@ async def delete_run(
     payload: DeleteRunRequest | None = None,
     confirmation_run_id: str | None = Query(default=None),
 ) -> Response:
-    confirmation = (
-        payload.confirmation_run_id if payload is not None else confirmation_run_id
-    )
+    confirmation = payload.confirmation_run_id if payload is not None else confirmation_run_id
     if confirmation is None:
         raise HTTPException(status_code=422, detail="confirmation_run_id is required")
     try:
@@ -240,9 +243,7 @@ async def resolve_run_approval(
     run_id: str, payload: ApprovalRequest, request: Request
 ) -> RunRecord:
     try:
-        return await container_from(request).run_service.resolve_approval(
-            run_id, payload
-        )
+        return await container_from(request).run_service.resolve_approval(run_id, payload)
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Run not found") from exc
     except InvalidRunStateError as exc:

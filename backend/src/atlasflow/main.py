@@ -10,22 +10,25 @@ from atlasflow import __version__
 from atlasflow.api.routes import router
 from atlasflow.bootstrap import Container, build_container
 from atlasflow.config import Settings, get_settings
+from atlasflow.knowledge.api import router as knowledge_router
 from atlasflow.observability import configure_langsmith
 
 
-def create_app(
-    *, settings: Settings | None = None, container: Container | None = None
-) -> FastAPI:
+def create_app(*, settings: Settings | None = None, container: Container | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_langsmith(settings)
     resolved_container = container or build_container(settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        yield
-        close = getattr(resolved_container.store, "close", None)
-        if close is not None:
-            await close()
+        await resolved_container.knowledge.start()
+        try:
+            yield
+        finally:
+            await resolved_container.knowledge.close()
+            close = getattr(resolved_container.store, "close", None)
+            if close is not None:
+                await close()
 
     app = FastAPI(
         title=settings.app_name,
@@ -42,6 +45,7 @@ def create_app(
     )
     app.state.container = resolved_container
     app.include_router(router)
+    app.include_router(knowledge_router)
     return app
 
 

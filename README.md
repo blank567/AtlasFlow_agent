@@ -1,6 +1,6 @@
 # AtlasFlow
 
-当前版本：`v5.0.0`。最新变更见文末的 [v5.0.0](#v500--原生工具调用与地图导航2026-09-26)；
+当前版本：`v0.6.0`。最新变更见文末的 [v0.6.0](#v060)；
 下方 v0.1–v0.4.5 章节保留为版本演进记录。历史描述与当前实现不一致时，以最新版本章节为准。
 
 当前 Agent 主流程：Supervisor → Planner → Approval → Scheduler/Researcher → Research Gate →
@@ -1422,3 +1422,110 @@ Critic、Synthesizer 和 Quality Gate 仍可以调用工具。`requires_fresh_da
 - **报告阅读与下载样式**：网页报告和导出的 HTML 对编号文献使用悬挂缩进、较紧凑字号和稳定换行；警告文案及页脚统一使用“参考文献”术语。原有 Markdown／HTML 下载能力保留，下载内容与页面正文使用同一份经校验报告。
 
 验证：`academic-report` Skill 通过官方结构校验；E 盘 `langchain` 环境后端 **211 passed**、Ruff 通过，前端 `typecheck` 与报告专项测试通过。未将已有 Run 的查询、研究结果和证据发送给 OpenRouter 做付费冒烟测试，因为这属于向外部供应商发送现有运行数据，需要单独明确授权；本地确定性测试不受影响。重启后端和 Studio、创建新 Run 后即可看到新版成稿，历史报告不会自动重写。
+
+<a id="v060"></a>
+
+## v0.6.0 — RAG Knowledge Platform（2026-10-04）
+
+本节只追加 `v0.6.0` 的增量，不重写上文的历史版本记录。本版将早期的内存 RAG 样例扩展为独立知识平台，并通过稳定的领域接口为后续 LLMWiki 留出扩展位；当前不实现 LLMWiki，也不把 AtlasFlow 项目文档或历史 Run 自动当作语料。
+
+### 架构与数据流
+
+- 新增 `atlasflow.knowledge` 边界，分为 Domain Model、Application Service、Repository／Blob Store／Parser Port 和 Infrastructure Adapter。Agent、HTTP API、后台 Worker 和未来 LLMWiki 共用同一平台接口，不直接依赖 PostgreSQL 表。
+- 持久化使用 PostgreSQL + pgvector，通过 Alembic 管理 Schema；原文件使用受路径约束的本地 Blob Store。默认数据目录为 `E:/codex/agent/data/knowledge` 和 `E:/codex/agent/data/postgres`，处理中间文件位于 `E:/codex/tmp/atlasflow-rag`，均不占用 C 盘。
+- 文档使用不可变 `DocumentVersion`、内容哈希去重和可切换 `IndexGeneration`。重复内容不重复建索引；新版本只在完成解析、切块、Embedding 和索引发布后成为当前版本，检索不会读到半成品。
+- 异步任务保留 `queued → parsing → chunking → embedding → indexing → completed/failed` 状态和错误诊断，支持失败后显式重试。空库会创建 `user-default` 空间，不会隐式注入示例文档。
+
+### 解析、切块与检索
+
+- 首版支持 PDF、Markdown／MDX、HTML 和纯文本。Parser 保留标题路径、页码、块顺序、列表、表格、引用与代码块等来源定位，避免只存一段不可回溯的纯文本。
+- 切块采用 parent-child 结构：子块用于精确检索，上下文组装时回到父块并去重；中文词法索引使用 `jieba`，保留确定性 fallback。
+- 查询链路为保守规范化 → 词法检索 → 向量检索 → RRF 融合 → Rerank → 父块上下文组装 → 充分性决策。结果明确返回 `sufficient`、`partial` 或 `insufficient`，不把无关语料包装成答案。
+- 词法分数、向量分数、融合排名、重排序结果、选中原因和决策结果都进入可观测 Trace，便于在 LangSmith 中分段定位检索失真。Rerank 不可用时会显式标注 fallback，不伪装为正常重排序。
+
+### Agent、API 与前端
+
+- Planner 只在结构化任务中声明 `knowledge_search` capability，不执行检索。Researcher 是主要调用者；Critic 和 QualityGate 可在审查缺口时有限调用；Synthesizer 不自行检索，只消费已经进入 Evidence 契约的结果。
+- 新增 `/api/v1/knowledge` API，覆盖知识空间、文本导入、25 MB 文件上传、文档版本、任务状态／重试、带 Filter DSL 的检索与调试检索。当前 HTTP 端仅提供可恢复的 archive；由于尚未实现真实身份认证，不暴露不可恢复的物理删除端点。
+- 新增固定侧边栏的「知识库」工作台，包含空间／文档台账、导入任务和检索实验室。检索实验室用分段分数轨迹展示 lexical、vector、fusion 和 rerank，支持动态轮询任务状态；archive 等易误触操作保留二次确认。
+
+### 首批语料清单
+
+`corpus_manifests/llm-engineering-v1.yaml` 记录 18 个候选来源，覆盖 LLM 基础、训练／对齐、推理、主流模型、RAG 和 Agent，并为每个来源记录来源 URI、内容类型、优先级、许可及再分发策略。`auto_download` 被强制为 `false`：清单用于审核和后续手工获取，不会在启动或测试时自动下载第三方 PDF／仓库。原文、切块、向量和未来下载目录都已加入 Git 忽略规则。
+
+### 运行方式
+
+```powershell
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:DOCKER_CONFIG = 'E:\codex\agent\.docker'
+
+# 1. 在已有 langchain 环境中刷新 v0.6.0 依赖与命令入口
+E:\conda_envs\langchain\python.exe -m pip install --cache-dir E:\codex\cache\pip -e .
+
+# 2. 启动 pgvector PostgreSQL
+docker-compose up -d postgres
+
+# 3. 升级数据库
+E:\conda_envs\langchain\python.exe -m alembic upgrade head
+
+# 4. 启动 API（.env 中 KNOWLEDGE_WORKER_ENABLED=true 时同进程处理导入任务）
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:app --app-dir backend/src --reload
+
+# 5. 启动前端（新终端）
+Set-Location E:\codex\agent\frontend
+npm run dev
+```
+
+若关闭 API 内置 Worker，可在独立终端运行 `E:\conda_envs\langchain\python.exe -m atlasflow.knowledge.worker`。语料清单可用 `E:\conda_envs\langchain\python.exe -m atlasflow.knowledge.cli validate corpus_manifests/llm-engineering-v1.yaml` 校验。
+
+验证边界：自动化测试使用内存 Repository，不调用付费 LLM，也不下载外部语料。本轮后端 **218 passed**（另有 1 条第三方弃用警告）、Ruff 通过、前端 TypeScript 及 flow／event／report 专项校验通过，manifest 与 Alembic head 验证通过。Next.js 生产构建在当前环境中长时间无任何新输出，已主动终止，不记为通过。当前本机 Docker daemon 未运行，因此 PostgreSQL／pgvector 真实集成尚未完成冒烟验证，不把内存测试冒充为持久化验证。
+
+### v0.6.0 启动故障补记（2026-10-05）
+
+后端在 `knowledge.start()` 阶段出现 `ConnectionRefusedError: 127.0.0.1:5432`，原因是 PostgreSQL 尚未运行；这与 OpenRouter API 和 Agent 逻辑无关。当前安装的是独立 `docker-compose.exe`，`docker compose` 子命令不可用；Docker CLI 存在但 Docker Engine 未启动。已确认 Docker Desktop 的 WSL 数据盘文件位于 `E:\Docker\data\DockerDesktopWSL\disk\docker_data.vhdx`。启动前仍应检查 Docker Desktop 自身的其他缓存／日志位置符合 E 盘约束。
+
+上一节的 API 命令误用了模块中不存在的 `atlasflow.main:app`。实际入口是 `create_app` 工厂，必须带 `--factory`；`-8000` 也不是有效的端口参数，正确写法是 `--port 8000`。在 Docker Desktop 已启动且确认数据位置后，按以下顺序执行：
+
+```powershell
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:DOCKER_CONFIG = 'E:\codex\agent\.docker'
+
+docker-compose up -d postgres
+docker-compose ps
+E:\conda_envs\langchain\python.exe -m alembic upgrade head
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --reload --port 8000
+```
+
+如果 `docker-compose up` 报 `npipe:////./pipe/docker_engine` 不存在，说明 Docker Desktop／Engine 还未启动；如果 PostgreSQL 已运行但提示 `knowledge_spaces` 表不存在，则先执行上面的 Alembic 迁移。后端现在会对数据库连接失败给出 `KNOWLEDGE_DATABASE_UNAVAILABLE` 提示。数据库连接正常后，再打开 `http://127.0.0.1:8000/docs` 验证 API。
+
+### v0.6.0 Planner 供应商错误诊断补记（2026-10-05）
+
+Planner 首次请求 OpenRouter 时可能收到 HTTP 400，页面先前只显示 `Provider returned error`。这是模型请求被 OpenRouter／上游供应商拒绝，发生在工具和 RAG 执行之前；仅凭该句不能断定是模型、JSON Schema、参数组合还是供应商的瞬时故障。现在错误处理会在响应提供时提取供应商名称、错误码及嵌套错误信息，同时限制长度并脱敏，不保存或展示原始响应。重启后端后重新运行，若仍失败，查看新的「节点失败」错误详情；没有嵌套详情时还需借助 OpenRouter 供应商侧诊断。此修改只改善定位，不改变请求参数或自动切换模型。
+
+### v0.6.0 原始 LLM 语料实际入库补记（2026-10-05）
+
+此前的 18 条语料清单只有来源元数据，**没有下载或导入原文**；本次补齐了这一步。`scripts/import_llm_corpus.py` 是显式执行的导入器：按清单从 Springer、arXiv、Hugging Face 和 Microsoft 官方来源下载原文，检查 PDF／Markdown 类型和 25 MB 上限，记录 SHA-256、来源 URI、版权策略及导入任务；然后依次解析、切块、调用已配置的 OpenRouter Embedding 并发布 PostgreSQL 索引。导入器按指定任务原子认领，能够与运行中的后端 Worker 共存；同一内容再次执行会识别已发布版本，不重复写入索引。`auto_download: false` **仍然有效**，后端启动不会自动下载或注入语料。
+
+原文、Blob 和导入账本均保存在 `E:\codex\agent\data\knowledge\`，不提交 Git；本地账本为 `data/knowledge/corpus/llm-engineering-v1/import-ledger.json`。这意味着新机器克隆仓库后需要显式运行以下命令，不应把仅有 YAML 清单理解为知识库已填充：
+
+```powershell
+Set-Location E:\codex\agent
+$env:PYTHONPATH = 'E:\codex\agent\backend\src'
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\agent\.pycache'
+E:\conda_envs\langchain\python.exe scripts/import_llm_corpus.py --download
+E:\conda_envs\langchain\python.exe scripts/import_llm_corpus.py --ingest
+```
+
+也可以追加 `--source react` 等参数只处理指定来源。执行前先启动 PostgreSQL 并完成 Alembic 迁移；入库会调用外部 Embedding API，下载和索引只在显式运行命令时发生。由于部分论文仅用于本机私有索引，原始 PDF 和向量不会推送至公开仓库。
+
+本机验收：`llm-engineering-v1` 空间已发布清单中的 **18／18 份**原文（论文 12、官方 Markdown 6），共 **509 个可检索子块，509 个子块有向量**；全部文档和版本状态分别为 `active`、`ready`。通过实际 API 查询，RAG、LoRA、KV Cache、DeepSeek-V3、Continuous Batching 和 ReAct 问题的首个命中均为对应原文，决策为 `sufficient`，无向量／Rerank 降级。原有 `user-default` 空间及用户导入的 `python.md` 未被替换。导入时修复了 PDF 提取文本含 `NUL` 字符导致 PostgreSQL 拒绝写入的问题，并在原版本上重试成功；部分 PDF 的 pypdf 仍提示缺少可选 `fontTools` 字体解析依赖，个别复杂字体的文本保真度需后续逐页抽检。
+
+回归验证：E 盘 `langchain` 环境下后端 **224 passed**（1 条第三方弃用警告），Ruff 全量检查通过；实际检索通过运行中的 HTTP API 验证。语料来源检查和实际入库属于显式联网操作，不是离线单元测试的一部分。
+
+使用时在知识库页面选择 `llm-engineering-v1` 空间；直接调用 `knowledge_search` 工具时也可以传 `space: "llm-engineering-v1"`。当前 Agent 工具若不传 `space`，仍会使用 `.env` 中 `KNOWLEDGE_DEFAULT_SPACE` 指定的默认空间（目前为 `user-default`），不会自动跨空间检索或暗中把本语料加入每个研究任务。若希望 Agent 默认搜索这批原文，应由用户在 `.env` 中显式设置 `KNOWLEDGE_DEFAULT_SPACE=llm-engineering-v1` 并重启后端；不改动现有用户环境配置。
