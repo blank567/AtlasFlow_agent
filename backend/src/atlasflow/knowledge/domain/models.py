@@ -50,7 +50,7 @@ class JobStage(StrEnum):
 
 class KnowledgeSpace(FrozenModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
-    slug: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,62}$")
+    slug: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,62}$")  # 标识符
     name: str = Field(min_length=1, max_length=120)
     description: str = Field(default="", max_length=1000)
     visibility: Literal["private", "internal", "public"] = "private"
@@ -188,7 +188,9 @@ class KnowledgeFilter(FrozenModel):
 
 class PrincipalContext(FrozenModel):
     subject_id: str = "local-user"
-    roles: set[Literal["reader", "editor", "admin"]] = Field(default_factory=lambda: {"admin"})
+    roles: set[Literal["reader", "editor", "admin"]] = Field(
+        default_factory=lambda: {"admin"}
+    )
     allowed_space_ids: set[str] = Field(default_factory=set)
 
 
