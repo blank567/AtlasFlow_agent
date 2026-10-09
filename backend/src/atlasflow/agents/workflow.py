@@ -439,7 +439,7 @@ class ResearchWorkflow:
                 if isinstance(edited_plan, ResearchPlan)
                 else ResearchPlan.model_validate(edited_plan)
             )
-            self.validate_plan_capabilities(plan)
+            self.validate_plan_capabilities(plan, snapshot.values.get("policy"))
             serialized = plan.model_dump(mode="json")
         return await self._invoke(
             Command(resume={"action": action_value, "edited_plan": serialized}),
@@ -580,8 +580,11 @@ class ResearchWorkflow:
             stage.context += "\n运行限制（必须在报告中明确，不能声称缺失内容已核实）：\n" + "\n".join(state["warnings"])
         return stage
 
-    def _capability_catalog(self) -> list[dict[str, Any]]:
-        return self.tool_runtime.registry.capability_catalog() if self.tool_runtime else []
+    def _capability_catalog(self, policy: RunPolicy | None = None) -> list[dict[str, Any]]:
+        catalog = self.tool_runtime.registry.capability_catalog() if self.tool_runtime else []
+        if policy is not None and policy.knowledge_mode == "off":
+            return [item for item in catalog if item["id"] != "knowledge_search"]
+        return catalog
 
     def _tool_budget_empty(self, state: AgentState, extra: Sequence[ToolCallRecord] = ()) -> bool:
         return self.tool_runtime is not None and self.tool_runtime.budget.remaining(
@@ -589,8 +592,10 @@ class ResearchWorkflow:
             limit=state.get("policy", RunPolicy()).max_tool_calls_per_run,
         ) == 0
 
-    def validate_plan_capabilities(self, plan: ResearchPlan) -> None:
-        validate_task_capabilities(plan.tasks, self._capability_catalog())
+    def validate_plan_capabilities(
+        self, plan: ResearchPlan, policy: RunPolicy | None = None
+    ) -> None:
+        validate_task_capabilities(plan.tasks, self._capability_catalog(policy))
 
     async def _record_route(
         self,
@@ -806,10 +811,10 @@ class ResearchWorkflow:
                     tool_context=tool_stage.context,
                     plan_version=version,
                     policy=state.get("policy", RunPolicy()),
-                    capability_catalog=self._capability_catalog(),
+                    capability_catalog=self._capability_catalog(state.get("policy")),
                 )
             )
-            validate_task_capabilities(plan.tasks, self._capability_catalog())
+            validate_task_capabilities(plan.tasks, self._capability_catalog(state.get("policy")))
             if plan.plan_version != version:
                 raise ValueError(
                     f"Planner returned plan version {plan.plan_version}; expected {version}"
@@ -934,7 +939,7 @@ class ResearchWorkflow:
             if edited_payload is None:
                 raise ValueError("edited_plan is required for action='edit'")
             edited = ResearchPlan.model_validate(edited_payload)
-            validate_task_capabilities(edited.tasks, self._capability_catalog())
+            validate_task_capabilities(edited.tasks, self._capability_catalog(state.get("policy")))
             if edited.plan_version != plan.plan_version:
                 raise ValueError("an edited plan must preserve the current plan version")
             if not 2 <= len(edited.tasks) <= self.max_initial_tasks:
@@ -1367,11 +1372,13 @@ class ResearchWorkflow:
                     results,
                     tool_context=tool_stage.context,
                     context=context,
-                    capability_catalog=self._capability_catalog(),
+                    capability_catalog=self._capability_catalog(state.get("policy")),
                 )
             )
             decision.validate_for(context)
-            validate_task_capabilities(decision.supplemental_tasks, self._capability_catalog())
+            validate_task_capabilities(
+                decision.supplemental_tasks, self._capability_catalog(state.get("policy"))
+            )
             if decision.plan_version != plan.plan_version:
                 raise ValueError("Critic decision references the wrong plan version")
             update: dict[str, Any] = {

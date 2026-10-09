@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Annotated, Any, Self
+from typing import Annotated, Any, Literal, Self
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -58,11 +58,20 @@ class RunPolicy(ContractModel):
     max_tool_calls_per_turn: int = Field(default=5, ge=1, le=10)
     max_tool_calls_per_run: int = Field(default=20, ge=1, le=50)
     planner_allow_research: bool = False
+    # Older runs keep their configured default space; new UI runs choose off or selected.
+    knowledge_mode: Literal["default", "selected", "off"] = "default"
+    knowledge_space: str | None = Field(
+        default=None, pattern=r"^[a-z0-9][a-z0-9-]{1,62}$"
+    )
 
     @model_validator(mode="after")
     def validate_tool_budget(self) -> Self:
         if self.max_tool_calls_per_run < self.max_tool_calls_per_turn:
             raise ValueError("run tool budget must be at least the per-turn budget")
+        if self.knowledge_mode == "selected" and self.knowledge_space is None:
+            raise ValueError("selected knowledge mode requires knowledge_space")
+        if self.knowledge_mode != "selected" and self.knowledge_space is not None:
+            raise ValueError("knowledge_space is only valid for selected knowledge mode")
         return self
 
 

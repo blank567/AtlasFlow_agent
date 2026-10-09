@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import Response, StreamingResponse
 
 from atlasflow import __version__
+from atlasflow.agents.contracts import RunPolicy
 from atlasflow.bootstrap import Container
 from atlasflow.observability import (
     ObservabilityMeta,
@@ -42,6 +43,18 @@ router = APIRouter(prefix="/api/v1")
 
 def container_from(request: Request) -> Container:
     return request.app.state.container
+
+
+async def _validate_knowledge_space(request: Request, policy: RunPolicy) -> None:
+    if policy.knowledge_mode != "selected":
+        return
+    try:
+        await container_from(request).knowledge.get_space(policy.knowledge_space or "")
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"selected knowledge space does not exist: {policy.knowledge_space}",
+        ) from exc
 
 
 @router.get("/health")
@@ -86,6 +99,7 @@ async def ingest_document(
 
 @router.post("/runs", response_model=RunRecord, status_code=status.HTTP_202_ACCEPTED)
 async def create_run(payload: CreateRunRequest, request: Request) -> RunRecord:
+    await _validate_knowledge_space(request, payload.policy)
     return await container_from(request).run_service.create(
         payload.query,
         auto_approve=payload.auto_approve,
@@ -191,6 +205,8 @@ async def rerun(
 ) -> RunRecord:
     payload = payload or RerunRequest()
     try:
+        original = await container_from(request).store.get(run_id)
+        await _validate_knowledge_space(request, payload.policy or original.policy)
         return await container_from(request).run_service.rerun(
             run_id,
             query=payload.query,

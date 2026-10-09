@@ -73,6 +73,33 @@ def test_knowledge_api_starts_empty_and_explains_hybrid_search() -> None:
     assert after_archive.json()["decision"]["status"] == "insufficient"
 
 
+def test_knowledge_debug_search_validates_tuning_bounds() -> None:
+    with TestClient(
+        create_app(settings=make_test_settings(), container=make_test_container())
+    ) as client:
+        invalid = client.post(
+            "/api/v1/knowledge/search/debug",
+            json={
+                "space": "user-default",
+                "query": "hybrid retrieval",
+                "result_limit": 2,
+                "tuning": {"candidate_limit": 1, "rerank_limit": 1},
+            },
+        )
+        out_of_range = client.post(
+            "/api/v1/knowledge/search/debug",
+            json={
+                "space": "user-default",
+                "query": "hybrid retrieval",
+                "tuning": {"candidate_limit": 201},
+            },
+        )
+
+    assert invalid.status_code == 422
+    assert "result_limit" in invalid.json()["detail"]
+    assert out_of_range.status_code == 422
+
+
 def test_capability_catalog_and_invalid_approval_edit() -> None:
     with TestClient(
         create_app(settings=make_test_settings(), container=make_test_container())
@@ -171,6 +198,8 @@ def test_run_api_propagates_structured_policy_to_the_workflow() -> None:
             "max_tool_calls_per_turn": 5,
             "max_tool_calls_per_run": 20,
             "planner_allow_research": False,
+            "knowledge_mode": "default",
+            "knowledge_space": None,
         }
         final = _wait_for_status(
             client,
@@ -184,6 +213,8 @@ def test_run_api_propagates_structured_policy_to_the_workflow() -> None:
         "max_tool_calls_per_turn": 5,
         "max_tool_calls_per_run": 20,
         "planner_allow_research": False,
+        "knowledge_mode": "default",
+        "knowledge_space": None,
     }
     assert final["plan_lineage"]["base_plan"]["tasks"][0]["task_id"] == "p1-t1"
     assert len(final["plan_lineage"]["base_plan"]["tasks"]) == 2
@@ -198,6 +229,8 @@ def test_run_api_propagates_structured_policy_to_the_workflow() -> None:
         "max_tool_calls_per_turn": 5,
         "max_tool_calls_per_run": 20,
         "planner_allow_research": False,
+        "knowledge_mode": "default",
+        "knowledge_space": None,
     }
     assert gateway.review_contexts[-1].current_task_count == 3
     assert gateway.review_contexts[-1].expected_task_count == 3

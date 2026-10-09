@@ -18,6 +18,7 @@ from atlasflow.knowledge.domain import (
     KnowledgeFilter,
     KnowledgeSpace,
     PrincipalContext,
+    RetrievalTuning,
     SearchResult,
     VersionStatus,
 )
@@ -58,7 +59,9 @@ class KnowledgePlatform:
         await self.repository.initialize()
         await self.ensure_default_space()
         if self.worker_enabled and self._worker is None:
-            self._worker = asyncio.create_task(self._worker_loop(), name="knowledge-worker")
+            self._worker = asyncio.create_task(
+                self._worker_loop(), name="knowledge-worker"
+            )
 
     async def close(self) -> None:
         self._closed = True
@@ -144,7 +147,9 @@ class KnowledgePlatform:
                 )
             )
         versions = await self.repository.list_versions(document.id)
-        existing = next((item for item in versions if item.content_hash == normalized_hash), None)
+        existing = next(
+            (item for item in versions if item.content_hash == normalized_hash), None
+        )
         if existing:
             return await self.repository.create_job(
                 IngestionJob(
@@ -198,7 +203,9 @@ class KnowledgePlatform:
             await self.repository.update_job(job)
         try:
             return await self._process(job)
-        except Exception as exc:  # noqa: BLE001 - every stage failure must persist job state
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - every stage failure must persist job state
             latest = await self.repository.get_job(job.id) or job
             failed = latest.model_copy(
                 update={
@@ -226,7 +233,9 @@ class KnowledgePlatform:
         job = await self._stage(job, JobStage.EXTRACTING, 0.1)
         content = await self.blob_store.get(version.blob_key)
         job = await self._stage(job, JobStage.PARSING, 0.25)
-        blocks = await asyncio.to_thread(self.parsers.get(version.mime_type).parse, content)
+        blocks = await asyncio.to_thread(
+            self.parsers.get(version.mime_type).parse, content
+        )
         if not blocks:
             raise ValueError("document parser produced no usable blocks")
         generation = await self.repository.active_generation(space.id)
@@ -262,16 +271,21 @@ class KnowledgePlatform:
             )
         if len(vectors) != len(children):
             raise RuntimeError("embedding provider returned an unexpected vector count")
-        vector_index = {item.id: vector for item, vector in zip(children, vectors, strict=True)}
+        vector_index = {
+            item.id: vector for item, vector in zip(children, vectors, strict=True)
+        }
         chunks = [
-            item.model_copy(update={"embedding": vector_index.get(item.id)}) for item in chunks
+            item.model_copy(update={"embedding": vector_index.get(item.id)})
+            for item in chunks
         ]
         job = await self._stage(job, JobStage.INDEXING, 0.82)
         await self.repository.replace_chunks(version.id, chunks)
         job = await self._stage(job, JobStage.VALIDATING, 0.95)
         now = datetime.now(UTC)
         await self.repository.update_version(
-            version.model_copy(update={"status": VersionStatus.READY, "indexed_at": now})
+            version.model_copy(
+                update={"status": VersionStatus.READY, "indexed_at": now}
+            )
         )
         await self.repository.update_document(
             document.model_copy(
@@ -293,9 +307,15 @@ class KnowledgePlatform:
             )
         )
 
-    async def _stage(self, job: IngestionJob, stage: JobStage, progress: float) -> IngestionJob:
+    async def _stage(
+        self, job: IngestionJob, stage: JobStage, progress: float
+    ) -> IngestionJob:
         updated = job.model_copy(
-            update={"stage": stage, "progress": progress, "updated_at": datetime.now(UTC)}
+            update={
+                "stage": stage,
+                "progress": progress,
+                "updated_at": datetime.now(UTC),
+            }
         )
         await self.repository.update_job(updated)
         return updated
@@ -331,7 +351,10 @@ class KnowledgePlatform:
         document = (await self.get_document(document_id))[0]
         return await self.repository.update_document(
             document.model_copy(
-                update={"status": DocumentStatus.ARCHIVED, "updated_at": datetime.now(UTC)}
+                update={
+                    "status": DocumentStatus.ARCHIVED,
+                    "updated_at": datetime.now(UTC),
+                }
             )
         )
 
@@ -348,6 +371,7 @@ class KnowledgePlatform:
         space: str | None = None,
         filters: KnowledgeFilter | None = None,
         result_limit: int = 5,
+        tuning: RetrievalTuning | None = None,
         principal: PrincipalContext | None = None,
     ) -> SearchResult:
         return await self.retrieval.search(
@@ -355,6 +379,7 @@ class KnowledgePlatform:
             space=space or self.default_space,
             filters=filters,
             result_limit=result_limit,
+            tuning=tuning,
             principal=principal,
         )
 

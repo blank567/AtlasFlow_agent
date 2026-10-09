@@ -366,7 +366,7 @@ class RunService:
                 f"Run {run_id} is {run.status.value}; approval requires waiting_approval"
             )
         if request.edited_plan is not None:
-            self.workflow.validate_plan_capabilities(request.edited_plan)
+            self.workflow.validate_plan_capabilities(request.edited_plan, run.policy)
         await self.store.transition(
             run_id,
             RunStatus.RUNNING,

@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from atlasflow.knowledge.domain import KnowledgeFilter
+from atlasflow.knowledge.domain import KnowledgeFilter, RetrievalTuning
 
 
 class CreateSpaceRequest(BaseModel):
@@ -33,3 +33,4 @@ class KnowledgeSearchRequest(BaseModel):
     space: str | None = Field(default=None, max_length=100)
     filters: KnowledgeFilter | None = None
     result_limit: int = Field(default=5, ge=1, le=20)
+    tuning: RetrievalTuning | None = None

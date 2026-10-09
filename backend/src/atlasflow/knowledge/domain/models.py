@@ -171,6 +171,17 @@ class RetrievalProfile(FrozenModel):
     context_token_budget: int = Field(default=5000, ge=500, le=50000)
 
 
+class RetrievalTuning(FrozenModel):
+    """Request-scoped overrides for the retrieval lab; never mutates a space profile."""
+
+    lexical_weight: float | None = Field(default=None, ge=0, le=4)
+    vector_weight: float | None = Field(default=None, ge=0, le=4)
+    rrf_k: int | None = Field(default=None, ge=1, le=200)
+    candidate_limit: int | None = Field(default=None, ge=1, le=200)
+    rerank_limit: int | None = Field(default=None, ge=1, le=100)
+    rerank_enabled: bool | None = None
+
+
 class FilterValue(FrozenModel):
     in_values: list[str] = Field(default_factory=list, alias="in")
     contains_any: list[str] = Field(default_factory=list)
@@ -207,6 +218,8 @@ class RetrievalDecision(FrozenModel):
     reasons: list[str] = Field(default_factory=list)
     coverage: float = Field(ge=0, le=1)
     evidence_count: int = Field(ge=0)
+    best_relevance: float = Field(default=0, ge=0)
+    score_basis: Literal["rerank", "fusion"] = "fusion"
 
 
 class RetrievalTrace(FrozenModel):
@@ -215,7 +228,10 @@ class RetrievalTrace(FrozenModel):
     lexical_candidates: int = 0
     vector_candidates: int = 0
     fused_candidates: int = 0
+    rerank_candidates: int = 0
+    rerank_requested: bool = True
     rerank_applied: bool = False
+    applied_parameters: dict[str, float | int | bool] = Field(default_factory=dict)
     degraded: list[str] = Field(default_factory=list)
     duration_ms: int = 0
 

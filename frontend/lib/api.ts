@@ -10,6 +10,7 @@ import {
   KnowledgeDocument,
   KnowledgeJob,
   KnowledgeSearchResult,
+  KnowledgeSearchTuning,
   KnowledgeSpace,
 } from "./types";
 
@@ -246,6 +247,6 @@ export function archiveKnowledgeDocument(documentId: string) {
   return request<KnowledgeDocument>(`/knowledge/documents/${encodeURIComponent(documentId)}/archive`, { method: "POST" });
 }
 
-export function searchKnowledge(payload: { query: string; space?: string; result_limit?: number }) {
+export function searchKnowledge(payload: { query: string; space: string; result_limit: number; tuning: KnowledgeSearchTuning }) {
   return request<KnowledgeSearchResult>("/knowledge/search/debug", { method: "POST", body: JSON.stringify(payload) });
 }

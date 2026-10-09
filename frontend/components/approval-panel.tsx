@@ -60,7 +60,7 @@ export function ApprovalPanel({ run, onResolved }: { run: RunRecord; onResolved:
     <section className="approvalPanel">
       <div className="approvalHeading"><div><span className="attentionDot" /> <strong>Planner 计划等待审批</strong><p>检查任务目标、依赖和成功标准；提交后后端会再次校验 DAG。</p></div><span className="softBadge amber">Human-in-the-loop</span></div>
       {!plan ? <p className="formError">当前快照中没有可审批的计划。</p> : <>
-        {!!capabilities.length && <details><summary>查看能力目录与配置状态</summary><ul>{capabilities.map((item) => <li key={item.id}><code>{item.id}</code> · {item.description} · {item.available ? "可用" : "不可用"}{item.supports_fresh_data ? " · 支持获取新数据" : ""}{!item.available && `（${item.unavailable_reasons.join("；")}）`}</li>)}</ul></details>}
+        {!!capabilities.length && <details><summary>查看能力目录与配置状态</summary><ul>{capabilities.filter((item) => run.policy?.knowledge_mode !== "off" || item.id !== "knowledge_search").map((item) => <li key={item.id}><code>{item.id}</code> · {item.description} · {item.available ? "可用" : "不可用"}{item.supports_fresh_data ? " · 支持获取新数据" : ""}{!item.available && `（${item.unavailable_reasons.join("；")}）`}</li>)}</ul></details>}
         {catalogError && <p className="formHint">{catalogError}</p>}
         <div className="structuredTasks">
           {plan.tasks.map((task, index) => (

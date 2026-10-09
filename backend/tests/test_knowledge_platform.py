@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from atlasflow.knowledge.application import KnowledgePlatform
-from atlasflow.knowledge.domain import IngestionJob
+from atlasflow.knowledge.domain import IngestionJob, RetrievalTuning
 from atlasflow.knowledge.infrastructure import InMemoryKnowledgeRepository, MemoryBlobStore
 from atlasflow.knowledge.ingestion import ParserRegistry, StructuralChunker
 from atlasflow.knowledge.ingestion.parsers.pdf_parser import PdfDocumentParser
@@ -143,6 +145,101 @@ async def test_archived_document_stops_participating_in_retrieval() -> None:
     assert result.decision.status == "insufficient"
     assert result.hits == []
     await platform.close()
+
+
+@pytest.mark.asyncio
+async def test_retrieval_lab_tuning_is_request_scoped() -> None:
+    platform = make_platform()
+    await platform.start()
+    for index in range(3):
+        job = await platform.submit(
+            space="user-default",
+            title=f"RAG note {index}",
+            source_id=f"rag-note-{index}",
+            content=f"Hybrid retrieval combines lexical and vector evidence {index}.".encode(),
+            mime_type="text/plain",
+        )
+        await platform.process_job(job.id)
+
+    tuned = await platform.search(
+        "hybrid retrieval evidence",
+        result_limit=1,
+        tuning=RetrievalTuning(
+            candidate_limit=2,
+            rerank_limit=1,
+            lexical_weight=2,
+            vector_weight=0.5,
+            rrf_k=20,
+        ),
+    )
+    default = await platform.search("hybrid retrieval evidence")
+
+    assert tuned.trace.fused_candidates == 2
+    assert tuned.trace.rerank_candidates == 1
+    assert tuned.trace.rerank_applied is True
+    assert tuned.trace.applied_parameters["candidate_limit"] == 2
+    assert tuned.trace.applied_parameters["lexical_weight"] == 2
+    assert tuned.trace.profile_id.endswith("+experiment")
+    assert default.trace.applied_parameters["candidate_limit"] == 40
+    assert default.trace.profile_id == "default-hybrid-v1"
+    await platform.close()
+
+
+@pytest.mark.asyncio
+async def test_retrieval_lab_can_skip_rerank_and_reject_invalid_bounds() -> None:
+    platform = make_platform()
+    await platform.start()
+    job = await platform.submit(
+        space="user-default",
+        title="RAG note",
+        source_id="rag-note",
+        content=b"Hybrid retrieval combines lexical and vector evidence.",
+        mime_type="text/plain",
+    )
+    await platform.process_job(job.id)
+
+    result = await platform.search(
+        "hybrid retrieval",
+        result_limit=1,
+        tuning=RetrievalTuning(candidate_limit=1, rerank_enabled=False),
+    )
+    assert result.trace.rerank_requested is False
+    assert result.trace.rerank_candidates == 0
+    assert result.trace.rerank_applied is False
+    assert result.trace.degraded == []
+    assert result.trace.fused_candidates == 1
+    assert result.decision.score_basis == "fusion"
+    assert result.decision.best_relevance > 0
+
+    with pytest.raises(ValueError, match="cannot both be zero"):
+        await platform.search(
+            "hybrid retrieval",
+            tuning=RetrievalTuning(lexical_weight=0, vector_weight=0),
+        )
+    await platform.close()
+
+
+@pytest.mark.asyncio
+async def test_retrieval_weights_change_rrf_order() -> None:
+    service = make_platform().retrieval
+    chunks = [SimpleNamespace(id="lexical"), SimpleNamespace(id="vector")]
+    lexical_rank = {"lexical": 1, "vector": 2}
+    vector_rank = {"lexical": 2, "vector": 1}
+    lexical_first = await service._fuse(
+        chunks,
+        lexical_rank,
+        vector_rank,
+        service.profile.model_copy(update={"lexical_weight": 2, "vector_weight": 0}),
+    )
+    vector_first = await service._fuse(
+        chunks,
+        lexical_rank,
+        vector_rank,
+        service.profile.model_copy(update={"lexical_weight": 0, "vector_weight": 2}),
+    )
+
+    assert lexical_first["lexical"] > lexical_first["vector"]
+    assert vector_first["vector"] > vector_first["lexical"]
 
 
 @pytest.mark.asyncio

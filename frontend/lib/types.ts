@@ -10,6 +10,8 @@ export type RunStatus =
 
 export type RunPolicy = {
   planner_allow_research?: boolean;
+  knowledge_mode?: "default" | "selected" | "off";
+  knowledge_space?: string | null;
   initial_task_count?: number | null;
   required_supplement_rounds?: number;
   supplement_task_count?: number | null;
@@ -339,7 +341,7 @@ export type KnowledgeJob = {
 
 export type KnowledgeSearchResult = {
   query: string;
-  decision: { status: "sufficient" | "partial" | "insufficient"; reasons: string[]; coverage: number; evidence_count: number };
+  decision: { status: "sufficient" | "partial" | "insufficient"; reasons: string[]; coverage: number; evidence_count: number; best_relevance: number; score_basis: "rerank" | "fusion" };
   hits: Array<{
     chunk: { id: string; title: string; content: string; heading_path: string[]; page_number?: number | null; metadata: Record<string, unknown> };
     lexical_score: number;
@@ -347,5 +349,14 @@ export type KnowledgeSearchResult = {
     fusion_score: number;
     rerank_score?: number | null;
   }>;
-  trace: { profile_id: string; generation_id?: string | null; lexical_candidates: number; vector_candidates: number; fused_candidates: number; rerank_applied: boolean; degraded: string[]; duration_ms: number };
+  trace: { profile_id: string; generation_id?: string | null; lexical_candidates: number; vector_candidates: number; fused_candidates: number; rerank_candidates: number; rerank_requested: boolean; rerank_applied: boolean; applied_parameters: Record<string, number | boolean>; degraded: string[]; duration_ms: number };
+};
+
+export type KnowledgeSearchTuning = {
+  lexical_weight: number;
+  vector_weight: number;
+  rrf_k: number;
+  candidate_limit: number;
+  rerank_limit: number;
+  rerank_enabled: boolean;
 };

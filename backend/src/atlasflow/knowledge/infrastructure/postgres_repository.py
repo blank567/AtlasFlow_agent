@@ -4,7 +4,17 @@ from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Column, DateTime, MetaData, String, Table, Text, delete, select, update
+from sqlalchemy import (
+    Column,
+    DateTime,
+    MetaData,
+    String,
+    Table,
+    Text,
+    delete,
+    select,
+    update,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -112,7 +122,10 @@ class PostgresKnowledgeRepository:
 
     async def create_space(self, value: KnowledgeSpace) -> KnowledgeSpace:
         await self._insert(
-            spaces, value, slug=value.slug, active_generation_id=value.active_generation_id
+            spaces,
+            value,
+            slug=value.slug,
+            active_generation_id=value.active_generation_id,
         )
         return value
 
@@ -164,7 +177,9 @@ class PostgresKnowledgeRepository:
     async def get_document(self, document_id: str) -> KnowledgeDocument | None:
         return await self._get(documents, document_id, KnowledgeDocument)
 
-    async def find_document(self, space_id: str, source_id: str) -> KnowledgeDocument | None:
+    async def find_document(
+        self, space_id: str, source_id: str
+    ) -> KnowledgeDocument | None:
         async with self.engine.connect() as connection:
             row = (
                 await connection.execute(
@@ -177,14 +192,24 @@ class PostgresKnowledgeRepository:
         return KnowledgeDocument.model_validate(row.payload) if row else None
 
     async def list_documents(self, space_id: str) -> list[KnowledgeDocument]:
-        return await self._list(documents, KnowledgeDocument, documents.c.space_id == space_id)
+        return await self._list(
+            documents, KnowledgeDocument, documents.c.space_id == space_id
+        )
 
     async def purge_document(self, document_id: str) -> None:
         async with self.engine.begin() as connection:
-            await connection.execute(delete(chunks).where(chunks.c.document_id == document_id))
-            await connection.execute(delete(jobs).where(jobs.c.document_id == document_id))
-            await connection.execute(delete(versions).where(versions.c.document_id == document_id))
-            await connection.execute(delete(documents).where(documents.c.id == document_id))
+            await connection.execute(
+                delete(chunks).where(chunks.c.document_id == document_id)
+            )
+            await connection.execute(
+                delete(jobs).where(jobs.c.document_id == document_id)
+            )
+            await connection.execute(
+                delete(versions).where(versions.c.document_id == document_id)
+            )
+            await connection.execute(
+                delete(documents).where(documents.c.id == document_id)
+            )
 
     async def create_version(self, value: DocumentVersion) -> DocumentVersion:
         await self._insert(
@@ -203,11 +228,15 @@ class PostgresKnowledgeRepository:
         return await self._get(versions, version_id, DocumentVersion)
 
     async def list_versions(self, document_id: str) -> list[DocumentVersion]:
-        values = await self._list(versions, DocumentVersion, versions.c.document_id == document_id)
+        values = await self._list(
+            versions, DocumentVersion, versions.c.document_id == document_id
+        )
         return sorted(values, key=lambda item: item.version_number)
 
     async def create_generation(self, value: IndexGeneration) -> IndexGeneration:
-        await self._insert(generations, value, space_id=value.space_id, status=value.status)
+        await self._insert(
+            generations, value, space_id=value.space_id, status=value.status
+        )
         return value
 
     async def get_generation(self, generation_id: str) -> IndexGeneration | None:
@@ -229,7 +258,8 @@ class PostgresKnowledgeRepository:
         previous = await self._list(
             generations,
             IndexGeneration,
-            (generations.c.space_id == selected.space_id) & (generations.c.status == "active"),
+            (generations.c.space_id == selected.space_id)
+            & (generations.c.status == "active"),
         )
         for item in previous:
             await self._update(
@@ -243,13 +273,19 @@ class PostgresKnowledgeRepository:
         if not space:
             raise RuntimeError("generation references missing space")
         await self.update_space(
-            space.model_copy(update={"active_generation_id": active.id, "updated_at": now})
+            space.model_copy(
+                update={"active_generation_id": active.id, "updated_at": now}
+            )
         )
         return active
 
-    async def replace_chunks(self, version_id: str, values: list[KnowledgeChunk]) -> None:
+    async def replace_chunks(
+        self, version_id: str, values: list[KnowledgeChunk]
+    ) -> None:
         async with self.engine.begin() as connection:
-            await connection.execute(delete(chunks).where(chunks.c.version_id == version_id))
+            await connection.execute(
+                delete(chunks).where(chunks.c.version_id == version_id)
+            )
             if values:
                 await connection.execute(
                     chunks.insert(),
@@ -263,7 +299,9 @@ class PostgresKnowledgeRepository:
                             "content": item.content,
                             "lexical_text": item.lexical_text,
                             "embedding": item.embedding,
-                            "payload": item.model_dump(mode="json", exclude={"embedding"}),
+                            "payload": item.model_dump(
+                                mode="json", exclude={"embedding"}
+                            ),
                             "created_at": item.created_at,
                         }
                         for item in values
@@ -276,7 +314,9 @@ class PostgresKnowledgeRepository:
         async with self.engine.connect() as connection:
             rows = (
                 await connection.execute(
-                    select(chunks.c.payload, chunks.c.embedding).where(chunks.c.id.in_(chunk_ids))
+                    select(chunks.c.payload, chunks.c.embedding).where(
+                        chunks.c.id.in_(chunk_ids)
+                    )
                 )
             ).all()
         return [_chunk_from_row(row) for row in rows]
@@ -362,7 +402,9 @@ class PostgresKnowledgeRepository:
             await connection.execute(
                 update(jobs)
                 .where(jobs.c.id == claimed.id)
-                .values(payload=claimed.model_dump(mode="json"), status=claimed.status.value)
+                .values(
+                    payload=claimed.model_dump(mode="json"), status=claimed.status.value
+                )
             )
             return claimed
 
@@ -393,16 +435,22 @@ class PostgresKnowledgeRepository:
     async def _get(self, table: Table, value_id: str, model: type[T]) -> T | None:
         async with self.engine.connect() as connection:
             row = (
-                await connection.execute(select(table.c.payload).where(table.c.id == value_id))
+                await connection.execute(
+                    select(table.c.payload).where(table.c.id == value_id)
+                )
             ).first()
         return model.model_validate(row.payload) if row else None  # type: ignore[attr-defined,no-any-return]
 
-    async def _list(self, table: Table, model: type[T], condition: Any = None) -> list[T]:
+    async def _list(
+        self, table: Table, model: type[T], condition: Any = None
+    ) -> list[T]:
         statement = select(table.c.payload)
         if condition is not None:
             statement = statement.where(condition)
         async with self.engine.connect() as connection:
-            rows = (await connection.execute(statement.order_by(table.c.created_at))).all()
+            rows = (
+                await connection.execute(statement.order_by(table.c.created_at))
+            ).all()
         return [model.model_validate(row.payload) for row in rows]  # type: ignore[attr-defined,no-any-return]
 
 

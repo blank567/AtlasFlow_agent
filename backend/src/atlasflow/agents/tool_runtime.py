@@ -106,6 +106,9 @@ class ToolRuntime:
         turn_limit = min(policy.max_tool_calls_per_turn, role_limit)
         available = self.registry.available_for(agent)
         catalog = {item["id"]: item for item in self.registry.capability_catalog(agent)}
+        if policy.knowledge_mode == "off":
+            available = [item for item in available if item["name"] != "knowledge_search"]
+            catalog.pop("knowledge_search", None)
         unavailable = [
             cap
             for cap in required_capabilities
@@ -127,17 +130,24 @@ class ToolRuntime:
         if not available:
             return ToolStageResult(context=self._context(prior_evidence, prior_calls))
 
-        definitions = [
-            {
-                "type": "function",
-                "function": {
-                    "name": item["name"],
-                    "description": item["description"],
-                    "parameters": item["arguments_schema"],
-                },
-            }
-            for item in available
-        ]
+        definitions = []
+        for item in available:
+            parameters = item["arguments_schema"]
+            if item["name"] == "knowledge_search":
+                # A Run chooses its space. Do not ask the model to invent a slug.
+                properties = dict(parameters.get("properties", {}))
+                properties.pop("space", None)
+                parameters = {**parameters, "properties": properties}
+            definitions.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": item["name"],
+                        "description": item["description"],
+                        "parameters": parameters,
+                    },
+                }
+            )
         previous_context = self._context(prior_evidence, prior_calls)
         messages: list[dict[str, Any]] = [
             {
@@ -333,6 +343,12 @@ class ToolRuntime:
                 except (TypeError, ValueError) as exc:
                     argument_error = str(exc)
                 context = ToolContext(run_id=run_id, agent_name=agent, user_query=user_query)
+                if name == "knowledge_search" and argument_error is None:
+                    if policy.knowledge_mode == "selected":
+                        arguments["space"] = policy.knowledge_space
+                    elif policy.knowledge_mode == "default":
+                        # Legacy runs use the configured default, never a model-made alias.
+                        arguments.pop("space", None)
                 if name not in {item["function"]["name"] for item in definitions}:
                     argument_error = "TOOL_NOT_AVAILABLE: 工具不存在、未配置或当前 Agent 没有权限；请使用本轮提供的工具"
                 elif argument_error:

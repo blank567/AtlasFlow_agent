@@ -1,16 +1,19 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createRun } from "../lib/api";
+import { createRun, listKnowledgeSpaces } from "../lib/api";
 import { POLICY_PRESETS, PolicyPreset } from "../lib/presets";
-import { RunPolicy } from "../lib/types";
+import { KnowledgeSpace, RunPolicy } from "../lib/types";
 
 export function CreateRunForm() {
   const router = useRouter();
   const [query, setQuery] = useState("分析 Planner–Researcher–Critic 多 Agent 架构的优势、风险与适用场景");
   const [preset, setPreset] = useState<PolicyPreset>("standard");
   const [autoApprove, setAutoApprove] = useState(true);
+  const [knowledgeSpace, setKnowledgeSpace] = useState("");
+  const [knowledgeSpaces, setKnowledgeSpaces] = useState<KnowledgeSpace[]>([]);
+  const [spaceError, setSpaceError] = useState<string | null>(null);
   const [advanced, setAdvanced] = useState(false);
   const [customPolicy, setCustomPolicy] = useState<RunPolicy>({
     initial_task_count: 2,
@@ -28,6 +31,14 @@ export function CreateRunForm() {
     [customPolicy, preset],
   );
 
+  useEffect(() => {
+    let active = true;
+    listKnowledgeSpaces()
+      .then((spaces) => { if (active) setKnowledgeSpaces(spaces); })
+      .catch(() => { if (active) setSpaceError("知识空间列表暂不可用；仍可选择不使用知识库。"); });
+    return () => { active = false; };
+  }, []);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -38,7 +49,12 @@ export function CreateRunForm() {
       return;
     }
     try {
-      const run = await createRun({ query: query.trim(), auto_approve: autoApprove, policy });
+      const runPolicy: RunPolicy = {
+        ...policy,
+        knowledge_mode: knowledgeSpace ? "selected" : "off",
+        knowledge_space: knowledgeSpace || null,
+      };
+      const run = await createRun({ query: query.trim(), auto_approve: autoApprove, policy: runPolicy });
       router.push(`/runs/${run.id}`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "任务创建失败");
@@ -69,6 +85,16 @@ export function CreateRunForm() {
           </label>
         </div>
       </fieldset>
+
+      <label className="field fieldWide">
+        <span>本次研究的知识空间</span>
+        <select value={knowledgeSpace} onChange={(event) => setKnowledgeSpace(event.target.value)}>
+          <option value="">不使用知识库</option>
+          {knowledgeSpaces.map((space) => <option key={space.id} value={space.slug}>{space.name} · {space.slug}</option>)}
+        </select>
+        <small>选择后仅在该空间检索；Agent 不会自行改为 default 或其他空间。运行开始后不可更改。</small>
+        {spaceError && <small className="formHint">{spaceError}</small>}
+      </label>
 
       <button className="advancedToggle" type="button" onClick={() => setAdvanced((value) => !value)} aria-expanded={advanced}>
         <span>高级 RunPolicy</span><span>{advanced ? "收起 −" : "展开 +"}</span>

@@ -143,9 +143,12 @@ async def search(payload: KnowledgeSearchRequest, request: Request):
             space=payload.space,
             filters=payload.filters,
             result_limit=payload.result_limit,
+            tuning=payload.tuning,
             principal=PrincipalContext(),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

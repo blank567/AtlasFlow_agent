@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "jieba": "^1.0.0"
+  }
+}

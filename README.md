@@ -1529,3 +1529,27 @@ E:\conda_envs\langchain\python.exe scripts/import_llm_corpus.py --ingest
 回归验证：E 盘 `langchain` 环境下后端 **224 passed**（1 条第三方弃用警告），Ruff 全量检查通过；实际检索通过运行中的 HTTP API 验证。语料来源检查和实际入库属于显式联网操作，不是离线单元测试的一部分。
 
 使用时在知识库页面选择 `llm-engineering-v1` 空间；直接调用 `knowledge_search` 工具时也可以传 `space: "llm-engineering-v1"`。当前 Agent 工具若不传 `space`，仍会使用 `.env` 中 `KNOWLEDGE_DEFAULT_SPACE` 指定的默认空间（目前为 `user-default`），不会自动跨空间检索或暗中把本语料加入每个研究任务。若希望 Agent 默认搜索这批原文，应由用户在 `.env` 中显式设置 `KNOWLEDGE_DEFAULT_SPACE=llm-engineering-v1` 并重启后端；不改动现有用户环境配置。
+
+### v0.6.0 每次 Run 选择知识空间补记（2026-10-08）
+
+针对模型把不存在的 `space="default"` 传给 `knowledge_search`、省略空间后又误搜 `user-default/python.md` 的问题，新增 Run 级知识库策略。创建研究页现在可选“**不使用知识库**”（新页面默认）或某个实际存在的知识空间；运行详情显示本次选择。选择只对新 Run 生效，历史 Run 与当前执行中的计划不会被改写。知识库页面的检索实验台仍独立选择空间。
+
+- `RunPolicy.knowledge_mode` 支持 `off`、`selected`、`default`；`selected` 必须同时提供 `knowledge_space`，后端在创建/重新运行前验证空间存在。旧 API 调用与历史记录缺少新字段时仍按 `default` 兼容，不破坏已有用法。
+- `off` 时 Planner/Critic 的能力目录不包含 `knowledge_search`，工具阶段也不向模型提供该工具；即使模型违规返回工具名，也会在执行前拒绝。`selected` 时工具阶段从 RunPolicy 强制写入所选空间，并从模型可见参数中移除 `space`，避免模型自行编造空间名。兼容模式 `default` 忽略模型传入的空间别名，始终使用 `.env` 的默认空间。
+- `knowledge_search` 成功记录现在提供简短结果摘要，不再在前端只显示“无结果摘要”；摘要不替代 Evidence 和来源明细。空间选择不会强制使用 RAG：任务是否需要 `knowledge_search` 仍由 Planner 判断，工具执行需符合能力契约与预算。
+
+本次没有修改 `.env` 或已有知识库数据。验证：后端 **230 passed**、Ruff 通过、前端 `typecheck` 通过；新增测试覆盖关闭知识库、锁定选定空间、纠正 `default` 别名和不存在空间的 API 校验。更新前后端后，在创建研究页选 `llm-engineering-v1` 即可只检索该空间；若完全不需要 RAG，保持“不使用知识库”。
+
+### v0.6.0 本机环境配置整理补记（2026-10-08）
+
+本机 `.env` 已按当前代码读取的配置项整理，保留原有 LLM、Embedding、Rerank、LangSmith 和高德 Key，不记录或提交其值。将旧的 `DATABASE_URL` 原值迁移为知识库实际读取的 `KNOWLEDGE_DATABASE_URL`；Run/事件仍使用 `DATABASE_PATH=E:/codex/agent/data/atlasflow.sqlite3`，知识库文件和工作目录也显式位于 E 盘。删除未被当前运行路径读取的 `APP_ENV`、`LOG_LEVEL`、`REDIS_URL`、`MAX_AGENT_ITERATIONS`、`RAG_TOP_K`，以及空置的搜索模型与搜索 Key；搜索继续按现有逻辑复用主模型与 Key。
+
+已确认 PostgreSQL 中存在 `llm-engineering-v1`，因此本机 `KNOWLEDGE_DEFAULT_SPACE` 设为该空间，供未显式选择空间的旧 API/Studio Run 使用；网页新 Run 的空间选择或“不使用知识库”优先于该默认值。`.env.example` 同步补充了参数分组、隐私提示与存储路径说明。修改 `.env` 后需要重启后端；这次只验证了配置解析及知识空间连接，未发起付费模型或工具调用。
+
+### v0.6.0 检索实验台与单次 RAG 调参补记（2026-10-08）
+
+知识库“检索实验台”调整为选择空间、提出问题、设定参数、观察阶段结果的流程；知识空间选择在知识库页面间保留，文档页可直接进入检索实验台。可调返回片段数、融合候选数、关键词/语义相对权重、是否重排、重排候选数及 RRF 常数。页面在参数或问题修改后明确提示旧结果尚未刷新，展示双路召回、融合、重排和最终返回的数量，以及原文片段和各项分数。分数条各自按本指标归一显示，不能把 BM25、向量、RRF、Rerank 数值直接横向比较。
+
+`POST /api/v1/knowledge/search/debug` 新增可选的 `tuning` 对象，兼容未传参数的旧请求；参数只作用于该次检索，不修改空间索引或 Agent 的默认检索配置。后端现在真正应用 `candidate_limit`，可跳过 Rerank，并在 Trace 中返回生效参数、重排候选数和降级信息；对越界值及相互矛盾的上限返回 422。关闭或失败重排时，充分性判断使用归一化融合分，避免直接把未归一的 RRF 分数与重排阈值比较。候选上限是在召回和打分之后应用的，当前仍会扫描该空间可检索的分块；它主要控制进入重排与最终返回的规模，并非向量索引层的性能开关。
+
+回归验证：E 盘 `langchain` 环境下后端 **234 passed**（1 条第三方弃用警告），Ruff、前端 TypeScript、现有 UI 静态检查和 CSS 解析通过。当前 Windows 环境中的 Next.js 生产构建长时间停留在编译阶段、无进一步输出，已主动停止；尚未完成浏览器可视化验收或真实 OpenRouter 调用。

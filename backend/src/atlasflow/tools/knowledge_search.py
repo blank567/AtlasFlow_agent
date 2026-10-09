@@ -75,6 +75,7 @@ class KnowledgeSearchTool(BaseTool):
             data={
                 "query": arguments.query,
                 "matches": len(evidence),
+                "summary": f"检索到 {len(evidence)} 条知识库证据；判定：{result.decision.status}",
                 "decision": result.decision.model_dump(mode="json"),
                 "trace": result.trace.model_dump(mode="json"),
             },

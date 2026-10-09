@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from time import perf_counter
+from typing import Literal
 
 from atlasflow.knowledge.domain import (
     KnowledgeFilter,
@@ -9,6 +10,7 @@ from atlasflow.knowledge.domain import (
     RetrievalHit,
     RetrievalProfile,
     RetrievalTrace,
+    RetrievalTuning,
     SearchResult,
 )
 from atlasflow.knowledge.ports.repository import KnowledgeRepository
@@ -43,10 +45,36 @@ class RetrievalService:
         space: str,
         filters: KnowledgeFilter | None = None,
         result_limit: int | None = None,
+        tuning: RetrievalTuning | None = None,
         principal: PrincipalContext | None = None,
     ) -> SearchResult:
         started = perf_counter()
         principal = principal or PrincipalContext()
+        overrides = tuning.model_dump(exclude_none=True) if tuning else {}
+        rerank_enabled = bool(overrides.pop("rerank_enabled", True))
+        profile = RetrievalProfile.model_validate(
+            {
+                **self.profile.model_dump(),
+                **overrides,
+                "id": f"{self.profile.id}+experiment" if tuning and tuning.model_fields_set else self.profile.id,
+            }
+        )
+        limit = min(result_limit or profile.result_limit, 20)
+        if profile.lexical_weight == 0 and profile.vector_weight == 0:
+            raise ValueError("lexical_weight and vector_weight cannot both be zero")
+        if rerank_enabled and profile.rerank_limit > profile.candidate_limit:
+            raise ValueError("rerank_limit cannot exceed candidate_limit")
+        if limit > (profile.rerank_limit if rerank_enabled else profile.candidate_limit):
+            raise ValueError("result_limit exceeds the available candidate limit")
+        applied_parameters: dict[str, float | int | bool] = {
+            "lexical_weight": profile.lexical_weight,
+            "vector_weight": profile.vector_weight,
+            "rrf_k": profile.rrf_k,
+            "candidate_limit": profile.candidate_limit,
+            "rerank_limit": profile.rerank_limit,
+            "rerank_enabled": rerank_enabled,
+            "result_limit": limit,
+        }
         query = await self.query_pipeline.normalize(query)
         selected_space = await self.repository.get_space(space)
         if selected_space is None:
@@ -55,7 +83,6 @@ class RetrievalService:
             raise PermissionError("knowledge space is not available to this principal")
         generation = await self.repository.active_generation(selected_space.id)
         chunks = await self.repository.list_searchable_chunks(selected_space.id, filters)
-        limit = min(result_limit or self.profile.result_limit, 20)
         if not chunks:
             return SearchResult(
                 query=query,
@@ -67,8 +94,10 @@ class RetrievalService:
                 ),
                 applied_filters=filters,
                 trace=RetrievalTrace(
-                    profile_id=self.profile.id,
+                    profile_id=profile.id,
                     generation_id=generation.id if generation else None,
+                    rerank_requested=rerank_enabled,
+                    applied_parameters=applied_parameters,
                     duration_ms=int((perf_counter() - started) * 1000),
                 ),
             )
@@ -82,17 +111,19 @@ class RetrievalService:
             degraded.append(f"vector_unavailable:{type(exc).__name__}")
         lexical_rank = ranks(lexical_scores)
         vector_rank = ranks(vector_scores)
-        fused = await self._fuse(chunks, lexical_rank, vector_rank)
-        candidates = sorted(chunks, key=lambda item: (-fused[item.id], item.id))[
-            : self.profile.rerank_limit
+        fused = await self._fuse(chunks, lexical_rank, vector_rank, profile)
+        candidate_pool = sorted(chunks, key=lambda item: (-fused[item.id], item.id))[
+            : profile.candidate_limit
         ]
+        candidates = candidate_pool[: profile.rerank_limit] if rerank_enabled else candidate_pool
         rerank_applied = False
         rerank_scores: dict[str, float] = {}
-        try:
-            rerank_scores = await self._rerank(query, candidates)
-            rerank_applied = bool(rerank_scores)
-        except Exception as exc:  # noqa: BLE001 - reranking is an optional enhancement
-            degraded.append(f"rerank_unavailable:{type(exc).__name__}")
+        if rerank_enabled and candidates:
+            try:
+                rerank_scores = await self._rerank(query, candidates, profile)
+                rerank_applied = bool(rerank_scores)
+            except Exception as exc:  # noqa: BLE001 - reranking is an optional enhancement
+                degraded.append(f"rerank_unavailable:{type(exc).__name__}")
         ordered = sorted(
             candidates,
             key=lambda item: (
@@ -111,26 +142,33 @@ class RetrievalService:
             for item in ordered
         ]
         hits = await self.assembler.assemble(raw_hits, limit=limit)
-        best = max(
+        fusion_ceiling = (profile.lexical_weight + profile.vector_weight) / (profile.rrf_k + 1)
+        scored_hits = [
             (
-                hit.rerank_score if hit.rerank_score is not None else hit.fusion_score
-                for hit in hits
-            ),
-            default=0,
-        )
-        decision = await self._decide(hits, best, limit)
+                hit.rerank_score,
+                "rerank",
+            )
+            if hit.rerank_score is not None
+            else (min(1.0, max(0.0, hit.fusion_score / fusion_ceiling)), "fusion")
+            for hit in hits
+        ]
+        best, score_basis = max(scored_hits, key=lambda item: item[0], default=(0.0, "fusion"))
+        decision = await self._decide(hits, best, limit, profile, score_basis)
         return SearchResult(
             query=query,
             decision=decision,
             hits=hits,
             applied_filters=filters,
             trace=RetrievalTrace(
-                profile_id=self.profile.id,
+                profile_id=profile.id,
                 generation_id=generation.id if generation else None,
-                lexical_candidates=len(lexical_scores),
-                vector_candidates=len(vector_scores),
-                fused_candidates=len(candidates),
+                lexical_candidates=sum(score > 0 for score in lexical_scores.values()),
+                vector_candidates=sum(score > 0 for score in vector_scores.values()),
+                fused_candidates=len(candidate_pool),
+                rerank_candidates=len(candidates) if rerank_enabled else 0,
+                rerank_requested=rerank_enabled,
                 rerank_applied=rerank_applied,
+                applied_parameters=applied_parameters,
                 degraded=degraded,
                 duration_ms=int((perf_counter() - started) * 1000),
             ),
@@ -148,20 +186,26 @@ class RetrievalService:
 
     @traced(name="knowledge.fusion.rrf")
     async def _fuse(
-        self, chunks: list, lexical_rank: dict[str, int], vector_rank: dict[str, int]
+        self,
+        chunks: list,
+        lexical_rank: dict[str, int],
+        vector_rank: dict[str, int],
+        profile: RetrievalProfile,
     ) -> dict[str, float]:
         return {
-            item.id: self.profile.lexical_weight / (self.profile.rrf_k + lexical_rank[item.id])
-            + self.profile.vector_weight / (self.profile.rrf_k + vector_rank[item.id])
+            item.id: profile.lexical_weight / (profile.rrf_k + lexical_rank[item.id])
+            + profile.vector_weight / (profile.rrf_k + vector_rank[item.id])
             for item in chunks
         }
 
     @traced(name="knowledge.rerank")
-    async def _rerank(self, query: str, candidates: list) -> dict[str, float]:
+    async def _rerank(
+        self, query: str, candidates: list, profile: RetrievalProfile
+    ) -> dict[str, float]:
         rows = await self.rerank_provider.rerank(
             query,
             [item.content for item in candidates],
-            top_n=min(len(candidates), self.profile.rerank_limit),
+            top_n=min(len(candidates), profile.rerank_limit),
         )
         scores: dict[str, float] = {}
         used: set[int] = set()
@@ -172,8 +216,15 @@ class RetrievalService:
         return scores
 
     @traced(name="knowledge.retrieval.decision")
-    async def _decide(self, hits: list[RetrievalHit], best: float, limit: int) -> RetrievalDecision:
-        if not hits or best < self.profile.min_relevance:
+    async def _decide(
+        self,
+        hits: list[RetrievalHit],
+        best: float,
+        limit: int,
+        profile: RetrievalProfile,
+        score_basis: Literal["rerank", "fusion"],
+    ) -> RetrievalDecision:
+        if not hits or best < profile.min_relevance:
             status = "insufficient"
             reasons = ["最高相关度低于当前未校准阈值"]
         elif len(hits) == 1:
@@ -187,4 +238,6 @@ class RetrievalService:
             reasons=reasons,
             coverage=min(1.0, len(hits) / max(limit, 1)),
             evidence_count=len(hits),
+            best_relevance=best,
+            score_basis=score_basis,
         )
