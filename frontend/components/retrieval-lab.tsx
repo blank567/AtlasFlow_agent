@@ -187,7 +187,7 @@ function SearchResults({ snapshot, stale }: { snapshot: SearchSnapshot; stale: b
       return <article className="ragHit" key={hit.chunk.id}>
         <div className="ragHitHeading"><span className="ragHitRank">{String(index + 1).padStart(2, "0")}</span><div><strong>{hit.chunk.title}</strong><small>{location || "原文片段"}</small></div>{sourceUrl && <a href={sourceUrl} target="_blank" rel="noopener noreferrer">查看来源</a>}</div>
         <p className="ragHitPreview">{hit.chunk.content}</p>
-        <details className="ragHitExpand"><summary>展开完整片段</summary><p>{hit.chunk.content}</p></details>
+        <details className="ragHitExpand"><summary>查看命中原文{hit.context_excerpt ? "与邻近上下文" : ""}</summary><p>{hit.chunk.content}</p>{hit.context_excerpt && <><strong>邻近上下文（仅辅助理解，不作为独立引用）</strong><p>{hit.context_excerpt}</p></>}</details>
         <div className="ragScoreRows">{scoreRows.map((row) => <div key={row.kind}><span>{row.label}</span><i><b className={row.kind} style={{ width: `${Math.max(0, Math.min(100, row.value / row.max * 100))}%` }} /></i><em>{score(row.value)}</em></div>)}</div>
       </article>;
     })}</div>}

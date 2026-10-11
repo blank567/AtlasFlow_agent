@@ -1553,3 +1553,64 @@ E:\conda_envs\langchain\python.exe scripts/import_llm_corpus.py --ingest
 `POST /api/v1/knowledge/search/debug` 新增可选的 `tuning` 对象，兼容未传参数的旧请求；参数只作用于该次检索，不修改空间索引或 Agent 的默认检索配置。后端现在真正应用 `candidate_limit`，可跳过 Rerank，并在 Trace 中返回生效参数、重排候选数和降级信息；对越界值及相互矛盾的上限返回 422。关闭或失败重排时，充分性判断使用归一化融合分，避免直接把未归一的 RRF 分数与重排阈值比较。候选上限是在召回和打分之后应用的，当前仍会扫描该空间可检索的分块；它主要控制进入重排与最终返回的规模，并非向量索引层的性能开关。
 
 回归验证：E 盘 `langchain` 环境下后端 **234 passed**（1 条第三方弃用警告），Ruff、前端 TypeScript、现有 UI 静态检查和 CSS 解析通过。当前 Windows 环境中的 Next.js 生产构建长时间停留在编译阶段、无进一步输出，已主动停止；尚未完成浏览器可视化验收或真实 OpenRouter 调用。
+
+### v0.6.0 RAG 解析与父子切块统一补记（2026-10-11）
+
+PDF、Markdown、HTML、TXT 现使用统一的解析块来源定位与有上限的父子切块规则；长段落继续拆分，PDF 父块不再跨页。检索结果保留实际命中的 child，仅附加有界邻近上下文。解析器／切块器版本升级为 v2；历史索引不自动改写。`scripts/reindex_knowledge.py` 默认只预览，显式 `--enqueue` 后由 Worker 重建；成功后才切换发布版本。重建会调用 Embedding API，可能产生费用。前后差异、迁移命令和验收清单如下：
+
+本文记录管线从 `structured-parser-v1`／`parent-child-v1` 到 v2 的变化。适用于 PDF、Markdown、HTML 和 TXT；升级代码不会自动改写已发布的索引。
+
+#### 前后变化
+
+| 环节 | 旧版 | 本版 |
+| --- | --- | --- |
+| 文本预处理 | PDF 单独删除 NUL | 四种格式共用换行及 NUL 规范化；不删除参考文献或正文词语 |
+| 来源定位 | PDF 有页码，其余格式缺少源位置 | PDF 有页码及页内字符范围，MD/HTML 有行范围，TXT 有全文字符范围；全部有块顺序号 |
+| 父块组织 | 按标题路径全局聚合，重复标题可能混合前后内容，PDF 也可能跨页 | 按原文顺序成组；遇到标题或 PDF 页边界就断开 |
+| 长段落 | 只在解析块之间切分，单个长块可超过上限 | 超长块继续拆分；默认 parent ≤ 1200、child ≤ 350 个估算 token |
+| 父子关系 | 检索到 child 后，用整个 parent 替换返回正文 | child 仍用于打分、定位和引用；`parent_id` 保留，仅附加最多 500 token 邻近上下文 |
+| 版本去重 | 同一 SHA-256 原文跳过重建，即使规则已升级 | 去重检查发布版本的解析器和切块器版本；旧文档可显式重建 |
+
+#### 执行流程与代码
+
+`ParserRegistry` 选择格式解析器 → 统一的 `ParsedBlock`（正文、类型、标题路径、顺序、源位置）→ `StructuralChunker` 按章节和页顺序分组 → 超长块继续拆分 → 有界 parent 和其内的 child → child 执行 Embedding、双路检索与重排 → `ContextAssembler` 保留 child，只补充有界上下文。
+
+这仍是父子切块：parent 与 child 都持久化，每个 child 的 `parent_id` 指向包含它的 parent，只有 child 建立可检索向量；需要上下文时再从其 parent 按命中位置截取。改变的是**返回证据不再把 child 替换为 parent**。PDF 目前不推断标题层级，而是按页、段落及长度切块。
+
+- `backend/src/atlasflow/knowledge/ingestion/parsers/`：各格式解析及共用规范化。
+- `backend/src/atlasflow/knowledge/ingestion/chunker.py`：顺序分组、硬上限、父子关联、`source_spans`。
+- `backend/src/atlasflow/knowledge/retrieval/context_assembler.py`：邻近上下文，不替换 child。
+- `backend/src/atlasflow/knowledge/application/platform.py`：版本化摄取、同原文去重和显式重建。
+- `backend/src/atlasflow/tools/knowledge_search.py`：Evidence 仍来自 child；上下文只是辅助元数据。
+
+`token_count` 用项目内正则估算，不是具体模型的 tokenizer。上限保证估算值；需要严格模型窗口时，应另接相应 tokenizer。`source_spans.block_char_start/end` 指原 `ParsedBlock.text` 内字符范围；PDF 的 `source_char_start/end` 是页内位置，TXT 是全文位置。字符范围不是 PDF 坐标。扫描 PDF、复杂字体、表格、页眉页脚及参考文献仍需抽检，本版不静默删除这些内容。
+
+#### 旧索引重建
+
+旧索引仍可检索，但原有分块边界不会随代码自动变化。先启动 PostgreSQL 与后端，再在 E 盘 `langchain` 环境预览某个知识空间：
+
+```powershell
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+E:\conda_envs\langchain\python.exe scripts/reindex_knowledge.py --space llm-engineering-v1
+```
+
+确认后显式排队：
+
+```powershell
+E:\conda_envs\langchain\python.exe scripts/reindex_knowledge.py --space llm-engineering-v1 --enqueue
+```
+
+对其他空间重复指定 `--space`。默认预览只调用 GET；`--enqueue` 创建新版本和 Job，后台 Worker 才会重新解析、切块并调用 Embedding API，可能产生费用。新版本成功后才更新 `current_version_id`；失败时旧版继续发布。脚本不下载、覆盖或删除原文，也不主动执行排队 Job。单篇可用 `POST /api/v1/knowledge/documents/{document_id}/reindex`。
+
+重新上传同一原文不再仅因 SHA-256 相同而跳过 v1→v2；已有同原文 v2 任务排队或运行时会复用该任务。历史版本和 Blob 继续保留，因此重建后版本与 Chunk 总数可能增加。检查实际生效版本应看文档 `current_version_id` 对应的 `parser_version`、`chunker_version`、`status`，不能只看表中是否存在 v2 Chunk。
+
+#### 验收
+
+1. PDF、MD、HTML、TXT 的长内容均产出有上限的 child/parent 和可追溯 `source_spans`；PDF parent 不跨页。
+2. 检索实验台返回的原文、分数和页码来自 child；邻近上下文只能辅助理解，不作为独立引用。
+3. 重建排队期间旧版仍可检索；成功后生效版本为 `structured-parser-v2`／`parent-child-v2`。
+
+离线回归位于 `backend/tests/test_knowledge_platform.py`；真实 PDF 的公式、字体和表格保真度仍需人工抽检。
+

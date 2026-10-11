@@ -3,21 +3,24 @@ from __future__ import annotations
 import re
 
 from atlasflow.knowledge.domain import ParsedBlock
+from atlasflow.knowledge.ingestion.parsers.common import normalize_extracted_text
 
 
 class MarkdownParser:
     mime_types = ("text/markdown", "text/x-markdown")
 
     def parse(self, content: bytes) -> list[ParsedBlock]:
-        lines = content.decode("utf-8-sig").splitlines()
+        lines = normalize_extracted_text(content.decode("utf-8-sig")).splitlines()
         blocks: list[ParsedBlock] = []
         headings: list[str] = []
         buffer: list[str] = []
         block_type = "paragraph"
         in_code = False
+        buffer_start = 0
+        buffer_end = 0
 
         def flush() -> None:
-            nonlocal buffer, block_type
+            nonlocal buffer, block_type, buffer_start, buffer_end
             text = "\n".join(buffer).strip()
             if text:
                 blocks.append(
@@ -26,25 +29,35 @@ class MarkdownParser:
                         text=text,
                         heading_path=list(headings),
                         order=len(blocks),
+                        source_locator={"line_start": buffer_start, "line_end": buffer_end},
                     )
                 )
             buffer = []
             block_type = "paragraph"
+            buffer_start = 0
+            buffer_end = 0
 
-        for line in lines:
+        def append(line: str, line_number: int) -> None:
+            nonlocal buffer_start, buffer_end
+            if not buffer:
+                buffer_start = line_number
+            buffer_end = line_number
+            buffer.append(line)
+
+        for line_number, line in enumerate(lines, 1):
             if line.startswith("```"):
                 if in_code:
-                    buffer.append(line)
+                    append(line, line_number)
                     flush()
                     in_code = False
                 else:
                     flush()
                     in_code = True
                     block_type = "code"
-                    buffer.append(line)
+                    append(line, line_number)
                 continue
             if in_code:
-                buffer.append(line)
+                append(line, line_number)
                 continue
             heading = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
             if heading:
@@ -59,6 +72,7 @@ class MarkdownParser:
                         text=title,
                         heading_path=list(headings),
                         order=len(blocks),
+                        source_locator={"line_start": line_number, "line_end": line_number},
                     )
                 )
                 continue
@@ -77,6 +91,6 @@ class MarkdownParser:
                 if buffer and block_type != "table":
                     flush()
                 block_type = "table"
-            buffer.append(line)
+            append(line, line_number)
         flush()
         return blocks

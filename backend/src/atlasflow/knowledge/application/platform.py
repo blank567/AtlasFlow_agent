@@ -22,6 +22,7 @@ from atlasflow.knowledge.domain import (
     SearchResult,
     VersionStatus,
 )
+from atlasflow.knowledge.domain.models import CURRENT_CHUNKER_VERSION, CURRENT_PARSER_VERSION
 from atlasflow.knowledge.ingestion import ParserRegistry, StructuralChunker
 from atlasflow.knowledge.ports import BlobStore, KnowledgeRepository
 from atlasflow.knowledge.retrieval import RetrievalService
@@ -147,20 +148,46 @@ class KnowledgePlatform:
                 )
             )
         versions = await self.repository.list_versions(document.id)
-        existing = next(
-            (item for item in versions if item.content_hash == normalized_hash), None
+        current = next(
+            (item for item in versions if item.id == document.current_version_id), None
         )
-        if existing:
+        if (
+            current
+            and current.content_hash == normalized_hash
+            and current.status == VersionStatus.READY
+            and self._uses_current_pipeline(current)
+        ):
             return await self.repository.create_job(
                 IngestionJob(
                     space_id=selected_space.id,
                     document_id=document.id,
-                    version_id=existing.id,
+                    version_id=current.id,
                     status=JobStatus.COMPLETED,
                     stage=JobStage.READY,
                     progress=1,
                 )
             )
+        pending = next(
+            (
+                item for item in reversed(versions)
+                if item.content_hash == normalized_hash
+                and self._uses_current_pipeline(item)
+                and item.status in {VersionStatus.PENDING, VersionStatus.PROCESSING}
+            ),
+            None,
+        )
+        if pending:
+            jobs = await self.repository.list_jobs(selected_space.id)
+            existing_job = next(
+                (
+                    job for job in jobs
+                    if job.version_id == pending.id
+                    and job.status in {JobStatus.QUEUED, JobStatus.RUNNING}
+                ),
+                None,
+            )
+            if existing_job:
+                return existing_job
         version_id = str(uuid4())
         suffix = _suffix_for(mime_type)
         blob_key = f"{selected_space.id}/{document.id}/{version_id}/source{suffix}"
@@ -186,6 +213,65 @@ class KnowledgePlatform:
             )
         )
 
+    @staticmethod
+    def _uses_current_pipeline(version: DocumentVersion) -> bool:
+        return (
+            version.parser_version == CURRENT_PARSER_VERSION
+            and version.chunker_version == CURRENT_CHUNKER_VERSION
+        )
+
+    async def reindex_document(self, document_id: str) -> IngestionJob:
+        """Queue a new index version from the published source without changing it in place."""
+        document, versions = await self.get_document(document_id)
+        if document.status != DocumentStatus.ACTIVE:
+            raise ValueError("archived documents cannot be reindexed")
+        current = next(
+            (item for item in versions if item.id == document.current_version_id), None
+        )
+        if current is None or current.status != VersionStatus.READY:
+            raise ValueError("document has no published source version to reindex")
+        if self._uses_current_pipeline(current):
+            raise ValueError("document already uses the current parsing and chunking pipeline")
+        pending = next(
+            (
+                item for item in reversed(versions)
+                if item.content_hash == current.content_hash
+                and self._uses_current_pipeline(item)
+                and item.status in {VersionStatus.PENDING, VersionStatus.PROCESSING}
+            ),
+            None,
+        )
+        if pending:
+            jobs = await self.repository.list_jobs(document.space_id)
+            existing_job = next(
+                (job for job in jobs if job.version_id == pending.id), None
+            )
+            if existing_job:
+                return existing_job
+        source = await self.blob_store.get(current.blob_key)
+        if sha256(source).hexdigest() != current.content_hash:
+            raise ValueError("published source blob does not match its stored hash")
+        version = await self.repository.create_version(
+            DocumentVersion(
+                document_id=document.id,
+                version_number=max(item.version_number for item in versions) + 1,
+                content_hash=current.content_hash,
+                blob_key=current.blob_key,
+                mime_type=current.mime_type,
+                byte_size=current.byte_size,
+                source_updated_at=current.source_updated_at,
+                rights=current.rights,
+                provenance=current.provenance,
+            )
+        )
+        return await self.repository.create_job(
+            IngestionJob(
+                space_id=document.space_id,
+                document_id=document.id,
+                version_id=version.id,
+            )
+        )
+
     async def process_job(self, job_id: str) -> IngestionJob:
         job = await self.repository.get_job(job_id)
         if not job:
@@ -203,9 +289,7 @@ class KnowledgePlatform:
             await self.repository.update_job(job)
         try:
             return await self._process(job)
-        except (
-            Exception
-        ) as exc:  # noqa: BLE001 - every stage failure must persist job state
+        except Exception as exc:  # noqa: BLE001 - every stage failure must persist job state
             latest = await self.repository.get_job(job.id) or job
             failed = latest.model_copy(
                 update={

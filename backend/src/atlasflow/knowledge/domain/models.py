@@ -7,6 +7,9 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+CURRENT_PARSER_VERSION = "structured-parser-v2"
+CURRENT_CHUNKER_VERSION = "parent-child-v2"
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -84,8 +87,8 @@ class DocumentVersion(FrozenModel):
     byte_size: int = Field(ge=0)
     status: VersionStatus = VersionStatus.PENDING
     source_updated_at: datetime | None = None
-    parser_version: str = "structured-parser-v1"
-    chunker_version: str = "parent-child-v1"
+    parser_version: str = CURRENT_PARSER_VERSION
+    chunker_version: str = CURRENT_CHUNKER_VERSION
     rights: dict[str, Any] = Field(default_factory=dict)
     provenance: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utc_now)
@@ -207,6 +210,7 @@ class PrincipalContext(FrozenModel):
 
 class RetrievalHit(FrozenModel):
     chunk: KnowledgeChunk
+    context_excerpt: str | None = None
     lexical_score: float = 0.0
     vector_score: float = 0.0
     fusion_score: float = 0.0

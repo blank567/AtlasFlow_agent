@@ -66,6 +66,7 @@ class KnowledgeSearchTool(BaseTool):
                     "vector_score": hit.vector_score,
                     "fusion_score": hit.fusion_score,
                     "rerank_score": hit.rerank_score,
+                    "context_excerpt": hit.context_excerpt,
                 },
             )
             for hit in result.hits

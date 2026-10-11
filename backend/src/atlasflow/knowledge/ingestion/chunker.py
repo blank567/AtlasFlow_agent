@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
 from uuid import uuid4
 
 from atlasflow.knowledge.domain import KnowledgeChunk, ParsedBlock
@@ -24,6 +23,8 @@ def lexicalize(text: str) -> str:
 
 class StructuralChunker:
     def __init__(self, *, child_tokens: int = 350, parent_tokens: int = 1200) -> None:
+        if child_tokens < 1 or parent_tokens < child_tokens:
+            raise ValueError("chunk limits must satisfy 1 <= child_tokens <= parent_tokens")
         self.child_tokens = child_tokens
         self.parent_tokens = parent_tokens
 
@@ -37,14 +38,14 @@ class StructuralChunker:
         title: str,
         metadata: dict[str, object],
     ) -> list[KnowledgeChunk]:
-        groups: dict[tuple[str, ...], list[ParsedBlock]] = defaultdict(list)
-        for block in blocks:
-            if block.block_type != "heading":
-                groups[tuple(block.heading_path)].append(block)
         chunks: list[KnowledgeChunk] = []
-        for heading_path, section in groups.items():
-            for parent_blocks in self._split_blocks(section, self.parent_tokens):
-                parent_content = self._render(parent_blocks, heading_path)
+        for heading_path, section in self._ordered_sections(blocks):
+            prefix_tokens = estimate_tokens(" > ".join(heading_path))
+            include_prefix = bool(heading_path) and prefix_tokens < self.child_tokens
+            parent_body_limit = self.parent_tokens - prefix_tokens if include_prefix else self.parent_tokens
+            child_body_limit = self.child_tokens - prefix_tokens if include_prefix else self.child_tokens
+            for parent_blocks in self._split_blocks(section, parent_body_limit):
+                parent_content = self._render(parent_blocks, heading_path, include_prefix)
                 if not parent_content.strip():
                     continue
                 parent_id = str(uuid4())
@@ -62,8 +63,8 @@ class StructuralChunker:
                     metadata=metadata,
                 )
                 chunks.append(parent)
-                for child_blocks in self._split_blocks(parent_blocks, self.child_tokens):
-                    content = self._render(child_blocks, heading_path)
+                for child_blocks in self._split_blocks(parent_blocks, child_body_limit):
+                    content = self._render(child_blocks, heading_path, include_prefix)
                     chunks.append(
                         self._make_chunk(
                             chunk_id=str(uuid4()),
@@ -82,27 +83,79 @@ class StructuralChunker:
         return chunks
 
     @staticmethod
-    def _split_blocks(blocks: list[ParsedBlock], limit: int) -> list[list[ParsedBlock]]:
+    def _ordered_sections(
+        blocks: list[ParsedBlock],
+    ) -> list[tuple[tuple[str, ...], list[ParsedBlock]]]:
+        sections: list[tuple[tuple[str, ...], list[ParsedBlock]]] = []
+        current: list[ParsedBlock] = []
+        current_key: tuple[tuple[str, ...], int | None] | None = None
+        for block in blocks:
+            if block.block_type == "heading":
+                if current and current_key is not None:
+                    sections.append((current_key[0], current))
+                current = []
+                current_key = None
+                continue
+            key = (tuple(block.heading_path), block.page_number)
+            if current and key != current_key and current_key is not None:
+                sections.append((current_key[0], current))
+                current = []
+            current_key = key
+            current.append(block)
+        if current and current_key is not None:
+            sections.append((current_key[0], current))
+        return sections
+
+    @classmethod
+    def _split_blocks(cls, blocks: list[ParsedBlock], limit: int) -> list[list[ParsedBlock]]:
         groups: list[list[ParsedBlock]] = []
         current: list[ParsedBlock] = []
         count = 0
         for block in blocks:
-            size = estimate_tokens(block.text)
-            if current and count + size > limit:
-                groups.append(current)
-                current = []
-                count = 0
-            current.append(block)
-            count += size
+            for fragment in cls._split_block(block, limit):
+                size = estimate_tokens(fragment.text)
+                if current and count + size > limit:
+                    groups.append(current)
+                    current = []
+                    count = 0
+                current.append(fragment)
+                count += size
         if current:
             groups.append(current)
         return groups
 
     @staticmethod
-    def _render(blocks: list[ParsedBlock], heading_path: tuple[str, ...]) -> str:
+    def _split_block(block: ParsedBlock, limit: int) -> list[ParsedBlock]:
+        matches = list(TOKEN_PATTERN.finditer(block.text))
+        if not matches:
+            return []
+        fragments: list[ParsedBlock] = []
+        base_offset = int(block.source_locator.get("block_char_start", 0))
+        for first in range(0, len(matches), limit):
+            last = min(first + limit, len(matches))
+            start = matches[first].start()
+            end = matches[last - 1].end()
+            fragments.append(
+                block.model_copy(
+                    update={
+                        "text": block.text[start:end],
+                        "source_locator": {
+                            **block.source_locator,
+                            "block_char_start": base_offset + start,
+                            "block_char_end": base_offset + end,
+                        },
+                    }
+                )
+            )
+        return fragments
+
+    @staticmethod
+    def _render(
+        blocks: list[ParsedBlock], heading_path: tuple[str, ...], include_prefix: bool
+    ) -> str:
         prefix = " > ".join(heading_path)
         body = "\n\n".join(block.text for block in blocks)
-        return f"{prefix}\n\n{body}" if prefix else body
+        return f"{prefix}\n\n{body}" if include_prefix else body
 
     @staticmethod
     def _make_chunk(
@@ -136,5 +189,11 @@ class StructuralChunker:
             page_number=min(pages) if pages else None,
             block_start=min(orders) if orders else None,
             block_end=max(orders) if orders else None,
-            metadata=dict(metadata),
+            metadata={
+                **metadata,
+                "source_spans": [
+                    {"order": item.order, **item.source_locator}
+                    for item in blocks
+                ],
+            },
         )

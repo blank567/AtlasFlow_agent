@@ -4,11 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 from atlasflow.knowledge.application import KnowledgePlatform
-from atlasflow.knowledge.domain import IngestionJob, RetrievalTuning
+from atlasflow.knowledge.domain import IngestionJob, RetrievalHit, RetrievalTuning
 from atlasflow.knowledge.infrastructure import InMemoryKnowledgeRepository, MemoryBlobStore
 from atlasflow.knowledge.ingestion import ParserRegistry, StructuralChunker
 from atlasflow.knowledge.ingestion.parsers.pdf_parser import PdfDocumentParser
 from atlasflow.knowledge.retrieval import RetrievalService
+from atlasflow.knowledge.retrieval.context_assembler import ContextAssembler
 
 from backend.tests.fakes import FakeEmbeddingProvider, FakeRerankProvider
 
@@ -72,6 +73,141 @@ def test_pdf_parser_removes_postgres_incompatible_nul(monkeypatch: pytest.Monkey
     ]
 
 
+@pytest.mark.parametrize(
+    ("mime_type", "content"),
+    [
+        ("text/plain", ("token " * 170).encode()),
+        ("text/markdown", ("# Long section\n\n" + "token " * 170).encode()),
+        ("text/html", ("<h1>Long section</h1><p>" + "token " * 170 + "</p>").encode()),
+    ],
+)
+def test_all_text_formats_obey_hard_chunk_limits_and_keep_source_spans(
+    mime_type: str, content: bytes
+) -> None:
+    blocks = ParserRegistry().get(mime_type).parse(content)
+    chunks = StructuralChunker(child_tokens=20, parent_tokens=45).chunk(
+        blocks,
+        document_id="document",
+        version_id="version",
+        generation_id="generation",
+        title="Long source",
+        metadata={},
+    )
+
+    parents = {chunk.id: chunk for chunk in chunks if chunk.chunk_kind == "parent"}
+    children = [chunk for chunk in chunks if chunk.chunk_kind == "child"]
+
+    assert parents and children
+    assert all(chunk.token_count <= 45 for chunk in parents.values())
+    assert all(chunk.token_count <= 20 for chunk in children)
+    assert all(chunk.parent_id in parents for chunk in children)
+    assert all(chunk.metadata["source_spans"] for chunk in chunks)
+    assert all("block_char_start" in chunk.metadata["source_spans"][0] for chunk in chunks)
+
+
+def test_pdf_chunks_keep_page_boundaries_and_hard_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Page:
+        def __init__(self, number: int) -> None:
+            self.number = number
+
+        def extract_text(self) -> str:
+            return f"Page {self.number} " + "word " * 100
+
+    class Reader:
+        def __init__(self) -> None:
+            self.pages = [Page(1), Page(2)]
+
+    monkeypatch.setattr("pypdf.PdfReader", lambda stream: Reader())
+    blocks = PdfDocumentParser().parse(b"%PDF-test")
+    chunks = StructuralChunker(child_tokens=20, parent_tokens=45).chunk(
+        blocks,
+        document_id="document",
+        version_id="version",
+        generation_id="generation",
+        title="PDF",
+        metadata={},
+    )
+
+    assert {chunk.page_number for chunk in chunks} == {1, 2}
+    assert all(chunk.token_count <= (20 if chunk.chunk_kind == "child" else 45) for chunk in chunks)
+    assert all(
+        {span["page_number"] for span in chunk.metadata["source_spans"]} == {chunk.page_number}
+        for chunk in chunks
+    )
+
+
+def test_long_heading_stays_in_metadata_without_breaking_parent_budget() -> None:
+    heading = " ".join(["heading"] * 35)
+    content = f"# {heading}\n\n" + "body " * 50
+    chunks = StructuralChunker(child_tokens=20, parent_tokens=45).chunk(
+        ParserRegistry().get("text/markdown").parse(content.encode()),
+        document_id="document",
+        version_id="version",
+        generation_id="generation",
+        title="Long heading",
+        metadata={},
+    )
+
+    assert chunks
+    assert all(chunk.heading_path == [heading] for chunk in chunks)
+    assert all(chunk.token_count <= (20 if chunk.chunk_kind == "child" else 45) for chunk in chunks)
+
+
+@pytest.mark.asyncio
+async def test_context_assembler_preserves_child_and_limits_parent_neighborhood() -> None:
+    repository = InMemoryKnowledgeRepository()
+    chunks = StructuralChunker(child_tokens=20, parent_tokens=80).chunk(
+        ParserRegistry().get("text/plain").parse(("word " * 70).encode()),
+        document_id="document",
+        version_id="version",
+        generation_id="generation",
+        title="Source",
+        metadata={},
+    )
+    await repository.replace_chunks("version", chunks)
+    child = next(chunk for chunk in chunks if chunk.chunk_kind == "child")
+    hit = RetrievalHit(chunk=child, fusion_score=0.5)
+
+    assembled = await ContextAssembler(repository, context_tokens=30).assemble([hit], limit=1)
+
+    assert assembled[0].chunk.id == child.id
+    assert assembled[0].chunk.chunk_kind == "child"
+    assert assembled[0].context_excerpt is not None
+    assert assembled[0].context_excerpt.count("word") <= 30
+
+
+@pytest.mark.asyncio
+async def test_context_uses_child_source_span_when_identical_text_repeats() -> None:
+    repository = InMemoryKnowledgeRepository()
+    content = "\n\n".join(
+        [" ".join(["repeat"] * 20), " ".join(["middle"] * 30),
+         " ".join(["repeat"] * 20), " ".join(["tail"] * 30)]
+    )
+    chunks = StructuralChunker(child_tokens=20, parent_tokens=120).chunk(
+        ParserRegistry().get("text/plain").parse(content.encode()),
+        document_id="document",
+        version_id="version",
+        generation_id="generation",
+        title="Repeated source",
+        metadata={},
+    )
+    await repository.replace_chunks("version", chunks)
+    repeated = [
+        chunk for chunk in chunks
+        if chunk.chunk_kind == "child"
+        and set(chunk.content.split()) == {"repeat"}
+    ]
+    assert len(repeated) == 2
+
+    hit = RetrievalHit(chunk=repeated[1])
+    assembled = await ContextAssembler(repository, context_tokens=26).assemble([hit], limit=1)
+
+    assert assembled[0].context_excerpt is not None
+    assert "tail" in assembled[0].context_excerpt
+
+
 @pytest.mark.asyncio
 async def test_claim_specific_job_does_not_take_another_document() -> None:
     repository = InMemoryKnowledgeRepository()
@@ -121,6 +257,76 @@ async def test_versioned_ingestion_deduplicates_and_searches_with_source_locatio
     assert result.hits
     assert result.hits[0].chunk.heading_path == ["Hybrid"]
     assert result.hits[0].chunk.metadata["canonical_uri"] == "https://example.test/hybrid"
+    await platform.close()
+
+
+@pytest.mark.asyncio
+async def test_reindex_creates_new_pipeline_version_and_keeps_old_until_ready() -> None:
+    platform = make_platform()
+    await platform.start()
+    original = await platform.submit(
+        space="user-default",
+        title="Legacy source",
+        source_id="legacy-source",
+        content=b"old source text with keyword",
+        mime_type="text/plain",
+    )
+    await platform.process_job(original.id)
+    old_version = await platform.repository.get_version(original.version_id)
+    assert old_version is not None
+    await platform.repository.update_version(
+        old_version.model_copy(
+            update={"parser_version": "structured-parser-v1", "chunker_version": "parent-child-v1"}
+        )
+    )
+    queued = await platform.reindex_document(original.document_id)
+    repeated = await platform.reindex_document(original.document_id)
+    document, versions = await platform.get_document(original.document_id)
+
+    assert queued.id == repeated.id
+    assert queued.status == "queued"
+    assert document.current_version_id == original.version_id
+    assert len(versions) == 2
+    assert versions[0].blob_key == versions[1].blob_key
+    assert versions[1].parser_version == "structured-parser-v2"
+    assert (await platform.search("keyword")).hits[0].chunk.version_id == original.version_id
+
+    completed = await platform.process_job(queued.id)
+    document, _ = await platform.get_document(original.document_id)
+    assert completed.status == "completed"
+    assert document.current_version_id == queued.version_id
+    assert (await platform.search("keyword")).hits[0].chunk.version_id == queued.version_id
+    await platform.close()
+
+
+@pytest.mark.asyncio
+async def test_same_hash_upload_reindexes_legacy_version_instead_of_skipping() -> None:
+    platform = make_platform()
+    await platform.start()
+    first = await platform.submit(
+        space="user-default",
+        title="Legacy source",
+        source_id="legacy-source",
+        content=b"legacy original",
+        mime_type="text/plain",
+    )
+    await platform.process_job(first.id)
+    version = await platform.repository.get_version(first.version_id)
+    assert version is not None
+    await platform.repository.update_version(
+        version.model_copy(update={"parser_version": "structured-parser-v1"})
+    )
+
+    second = await platform.submit(
+        space="user-default",
+        title="Legacy source",
+        source_id="legacy-source",
+        content=b"legacy original",
+        mime_type="text/plain",
+    )
+
+    assert second.status == "queued"
+    assert second.version_id != first.version_id
     await platform.close()
 
 

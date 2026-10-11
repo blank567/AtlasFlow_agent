@@ -344,6 +344,7 @@ export type KnowledgeSearchResult = {
   decision: { status: "sufficient" | "partial" | "insufficient"; reasons: string[]; coverage: number; evidence_count: number; best_relevance: number; score_basis: "rerank" | "fusion" };
   hits: Array<{
     chunk: { id: string; title: string; content: string; heading_path: string[]; page_number?: number | null; metadata: Record<string, unknown> };
+    context_excerpt?: string | null;
     lexical_score: number;
     vector_score: number;
     fusion_score: number;

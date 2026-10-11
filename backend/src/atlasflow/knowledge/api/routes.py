@@ -108,6 +108,16 @@ async def archive_document(document_id: str, request: Request):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.post("/documents/{document_id}/reindex", status_code=status.HTTP_202_ACCEPTED)
+async def reindex_document(document_id: str, request: Request):
+    try:
+        return await platform(request).reindex_document(document_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/jobs")
 async def list_jobs(request: Request, space: str | None = None):
     try:

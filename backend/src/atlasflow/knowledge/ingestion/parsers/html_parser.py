@@ -4,6 +4,7 @@ from html.parser import HTMLParser
 from typing import ClassVar
 
 from atlasflow.knowledge.domain import ParsedBlock
+from atlasflow.knowledge.ingestion.parsers.common import normalize_extracted_text
 
 
 class _VisibleHTMLParser(HTMLParser):
@@ -27,7 +28,8 @@ class _VisibleHTMLParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.current_tag: str | None = None
         self.current: list[str] = []
-        self.rows: list[tuple[str, str]] = []
+        self.rows: list[tuple[str, str, int, int]] = []
+        self.current_line = 0
         self.skip_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -36,6 +38,7 @@ class _VisibleHTMLParser(HTMLParser):
         if not self.skip_depth and tag in self.BLOCKS:
             self._flush()
             self.current_tag = tag
+            self.current_line = self.getpos()[0]
 
     def handle_endtag(self, tag: str) -> None:
         if tag in {"script", "style", "noscript"} and self.skip_depth:
@@ -48,9 +51,10 @@ class _VisibleHTMLParser(HTMLParser):
             self.current.append(data)
 
     def _flush(self) -> None:
-        text = " ".join(" ".join(self.current).split())
+        raw = "".join(self.current)
+        text = raw.strip() if self.current_tag in {"pre", "code"} else " ".join(raw.split())
         if self.current_tag and text:
-            self.rows.append((self.current_tag, text))
+            self.rows.append((self.current_tag, text, self.current_line, self.getpos()[0]))
         self.current = []
         self.current_tag = None
 
@@ -60,11 +64,11 @@ class HtmlDocumentParser:
 
     def parse(self, content: bytes) -> list[ParsedBlock]:
         parser = _VisibleHTMLParser()
-        parser.feed(content.decode("utf-8-sig", errors="replace"))
+        parser.feed(normalize_extracted_text(content.decode("utf-8-sig", errors="replace")))
         parser._flush()
         headings: list[str] = []
         blocks: list[ParsedBlock] = []
-        for tag, text in parser.rows:
+        for tag, text, line_start, line_end in parser.rows:
             if tag.startswith("h") and tag[1:].isdigit():
                 level = int(tag[1:])
                 headings[:] = headings[: level - 1]
@@ -86,6 +90,7 @@ class HtmlDocumentParser:
                     text=text,
                     heading_path=list(headings),
                     order=len(blocks),
+                    source_locator={"line_start": line_start, "line_end": line_end},
                 )
             )
         return blocks
