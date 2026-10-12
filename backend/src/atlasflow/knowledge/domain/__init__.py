@@ -9,6 +9,7 @@ from atlasflow.knowledge.domain.models import (
     KnowledgeDocument,
     KnowledgeFilter,
     KnowledgeSpace,
+    KnowledgeSpaceVersion,
     ParsedBlock,
     PrincipalContext,
     RetrievalDecision,
@@ -18,6 +19,8 @@ from atlasflow.knowledge.domain.models import (
     RetrievalTuning,
     SearchResult,
     SourceLocator,
+    SpaceBuild,
+    SpaceDocumentState,
     VersionStatus,
 )
 
@@ -32,6 +35,7 @@ __all__ = [
     "KnowledgeDocument",
     "KnowledgeFilter",
     "KnowledgeSpace",
+    "KnowledgeSpaceVersion",
     "ParsedBlock",
     "PrincipalContext",
     "RetrievalDecision",
@@ -41,5 +45,7 @@ __all__ = [
     "RetrievalTuning",
     "SearchResult",
     "SourceLocator",
+    "SpaceBuild",
+    "SpaceDocumentState",
     "VersionStatus",
 ]

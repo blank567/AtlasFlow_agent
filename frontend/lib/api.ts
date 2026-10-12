@@ -12,6 +12,8 @@ import {
   KnowledgeSearchResult,
   KnowledgeSearchTuning,
   KnowledgeSpace,
+  KnowledgeSpaceVersion,
+  KnowledgeSpaceBuild,
 } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
@@ -229,6 +231,52 @@ export function createKnowledgeSpace(payload: { slug: string; name: string; desc
 
 export function listKnowledgeDocuments(space: string) {
   return request<KnowledgeDocument[]>(`/knowledge/spaces/${encodeURIComponent(space)}/documents`);
+}
+
+export function listKnowledgeSpaceVersions(space: string) {
+  return request<KnowledgeSpaceVersion[]>(`/knowledge/spaces/${encodeURIComponent(space)}/versions`);
+}
+
+export function listKnowledgeSpaceBuilds(space: string) {
+  return request<KnowledgeSpaceBuild[]>(`/knowledge/spaces/${encodeURIComponent(space)}/builds`);
+}
+
+export function getKnowledgeSpaceBuild(space: string, buildId: string) {
+  return request<KnowledgeSpaceBuild>(`/knowledge/spaces/${encodeURIComponent(space)}/builds/${encodeURIComponent(buildId)}`);
+}
+
+export function reindexKnowledgeSpace(space: string, note: string) {
+  return request<KnowledgeSpaceBuild>(`/knowledge/spaces/${encodeURIComponent(space)}/reindex`, {
+    method: "POST", body: JSON.stringify({ note }),
+  });
+}
+
+export function publishKnowledgeSpaceBuild(space: string, buildId: string) {
+  return request<KnowledgeSpaceVersion>(`/knowledge/spaces/${encodeURIComponent(space)}/builds/${encodeURIComponent(buildId)}/publish`, { method: "POST" });
+}
+
+export function cancelKnowledgeSpaceBuild(space: string, buildId: string) {
+  return request<KnowledgeSpaceBuild>(`/knowledge/spaces/${encodeURIComponent(space)}/builds/${encodeURIComponent(buildId)}/cancel`, { method: "POST" });
+}
+
+export function retryKnowledgeJob(jobId: string) {
+  return request<KnowledgeJob>(`/knowledge/jobs/${encodeURIComponent(jobId)}/retry`, { method: "POST" });
+}
+
+export function createKnowledgeSpaceVersion(space: string, note: string) {
+  return request<KnowledgeSpaceVersion>(`/knowledge/spaces/${encodeURIComponent(space)}/versions`, {
+    method: "POST", body: JSON.stringify({ note }),
+  });
+}
+
+export function updateKnowledgeSpaceVersionNote(space: string, versionId: string, note: string) {
+  return request<KnowledgeSpaceVersion>(`/knowledge/spaces/${encodeURIComponent(space)}/versions/${encodeURIComponent(versionId)}/note`, {
+    method: "PUT", body: JSON.stringify({ note }),
+  });
+}
+
+export function activateKnowledgeSpaceVersion(space: string, versionId: string) {
+  return request<KnowledgeSpace>(`/knowledge/spaces/${encodeURIComponent(space)}/versions/${encodeURIComponent(versionId)}/activate`, { method: "POST" });
 }
 
 export function uploadKnowledgeDocument(space: string, file: File) {

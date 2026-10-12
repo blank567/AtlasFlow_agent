@@ -34,3 +34,8 @@ class KnowledgeSearchRequest(BaseModel):
     filters: KnowledgeFilter | None = None
     result_limit: int = Field(default=5, ge=1, le=20)
     tuning: RetrievalTuning | None = None
+
+
+class SpaceVersionNoteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    note: str = Field(default="", max_length=500)

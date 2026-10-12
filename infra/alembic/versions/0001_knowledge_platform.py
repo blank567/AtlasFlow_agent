@@ -15,7 +15,20 @@ depends_on = None
 
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
-    metadata.create_all(bind=op.get_bind())
+    # Freeze this revision's table set. Later additions must be created by
+    # their own migrations, even when the current metadata knows about them.
+    initial_tables = [
+        metadata.tables[name]
+        for name in (
+            "knowledge_spaces",
+            "knowledge_documents",
+            "knowledge_document_versions",
+            "knowledge_index_generations",
+            "knowledge_chunks_v2",
+            "knowledge_jobs",
+        )
+    ]
+    metadata.create_all(bind=op.get_bind(), tables=initial_tables)
     op.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS knowledge_documents_space_source_idx "
         "ON knowledge_documents (space_id, source_id)"

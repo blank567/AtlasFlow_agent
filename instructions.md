@@ -227,3 +227,109 @@ docker-compose stop postgres
 ```
 
 不要用 `docker-compose down -v` 清理数据卷；它会删除数据库数据。上述浏览器页面和下载行为也应遵守 E 盘存储策略。
+
+### 9. 可选：保存与切换整个知识空间版本（v0.6.0）
+
+空间版本是一次完整快照：记录该空间每份文档的发布版本、归档状态和索引世代。文档摄取或归档后，空间成为“未保存变更”；待所有摄取任务完成，可保存一个新空间版本并附加说明。切换旧版本时，空间内全部文档一起恢复；旧快照之后新增的文档会归档而非删除。以下命令中 `activate` 是真实写操作；只查看版本时不要执行它。
+
+首次使用先在项目根目录迁移 PostgreSQL（不会删除现有文档）：
+
+```powershell
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+E:\conda_envs\langchain\python.exe -m alembic upgrade head
+```
+
+```powershell
+# 只读：查看空间状态及已保存的完整空间版本。按实际空间 slug 修改。
+$space = 'llm-engineering-v1'
+$spaces = Invoke-RestMethod 'http://127.0.0.1:8000/api/v1/knowledge/spaces'
+$spaces | Where-Object slug -eq $space | Select-Object slug, active_generation_id, active_version_id
+$versions = Invoke-RestMethod "http://127.0.0.1:8000/api/v1/knowledge/spaces/$space/versions"
+$versions | Select-Object id, version_number, generation_id, note, created_at
+
+# 写操作：所有摄取任务完成后，把当前整空间保存为一个新版本，不重算向量。
+$body = @{ note = '统一解析和父子切块完成' } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/api/v1/knowledge/spaces/$space/versions" -ContentType 'application/json; charset=utf-8' -Body $body
+
+# 可选：只修改某个空间版本的说明，不影响文档或检索。
+$versionId = '<空间版本ID>'
+$body = @{ note = 'v1：重建前的完整空间快照' } | ConvertTo-Json
+Invoke-RestMethod -Method Put -Uri "http://127.0.0.1:8000/api/v1/knowledge/spaces/$space/versions/$versionId/note" -ContentType 'application/json; charset=utf-8' -Body $body
+
+# 真实切换：确认目标版本的文档清单后再执行；整个空间的检索结果会改变。
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/api/v1/knowledge/spaces/$space/versions/$versionId/activate"
+```
+
+页面中对应入口为知识库首页的「空间版本」。创建或切换需要空间无运行／排队摄取任务；索引缺失、历史文档已被永久删除等情况返回 409。接口不调用 Embedding，也不删除其他空间版本。旧空间版本只有在之前显式保存过快照时才能切回；现有数据库不会自动补造历史快照。
+
+### 10. 从已有文档版本回填空间版本（一次性操作）
+
+2026-10-11 已对当前数据库执行回填：`llm-engineering-v1` 得到 v1/v2，`user-default` 得到 v1，不要再次对这两个空间运行 `--apply`。新环境若保留了完整旧文档版本但没有空间版本，可先只读预览：
+
+```powershell
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPATH = 'backend/src'
+E:\conda_envs\langchain\python.exe scripts/backfill_space_versions.py --space llm-engineering-v1 --space user-default
+```
+
+预览核对文档数量、解析／切块版本和索引世代后，才在**尚无空间版本**的数据库中执行一次写入：
+
+```powershell
+E:\conda_envs\langchain\python.exe scripts/backfill_space_versions.py --space llm-engineering-v1 --space user-default --apply
+```
+
+脚本只使用现存文档、版本和 child 索引，拒绝未完成任务、缺失嵌入、混合索引世代、版本波次不齐或已有空间版本；不会调用模型或重建索引。回填记录的创建时间是执行时间，说明中另记原索引日期。
+
+### 11. v0.6.0 整空间解析升级与双路召回
+
+版本迭代的单位是整个知识空间。解析器版本为 `structured-parser-v3`，切块器仍为 `parent-child-v2`；PDF 新增章节路径和 `section_role`，其他格式也在同一批次重新索引。Top-K/RRF 检索代码更新后立即作用于现有索引；新解析结果需重建才可用。原空间版本 v1/v2 保留。以下命令在项目根目录、`langchain` 环境运行。
+
+```powershell
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPATH = 'backend/src'
+
+# 更新数据库结构，包含 knowledge_space_builds；然后重启 API 和独立 Worker（若使用）。
+E:\conda_envs\langchain\python.exe -m alembic upgrade head
+
+# 只读：列出整个空间的全部 active 文档；archived 状态也保留在版本清单内。
+E:\conda_envs\langchain\python.exe scripts/reindex_knowledge.py --space llm-engineering-v1
+
+# 写操作：建立整空间构建，输出 id 即 build_id。Worker 会调用 Embedding API。
+# 新索引暂存，所有文档仍使用旧空间版本对外检索。
+E:\conda_envs\langchain\python.exe scripts/reindex_knowledge.py --space llm-engineering-v1 --enqueue --note '统一解析 v3，PDF 章节与参考文献角色'
+
+# 将这里替换为上一步返回的真实 id；不是空间版本 id 或 Job id。
+$spaceBuildId = '<build_id>'
+
+# 只读验收：任务全部完成时 status=ready、退出码为 0；已发布也返回 0。
+E:\conda_envs\langchain\python.exe scripts/reindex_knowledge.py --space llm-engineering-v1 --build $spaceBuildId --verify
+
+# 写操作：全部完成后，校验完整索引并在一个事务中发布新的整个空间版本。
+# 自动创建新空间版本快照，无需再手动“保存当前空间版本”。
+E:\conda_envs\langchain\python.exe scripts/reindex_knowledge.py --space llm-engineering-v1 --build $spaceBuildId --publish
+
+# 只读查看任务及空间版本台账。
+Invoke-RestMethod 'http://127.0.0.1:8000/api/v1/knowledge/jobs?space=llm-engineering-v1'
+Invoke-RestMethod 'http://127.0.0.1:8000/api/v1/knowledge/spaces/llm-engineering-v1/versions'
+```
+
+也可在知识库页面的「空间版本」区域执行「重建整个空间 → 发布整个空间版本」。有失败任务时可以在构建进度中重试；失败不会改变旧版本检索。构建期间暂停该空间的导入、归档、保存快照、切换历史版本和另一轮重建，以固定文档清单；检索仍可使用。已归档文档不参与重建，但归档状态保留在完整版本清单中。
+
+取消或重试是单独的选择，不要紧接上面的正常发布命令执行：
+
+```powershell
+# 写操作：重试指定失败 Job，不是 build_id。
+$failedJobId = '<failed_job_id>'
+Invoke-RestMethod -Method Post "http://127.0.0.1:8000/api/v1/knowledge/jobs/$failedJobId/retry"
+
+# 写操作：放弃待发布构建，保留旧版。必须等待当前 running Job 结束后才能取消。
+# 暂存数据保留用于排查，取消后不能恢复该构建；可重新发起一轮整空间构建。
+E:\conda_envs\langchain\python.exe scripts/reindex_knowledge.py --space llm-engineering-v1 --build $spaceBuildId --cancel
+```
+
+`--enqueue` 不会自动发布，`--verify` 不调用模型，`--publish` 不重算向量。历史空间切换仍使用第 9 节的 `/versions/{version_id}/activate` 接口。解析器版本、切块器版本和空间 v1/v2/v3 是不同编号：空间版本在成功发布时顺序分配。空间版本恢复文档清单和索引，不恢复旧应用程序或旧检索算法。

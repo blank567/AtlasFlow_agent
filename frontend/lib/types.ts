@@ -307,6 +307,8 @@ export type KnowledgeSpace = {
   embedding_profile: string;
   retrieval_profile: string;
   active_generation_id?: string | null;
+  active_version_id?: string | null;
+  active_build_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -324,17 +326,46 @@ export type KnowledgeDocument = {
   updated_at: string;
 };
 
+export type KnowledgeSpaceVersion = {
+  id: string;
+  space_id: string;
+  version_number: number;
+  generation_id?: string | null;
+  documents: Record<string, { version_id?: string | null; status: "active" | "archived" }>;
+  note: string;
+  created_at: string;
+  activated_at?: string | null;
+};
+
 export type KnowledgeJob = {
   id: string;
   space_id: string;
   document_id: string;
   version_id: string;
+  space_build_id?: string | null;
+  generation_id?: string | null;
   status: string;
   stage: string;
   attempt: number;
   progress: number;
   error_code?: string | null;
   error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type KnowledgeSpaceBuild = {
+  id: string;
+  space_id: string;
+  base_version_id: string | null;
+  generation_id: string;
+  documents: Record<string, { version_id?: string | null; status: "active" | "archived" }>;
+  job_ids: string[];
+  status: "building" | "ready" | "failed" | "published" | "cancelled";
+  parser_version: string;
+  chunker_version: string;
+  note: string;
+  published_version_id?: string | null;
   created_at: string;
   updated_at: string;
 };

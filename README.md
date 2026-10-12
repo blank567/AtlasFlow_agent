@@ -1614,3 +1614,50 @@ E:\conda_envs\langchain\python.exe scripts/reindex_knowledge.py --space llm-engi
 
 离线回归位于 `backend/tests/test_knowledge_platform.py`；真实 PDF 的公式、字体和表格保真度仍需人工抽检。
 
+### v0.6.0 知识空间版本快照与整体切换补记（2026-10-11）
+
+当前实现是显式保存完整的 `KnowledgeSpaceVersion` 快照：含空间索引世代、每份文档的发布版本 ID 与归档状态，以及最多 500 字的空间版本说明。知识空间页面集中展示空间版本台账，不在文档行提供切换按钮。说明属于可编辑的空间版本元数据，不会改变原文、Chunk 或 Embedding，也不是逐次修改的审计日志。
+
+先运行 `python -m alembic upgrade head` 创建 `knowledge_space_versions` 表。`POST /api/v1/knowledge/spaces/{space}/versions` 保存当前空间快照；`GET` 同路径列出快照；`PUT /api/v1/knowledge/spaces/{space}/versions/{version_id}/note` 修改说明；`POST /api/v1/knowledge/spaces/{space}/versions/{version_id}/activate` 将**整个空间**切换到目标快照。切换在一个 PostgreSQL 事务内恢复所有文档的检索指针、归档状态和索引世代。目标快照之后新增的文档会归档，但原文和索引不删除；切回较新的空间版本可重新发布。若存在待处理任务、快照引用的文档已永久删除、目标版本缺失或 child 索引不完整，则拒绝切换。摄取、归档或新增文档会把空间标为“未保存变更”；需在任务结束后保存新快照。旧数据不会自动生成历史快照，也没有对用户数据库执行切换。
+
+#### 已有文档版本的空间快照回填（2026-10-11）
+
+这次使用 `scripts/backfill_space_versions.py` 从数据库保留的文档版本和完整 child 索引重建了三个空间快照，并已写入现有 PostgreSQL 的 `knowledge_space_versions` 表：`llm-engineering-v1` v1、v2 各含 18 份文档，当前指向 v2；`user-default` v1 含 1 份文档，当前指向 v1。回填没有重新解析、切块或调用 Embedding，也没有修改文档当前版本及索引世代。每条说明明确标记为“事后重建”，`created_at` 是回填时间，不冒充原始索引日期。回填只依据目前仍保留的文档及版本，无法证明已删除文档或历史归档状态；若将来遇到版本波次不齐、索引缺失等情况，脚本会拒绝推断。
+
+脚本默认只读预览；必须显式传入 `--apply` 才会在事务中写入。已有空间版本时会拒绝重复回填。
+
+### v0.6.0 论文 PDF 切块与双路召回补记（2026-10-12）
+
+本次将 PDF 解析器升级为 `structured-parser-v3`：对可从文本层可靠识别的独立标题建立章节路径，并给摘要、正文、参考文献区段标记 `section_role`；跨页保留章节路径，仍保留原文、页码和字符定位。参考文献没有被删除，也没有被无条件排除检索。结构识别是保守的文本规则，扫描件、复杂多栏及字体编码问题仍需人工抽检；已有 PDF v2 索引不会自动变化。父子切块版本仍为 `parent-child-v2`，child 继续作为引用依据，父块只供邻近上下文。
+
+检索现在让 BM25 与向量两路各取最多 `candidate_limit` 个正分结果，取并集后按 RRF 融合，再截取融合候选及重排候选；缺失、零分或失败的路不再凭任意名次给所有块加分。关闭某一路时不会执行该路打分或调用 Embedding。页面“关键词／向量候选”计数现在表示两路实际进入融合的 Top-K 数量，而不是全空间的正分块总量。BM25 与余弦目前仍在应用进程中对已发布 child 计算；数据库内 ANN／FTS Top-K 下推尚未实现，不能把本次改动理解为大库性能优化。融合分仍是 RRF 名次值，重排分仍是模型原始分，`min_relevance` 尚未经过数据集校准。
+
+只读预览当前空间需要重建的论文 PDF（2026-10-12 在 `llm-engineering-v1` 预览为 12 份）；**本次没有排队或执行重建，也没有调用 Embedding**：
+
+```powershell
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+E:\conda_envs\langchain\python.exe scripts/reindex_knowledge.py --space llm-engineering-v1 --mime-type application/pdf
+```
+
+确认并重启后端使新代码生效后，才可在同一命令末尾加 `--enqueue`。这会创建新文档版本并调用 Embedding，可能产生费用；完成前旧版继续发布。全部 Job 完成后再保存新的**整个空间**版本快照，原空间 v1/v2 快照不被覆盖。
+
+### v0.6.0 整空间版本语义更正（2026-10-12）
+
+上方两处 PDF-only 重建说明仅记录了最初的局部方案，**不作为当前操作指令**。版本迭代的单位是整个知识空间：`structured-parser-v3` 对所有格式统一生效，PDF 才额外获得章节及区段角色。正式发布下一版空间快照前，该空间内所有 active 文档都应完成新管线重建；不能将“12 份 PDF 更新、其余 6 份沿用旧索引”称为完整的空间升级。当前操作指令请以 `instructions.md` 第 11 节为准：不使用 `--mime-type`，默认预览整个空间，显式 `--enqueue` 后用 `--verify` 验收，再保存空间版本。原 v1/v2 快照保留，本次没有执行数据库重建。
+
+已知限制：目前 Worker 会在每份文档重建成功时单独更新 `current_version_id`，所以重建期间检索可能暂时混用新旧文档。空间快照只在全部验证通过后保存；这不等于“旧版持续服务、全部完成后原子切换”。后者需要整空间暂存和原子发布机制，当前尚未实现。
+
+### v0.6.0 整空间暂存与原子发布补记（2026-10-12）
+
+本次补齐上方更正中提到的暂存发布机制。知识库「空间版本」新增「重建整个空间」，对所有 active 文档创建新文档版本、摄取任务和独立索引世代；archived 文档的状态与版本保留在完整清单中。原始文件复用并逐份验证哈希，不重新下载。新索引全部暂存，任务逐篇完成时不会更新对外发布指针；部分失败、部分完成、全部完成待发布三个状态都继续使用旧空间检索。
+
+全部任务完成后，「发布整个空间版本」会重新验证完整清单、文档状态、统一管线、父子索引和有效同维向量，在一个 PostgreSQL 事务中保存新空间快照并切换所有文档与世代。空间版本号此时顺序分配。发布幂等，重复请求不会产生重复快照；后来已回退时，重复提交原构建也不会暗中再次切换。旧版本、原文和索引保留，仍可整体回退。构建期间固定清单，暂停该空间导入、归档、快照保存、历史切换和并发重建；失败文档可重试，取消需等待当前运行任务结束。正常停止 Worker 时会将未完成任务重新排队；强制结束进程后的 RUNNING 任务尚无租约恢复机制。
+
+新增 `SpaceBuildService`、`SpaceBuild` 和共享发布校验；API 提供 `/spaces/{space}/reindex`、`/spaces/{space}/builds` 及指定构建的 `/publish`、`/cancel`。`scripts/reindex_knowledge.py` 默认预览整个空间，`--enqueue --note ...` 创建构建，`--build <id> --verify` 读取状态，`--build <id> --publish` 整体发布，`--build <id> --cancel` 取消。前端沿用现有台账样式，集中显示进度、失败原因、重试和发布确认；修复了刷新时相同 React key 导致重复区域的问题。所有带注释命令见 `instructions.md` 第 11 节；Python 类／函数与运行流程补充在本地 `docs/rag-python-code-guide.md`、`docs/rag-end-to-end.md`。
+
+数据库迁移 `0003_space_builds` 已在现有 `atlasflow` 数据库执行，新增 `knowledge_space_builds` 表；没有新建生产数据库，也没有排队真实语料重建或调用外部模型。核验 `llm-engineering-v1` 仍为 18 份文档、空间 v1/v2 且当前 v2；`user-default` 仍为 1 份文档、当前 v1；两个空间的构建记录均为 0。PostgreSQL 数据目录挂载在 E 盘。
+
+验证：后端 **271 passed、1 skipped**（真实 PostgreSQL 测试默认需显式启用），Ruff 和前端 typecheck 通过；真实 PostgreSQL 在独立临时 schema 的事务测试 **1 passed**，测试 schema 已清理。浏览器使用拦截 API 样例验证了重建确认、构建期间锁定、失败重试、发布确认、刷新不重复区域和移动端宽度，截图与隔离配置位于 `build/knowledge-browser`（E 盘）。
+

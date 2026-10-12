@@ -44,10 +44,15 @@ def bm25(query: str, chunks: list[KnowledgeChunk]) -> dict[str, float]:
     return scores
 
 
-def ranks(scores: dict[str, float]) -> dict[str, int]:
+def ranks(scores: dict[str, float], *, limit: int) -> dict[str, int]:
+    """Rank only positive matches from one retrieval lane, capped before fusion."""
     return {
         item_id: index
         for index, item_id in enumerate(
-            sorted(scores, key=lambda key: (-scores[key], key)), start=1
+            sorted(
+                (item_id for item_id, score in scores.items() if score > 0 and math.isfinite(score)),
+                key=lambda key: (-scores[key], key),
+            )[:limit],
+            start=1,
         )
     }

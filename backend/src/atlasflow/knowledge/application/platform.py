@@ -7,6 +7,7 @@ from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
 
+from atlasflow.knowledge.application.space_builds import SpaceBuildService
 from atlasflow.knowledge.domain import (
     DocumentStatus,
     DocumentVersion,
@@ -17,9 +18,12 @@ from atlasflow.knowledge.domain import (
     KnowledgeDocument,
     KnowledgeFilter,
     KnowledgeSpace,
+    KnowledgeSpaceVersion,
     PrincipalContext,
     RetrievalTuning,
     SearchResult,
+    SpaceBuild,
+    SpaceDocumentState,
     VersionStatus,
 )
 from atlasflow.knowledge.domain.models import CURRENT_CHUNKER_VERSION, CURRENT_PARSER_VERSION
@@ -53,6 +57,7 @@ class KnowledgePlatform:
         self.worker_poll_seconds = worker_poll_seconds
         self.parsers = ParserRegistry()
         self.chunker = StructuralChunker()
+        self.space_builds = SpaceBuildService(self)
         self._worker: asyncio.Task[None] | None = None
         self._closed = False
 
@@ -120,6 +125,129 @@ class KnowledgePlatform:
             raise KeyError(f"knowledge document not found: {document_id}")
         return document, await self.repository.list_versions(document_id)
 
+    async def list_space_versions(self, space: str) -> list[KnowledgeSpaceVersion]:
+        selected = await self.get_space(space)
+        return await self.repository.list_space_versions(selected.id)
+
+    async def start_space_build(self, space: str, note: str = "") -> SpaceBuild:
+        return await self.space_builds.start(space, note)
+
+    async def list_space_builds(self, space: str) -> list[SpaceBuild]:
+        return await self.space_builds.list(space)
+
+    async def get_space_build(self, space: str, build_id: str) -> SpaceBuild:
+        return await self.space_builds.get(space, build_id)
+
+    async def publish_space_build(self, space: str, build_id: str) -> KnowledgeSpaceVersion:
+        return await self.space_builds.publish(space, build_id)
+
+    async def cancel_space_build(self, space: str, build_id: str) -> SpaceBuild:
+        return await self.space_builds.cancel(space, build_id)
+
+    async def create_space_version(self, space: str, note: str) -> KnowledgeSpaceVersion:
+        """Capture one complete, settled search state for an entire knowledge space."""
+        selected = await self.get_space(space)
+        note = self._validate_space_note(note)
+        await self._require_idle_space(selected.id)
+        generation = await self.repository.active_generation(selected.id)
+        documents = await self.repository.list_documents(selected.id)
+        manifest: dict[str, SpaceDocumentState] = {}
+        for document in documents:
+            manifest[document.id] = SpaceDocumentState(
+                version_id=document.current_version_id, status=document.status
+            )
+            if document.status == DocumentStatus.ACTIVE:
+                await self._validate_snapshot_document(
+                    document.id, document.current_version_id,
+                    generation.id if generation else None,
+                )
+        versions = await self.repository.list_space_versions(selected.id)
+        snapshot = KnowledgeSpaceVersion(
+            space_id=selected.id,
+            version_number=max((item.version_number for item in versions), default=0) + 1,
+            generation_id=generation.id if generation else None,
+            documents=manifest,
+            note=note,
+        )
+        return await self.repository.create_space_version(snapshot)
+
+    async def set_space_version_note(
+        self, space: str, version_id: str, note: str
+    ) -> KnowledgeSpaceVersion:
+        version = await self._space_version(space, version_id)
+        note = self._validate_space_note(note)
+        if note == version.note:
+            return version
+        return await self.repository.update_space_version(version.model_copy(update={"note": note}))
+
+    async def activate_space_version(
+        self, space: str, version_id: str
+    ) -> KnowledgeSpace:
+        """Restore a whole-space manifest; repository applies all pointers atomically."""
+        selected = await self.get_space(space)
+        version = await self._space_version(space, version_id)
+        await self._require_idle_space(selected.id)
+        if selected.active_version_id == version.id:
+            return selected
+        documents = {item.id: item for item in await self.repository.list_documents(selected.id)}
+        if set(version.documents) - set(documents):
+            raise ValueError("space version references a removed document")
+        if version.generation_id is not None:
+            generation = await self.repository.get_generation(version.generation_id)
+            if generation is None or generation.space_id != selected.id:
+                raise ValueError("space version references a removed index generation")
+        for document_id, state in version.documents.items():
+            if state.version_id is not None:
+                source = await self.repository.get_version(state.version_id)
+                if source is None or source.document_id != document_id:
+                    raise ValueError("space version references a missing document version")
+            if state.status == DocumentStatus.ACTIVE:
+                await self._validate_snapshot_document(
+                    document_id, state.version_id, version.generation_id
+                )
+        return await self.repository.activate_space_version(version)
+
+    async def _space_version(self, space: str, version_id: str) -> KnowledgeSpaceVersion:
+        selected = await self.get_space(space)
+        version = await self.repository.get_space_version(version_id)
+        if version is None or version.space_id != selected.id:
+            raise KeyError(f"knowledge space version not found: {version_id}")
+        return version
+
+    @staticmethod
+    def _validate_space_note(note: str) -> str:
+        normalized = note.strip()
+        if len(normalized) > 500:
+            raise ValueError("space version note exceeds 500 characters")
+        return normalized
+
+    async def _require_idle_space(self, space_id: str) -> None:
+        await self._require_mutable_space(space_id)
+        jobs = await self.repository.list_jobs(space_id)
+        if any(
+            job.status in {JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.FAILED_RETRYABLE}
+            for job in jobs
+        ):
+            raise ValueError("space has active ingestion jobs; wait until they finish")
+
+    async def _require_mutable_space(self, space_id: str) -> None:
+        selected = await self.get_space(space_id)
+        if selected.active_build_id:
+            raise ValueError("space has a staged build; publish or cancel it before changing documents")
+
+    async def _validate_snapshot_document(
+        self, document_id: str, version_id: str | None, generation_id: str | None
+    ) -> None:
+        version = await self.repository.get_version(version_id) if version_id else None
+        if version is None or version.document_id != document_id or version.status != VersionStatus.READY:
+            raise ValueError("active document has no ready version")
+        if generation_id is None:
+            raise ValueError("active document has no index generation")
+        children = await self.repository.count_version_chunks(version.id)
+        searchable = await self.repository.count_version_searchable_chunks(version.id, generation_id)
+        if children == 0 or searchable != children:
+            raise ValueError("active document has no complete child index in this generation")
+
     async def submit(
         self,
         *,
@@ -134,6 +262,7 @@ class KnowledgePlatform:
         provenance: dict[str, object] | None = None,
     ) -> IngestionJob:
         selected_space = await self.get_space(space)
+        await self._require_mutable_space(selected_space.id)
         normalized_hash = sha256(content).hexdigest()
         source_id = source_id or str(uuid4())
         document = await self.repository.find_document(selected_space.id, source_id)
@@ -223,6 +352,7 @@ class KnowledgePlatform:
     async def reindex_document(self, document_id: str) -> IngestionJob:
         """Queue a new index version from the published source without changing it in place."""
         document, versions = await self.get_document(document_id)
+        await self._require_mutable_space(document.space_id)
         if document.status != DocumentStatus.ACTIVE:
             raise ValueError("archived documents cannot be reindexed")
         current = next(
@@ -278,6 +408,12 @@ class KnowledgePlatform:
             raise KeyError(f"knowledge job not found: {job_id}")
         if job.status == JobStatus.COMPLETED:
             return job
+        if job.status == JobStatus.CANCELLED:
+            raise ValueError("cancelled ingestion jobs cannot be processed")
+        if job.space_build_id:
+            await self._require_open_build_job(job)
+        else:
+            await self._require_mutable_space(job.space_id)
         if job.status != JobStatus.RUNNING:
             job = job.model_copy(
                 update={
@@ -289,6 +425,21 @@ class KnowledgePlatform:
             await self.repository.update_job(job)
         try:
             return await self._process(job)
+        except asyncio.CancelledError:
+            # A normal API/worker shutdown must leave the staged job runnable.
+            # Its old published space remains untouched while this job resumes.
+            latest = await self.repository.get_job(job.id)
+            if latest and latest.status == JobStatus.RUNNING:
+                await self.repository.update_job(latest.model_copy(update={
+                    "status": JobStatus.QUEUED,
+                    "stage": JobStage.QUEUED,
+                    "progress": 0,
+                    "error_code": "WorkerInterrupted",
+                    "error_message": "Worker stopped; the staged job will resume when a worker starts",
+                    "retryable": True,
+                    "updated_at": datetime.now(UTC),
+                }))
+            raise
         except Exception as exc:  # noqa: BLE001 - every stage failure must persist job state
             latest = await self.repository.get_job(job.id) or job
             failed = latest.model_copy(
@@ -322,7 +473,16 @@ class KnowledgePlatform:
         )
         if not blocks:
             raise ValueError("document parser produced no usable blocks")
-        generation = await self.repository.active_generation(space.id)
+        if job.space_build_id:
+            build = await self._require_open_build_job(job)
+            if (version.parser_version != CURRENT_PARSER_VERSION
+                    or version.chunker_version != CURRENT_CHUNKER_VERSION):
+                raise ValueError("space build pipeline differs from this worker; cancel and rebuild")
+            generation = await self.repository.get_generation(build.generation_id)
+            if generation is None or generation.space_id != space.id:
+                raise ValueError("space build generation is missing")
+        else:
+            generation = await self.repository.active_generation(space.id)
         if generation is None:
             generation = await self.repository.create_generation(
                 IndexGeneration(
@@ -371,15 +531,16 @@ class KnowledgePlatform:
                 update={"status": VersionStatus.READY, "indexed_at": now}
             )
         )
-        await self.repository.update_document(
-            document.model_copy(
-                update={
-                    "current_version_id": version.id,
-                    "status": DocumentStatus.ACTIVE,
-                    "updated_at": now,
-                }
+        if not job.space_build_id:
+            await self.repository.update_document(
+                document.model_copy(
+                    update={
+                        "current_version_id": version.id,
+                        "status": DocumentStatus.ACTIVE,
+                        "updated_at": now,
+                    }
+                )
             )
-        )
         return await self.repository.update_job(
             job.model_copy(
                 update={
@@ -406,6 +567,10 @@ class KnowledgePlatform:
 
     async def retry_job(self, job_id: str) -> IngestionJob:
         job = await self.get_job(job_id)
+        if job.space_build_id:
+            await self._require_open_build_job(job)
+        else:
+            await self._require_mutable_space(job.space_id)
         if job.status not in {JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL}:
             raise ValueError("only failed jobs can be retried")
         return await self.repository.update_job(
@@ -421,6 +586,19 @@ class KnowledgePlatform:
             )
         )
 
+    async def _require_open_build_job(self, job: IngestionJob) -> SpaceBuild:
+        build = await self.repository.get_space_build(job.space_build_id or "")
+        space = await self.get_space(job.space_id)
+        if (build is None or build.status in {"published", "cancelled"}
+                or space.active_build_id != build.id or job.id not in build.job_ids
+                or job.generation_id != build.generation_id
+                or build.space_id != job.space_id
+                or build.documents.get(job.document_id) != SpaceDocumentState(
+                    version_id=job.version_id, status=DocumentStatus.ACTIVE
+                )):
+            raise ValueError("ingestion job does not belong to an active space build")
+        return build
+
     async def get_job(self, job_id: str) -> IngestionJob:
         job = await self.repository.get_job(job_id)
         if not job:
@@ -433,6 +611,7 @@ class KnowledgePlatform:
 
     async def archive_document(self, document_id: str) -> KnowledgeDocument:
         document = (await self.get_document(document_id))[0]
+        await self._require_mutable_space(document.space_id)
         return await self.repository.update_document(
             document.model_copy(
                 update={
@@ -444,9 +623,10 @@ class KnowledgePlatform:
 
     async def purge_document(self, document_id: str) -> None:
         document, versions = await self.get_document(document_id)
-        for version in versions:
-            await self.blob_store.delete(version.blob_key)
+        await self._require_mutable_space(document.space_id)
         await self.repository.purge_document(document.id)
+        for blob_key in {version.blob_key for version in versions}:
+            await self.blob_store.delete(blob_key)
 
     async def search(
         self,

@@ -1,7 +1,8 @@
-"""Preview or explicitly enqueue reindexing for legacy documents in one space.
+"""Preview or stage a whole-space rebuild, then explicitly publish it.
 
-The backend API must be running. Preview is the default and performs only GETs;
---enqueue creates new versioned jobs, which the backend worker later processes.
+Preview and --verify only read the API. --enqueue creates an isolated build for
+all active documents; workers call Embedding but keep the old space published.
+--publish switches the whole space atomically after every job completes.
 """
 
 from __future__ import annotations
@@ -9,73 +10,83 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from urllib.parse import quote
 
 import httpx
 
-CURRENT_PARSER_VERSION = "structured-parser-v2"
-CURRENT_CHUNKER_VERSION = "parent-child-v2"
+
+def show(value: object) -> None:
+    print(json.dumps(value, ensure_ascii=False), flush=True)
 
 
-async def run(*, base_url: str, space: str, enqueue: bool) -> int:
-    async with httpx.AsyncClient(base_url=base_url, timeout=30) as client:
-        response = await client.get(f"/api/v1/knowledge/spaces/{space}/documents")
-        response.raise_for_status()
-        documents = response.json()
-        candidates = 0
-        for listed in documents:
-            response = await client.get(f"/api/v1/knowledge/documents/{listed['id']}")
+async def run(
+    *, base_url: str, space: str, action: str, build_id: str | None, note: str
+) -> int:
+    path = f"/api/v1/knowledge/spaces/{quote(space, safe='')}"
+    async with httpx.AsyncClient(base_url=base_url, timeout=120) as client:
+        if action == "enqueue":
+            response = await client.post(f"{path}/reindex", json={"note": note})
+        elif action in {"verify", "publish", "cancel"}:
+            build_path = f"{path}/builds/{quote(build_id or '', safe='')}"
+            if action == "verify":
+                response = await client.get(build_path)
+            else:
+                response = await client.post(f"{build_path}/{action}")
+        else:
+            response = await client.get(f"{path}/documents")
             response.raise_for_status()
-            detail = response.json()
-            document = detail["document"]
-            current = next(
-                (
-                    item for item in detail["versions"]
-                    if item["id"] == document["current_version_id"]
-                ),
-                None,
-            )
-            if document["status"] != "active" or not current or current["status"] != "ready":
-                continue
-            if (
-                current["parser_version"] == CURRENT_PARSER_VERSION
-                and current["chunker_version"] == CURRENT_CHUNKER_VERSION
-            ):
-                continue
-            candidates += 1
-            result: dict[str, object] = {
-                "document_id": document["id"],
-                "title": document["title"],
-                "from_parser": current["parser_version"],
-                "from_chunker": current["chunker_version"],
+            documents = response.json()
+            active = [item for item in documents if item["status"] == "active"]
+            for item in active:
+                show({"document_id": item["id"], "title": item["title"], "action": "preview"})
+            show({
+                "space": space,
+                "documents": len(documents),
+                "rebuild_documents": len(active),
+                "archived_documents": len(documents) - len(active),
                 "action": "preview",
-            }
-            if enqueue:
-                queued = await client.post(
-                    f"/api/v1/knowledge/documents/{document['id']}/reindex"
-                )
-                queued.raise_for_status()
-                job = queued.json()
-                result.update({"action": "enqueued", "job_id": job["id"]})
-            print(json.dumps(result, ensure_ascii=False), flush=True)
-        print(
-            json.dumps(
-                {"space": space, "candidates": candidates, "enqueued": enqueue},
-                ensure_ascii=False,
-            ),
-            flush=True,
-        )
-        return 0
+            })
+            return 0
+        response.raise_for_status()
+        result = response.json()
+        show(result)
+        return 1 if action == "verify" and result["status"] not in {"ready", "published"} else 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--space", required=True, help="Existing knowledge space slug")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
-    parser.add_argument(
-        "--enqueue", action="store_true", help="Create versioned reindex jobs (uses Embedding API)"
-    )
+    parser.add_argument("--build", help="Build ID returned by --enqueue")
+    parser.add_argument("--note", default="", help="Description for the new whole-space version")
+    actions = parser.add_mutually_exclusive_group()
+    for action, help_text in {
+        "enqueue": "Stage all active documents (workers use Embedding API)",
+        "verify": "Read build status; exit 0 only if ready or already published",
+        "publish": "Atomically publish a completed whole-space build",
+        "cancel": "Cancel a build when no job is running; keep old space published",
+    }.items():
+        actions.add_argument(f"--{action}", dest="action", action="store_const", const=action, help=help_text)
+    parser.set_defaults(action="preview")
     args = parser.parse_args()
-    return asyncio.run(run(base_url=args.base_url, space=args.space, enqueue=args.enqueue))
+    if args.action in {"verify", "publish", "cancel"} and not args.build:
+        parser.error("--build is required with --verify, --publish, or --cancel")
+    if args.build and args.action not in {"verify", "publish", "cancel"}:
+        parser.error("--build is only used with --verify, --publish, or --cancel")
+    try:
+        return asyncio.run(run(
+            base_url=args.base_url,
+            space=args.space,
+            action=args.action,
+            build_id=args.build,
+            note=args.note,
+        ))
+    except httpx.HTTPStatusError as exc:
+        show({"error": exc.response.text, "status_code": exc.response.status_code})
+        return 1
+    except httpx.RequestError as exc:
+        show({"error": str(exc), "hint": "Start the backend and verify --base-url"})
+        return 1
 
 
 if __name__ == "__main__":

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from logging.config import fileConfig
 
 from alembic import context
+from atlasflow.config import get_settings
 from atlasflow.knowledge.infrastructure.postgres_repository import metadata
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
@@ -12,10 +12,15 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 config = context.config
 if config.config_file_name:
     fileConfig(config.config_file_name)
-config.set_main_option(
-    "sqlalchemy.url",
-    os.getenv("KNOWLEDGE_DATABASE_URL", config.get_main_option("sqlalchemy.url")),
+settings = get_settings()
+database_url = (
+    settings.knowledge_database_url
+    if "knowledge_database_url" in settings.model_fields_set
+    else config.get_main_option("sqlalchemy.url")
 )
+# Resolve database settings consistently with the API, including .env values.
+# ConfigParser treats percent signs specially, including encoded passwords.
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 target_metadata = metadata
 
 

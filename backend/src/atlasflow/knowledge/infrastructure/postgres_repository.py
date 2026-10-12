@@ -7,15 +7,18 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Column,
     DateTime,
+    Integer,
     MetaData,
     String,
     Table,
     Text,
+    UniqueConstraint,
     delete,
     select,
     update,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from atlasflow.knowledge.domain import (
@@ -28,6 +31,17 @@ from atlasflow.knowledge.domain import (
     KnowledgeDocument,
     KnowledgeFilter,
     KnowledgeSpace,
+    KnowledgeSpaceVersion,
+    SpaceBuild,
+    SpaceDocumentState,
+)
+from atlasflow.knowledge.domain.build_validation import (
+    ensure_job_allowed,
+    ensure_no_build,
+    validate_build_baseline,
+    validate_build_chunks,
+    validate_build_sources,
+    validate_build_targets,
 )
 from atlasflow.knowledge.infrastructure.memory_repository import _matches
 
@@ -40,6 +54,25 @@ spaces = Table(
     Column("id", String(36), primary_key=True),
     Column("slug", String(63), unique=True, nullable=False),
     Column("active_generation_id", String(36)),
+    Column("payload", JSONB, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+space_versions = Table(
+    "knowledge_space_versions",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("space_id", String(36), nullable=False, index=True),
+    Column("version_number", Integer, nullable=False),
+    Column("payload", JSONB, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("space_id", "version_number", name="knowledge_space_versions_number_uq"),
+)
+space_builds = Table(
+    "knowledge_space_builds",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("space_id", String(36), nullable=False, index=True),
+    Column("status", String(32), nullable=False, index=True),
     Column("payload", JSONB, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
@@ -108,6 +141,13 @@ class PostgresKnowledgeRepository:
         try:
             async with self.engine.connect() as connection:
                 await connection.execute(select(spaces.c.id).limit(1))
+                await connection.execute(select(space_versions.c.id).limit(1))
+                await connection.execute(select(space_builds.c.id).limit(1))
+        except ProgrammingError as exc:
+            raise RuntimeError(
+                "KNOWLEDGE_SCHEMA_OUTDATED: Run 'python -m alembic upgrade head' "
+                "before starting the API or worker."
+            ) from exc
         except OSError as exc:
             host = self.engine.url.host or "configured host"
             port = self.engine.url.port or 5432
@@ -144,35 +184,460 @@ class PostgresKnowledgeRepository:
         return KnowledgeSpace.model_validate(row.payload) if row else None
 
     async def update_space(self, value: KnowledgeSpace) -> KnowledgeSpace:
-        await self._update(
-            spaces,
-            value,
-            active_generation_id=value.active_generation_id,
-            slug=value.slug,
-        )
+        async with self.engine.begin() as connection:
+            latest = await self._lock_space(connection, value.id)
+            if latest.active_build_id or value.active_build_id:
+                raise ValueError("space build pointers are managed by the build transaction")
+            await connection.execute(update(spaces).where(spaces.c.id == value.id).values(
+                payload=value.model_dump(mode="json"),
+                active_generation_id=value.active_generation_id, slug=value.slug,
+            ))
         return value
+
+    async def create_space_version(self, value: KnowledgeSpaceVersion) -> KnowledgeSpaceVersion:
+        async with self.engine.begin() as connection:
+            row = (
+                await connection.execute(
+                    select(spaces.c.payload).where(spaces.c.id == value.space_id).with_for_update()
+                )
+            ).first()
+            if not row:
+                raise KeyError(f"knowledge space not found: {value.space_id}")
+            space = KnowledgeSpace.model_validate(row.payload)
+            ensure_no_build(space)
+            document_rows = (
+                await connection.execute(
+                    select(documents.c.payload).where(documents.c.space_id == space.id)
+                )
+            ).all()
+            current = {
+                item.id: SpaceDocumentState(version_id=item.current_version_id, status=item.status)
+                for item in (KnowledgeDocument.model_validate(row.payload) for row in document_rows)
+            }
+            if current != value.documents or space.active_generation_id != value.generation_id:
+                raise ValueError("space changed while its version was being saved; retry")
+            active_job = (
+                await connection.execute(
+                    select(jobs.c.id).where(
+                        jobs.c.space_id == space.id,
+                        jobs.c.status.in_(["queued", "running", "failed_retryable"]),
+                    ).limit(1)
+                )
+            ).first()
+            if active_job:
+                raise ValueError("space has active ingestion jobs; wait until they finish")
+            last_number = (
+                await connection.execute(
+                    select(space_versions.c.version_number)
+                    .where(space_versions.c.space_id == space.id)
+                    .order_by(space_versions.c.version_number.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            value = value.model_copy(update={"version_number": (last_number or 0) + 1})
+            await connection.execute(
+                space_versions.insert().values(
+                    id=value.id,
+                    space_id=value.space_id,
+                    version_number=value.version_number,
+                    payload=value.model_dump(mode="json"),
+                    created_at=value.created_at,
+                )
+            )
+            updated = space.model_copy(
+                update={"active_version_id": value.id, "updated_at": datetime.now(UTC)}
+            )
+            await connection.execute(
+                update(spaces).where(spaces.c.id == space.id).values(payload=updated.model_dump(mode="json"))
+            )
+        return value
+
+    async def update_space_version(self, value: KnowledgeSpaceVersion) -> KnowledgeSpaceVersion:
+        async with self.engine.begin() as connection:
+            row = (
+                await connection.execute(
+                    select(space_versions.c.payload)
+                    .where(space_versions.c.id == value.id)
+                    .with_for_update()
+                )
+            ).first()
+            if not row:
+                raise KeyError(f"knowledge space version not found: {value.id}")
+            latest = KnowledgeSpaceVersion.model_validate(row.payload)
+            updated = latest.model_copy(update={"note": value.note})
+            await connection.execute(
+                update(space_versions).where(space_versions.c.id == value.id).values(
+                    payload=updated.model_dump(mode="json")
+                )
+            )
+        return updated
+
+    async def get_space_version(self, version_id: str) -> KnowledgeSpaceVersion | None:
+        return await self._get(space_versions, version_id, KnowledgeSpaceVersion)
+
+    async def list_space_versions(self, space_id: str) -> list[KnowledgeSpaceVersion]:
+        values = await self._list(
+            space_versions, KnowledgeSpaceVersion, space_versions.c.space_id == space_id
+        )
+        return sorted(values, key=lambda item: item.version_number)
+
+    async def activate_space_version(self, value: KnowledgeSpaceVersion) -> KnowledgeSpace:
+        """Restore every document pointer and the generation in one transaction."""
+        now = datetime.now(UTC)
+        async with self.engine.begin() as connection:
+            # Every publisher/worker takes the space lock before any child row.
+            space = await self._lock_space(connection, value.space_id)
+            ensure_no_build(space)
+            version_row = (
+                await connection.execute(
+                    select(space_versions.c.payload)
+                    .where(space_versions.c.id == value.id)
+                    .with_for_update()
+                )
+            ).first()
+            if not version_row:
+                raise KeyError(f"knowledge space version not found: {value.id}")
+            value = KnowledgeSpaceVersion.model_validate(version_row.payload)
+            if value.space_id != space.id:
+                raise ValueError("space version belongs to a different space")
+            doc_rows = (
+                await connection.execute(
+                    select(documents.c.payload)
+                    .where(documents.c.space_id == space.id)
+                    .with_for_update()
+                )
+            ).all()
+            current = {
+                document.id: document
+                for document in (KnowledgeDocument.model_validate(row.payload) for row in doc_rows)
+            }
+            if set(value.documents) - set(current):
+                raise ValueError("space version references a removed document")
+            active_job = (
+                await connection.execute(
+                    select(jobs.c.id).where(
+                        jobs.c.space_id == space.id,
+                        jobs.c.status.in_(["queued", "running", "failed_retryable"]),
+                    ).limit(1)
+                )
+            ).first()
+            if active_job:
+                raise ValueError("space has active ingestion jobs; wait until they finish")
+            for document_id, state in value.documents.items():
+                if state.status != DocumentStatus.ACTIVE:
+                    continue
+                version_row = (
+                    await connection.execute(
+                        select(versions.c.payload).where(versions.c.id == state.version_id)
+                    )
+                ).first()
+                version = DocumentVersion.model_validate(version_row.payload) if version_row else None
+                if not version or version.document_id != document_id or version.status != "ready":
+                    raise ValueError("space version contains a missing or unready document version")
+                child_rows = (
+                    await connection.execute(
+                        select(chunks.c.generation_id, chunks.c.embedding).where(
+                            chunks.c.version_id == version.id, chunks.c.chunk_kind == "child"
+                        )
+                    )
+                ).all()
+                if not child_rows or any(
+                    row.generation_id != value.generation_id or row.embedding is None
+                    for row in child_rows
+                ):
+                    raise ValueError("space version contains an incomplete child index")
+            for document in current.values():
+                state = value.documents.get(document.id)
+                restored = document.model_copy(
+                    update={
+                        "current_version_id": state.version_id if state else document.current_version_id,
+                        "status": state.status if state else DocumentStatus.ARCHIVED,
+                        "updated_at": now,
+                    }
+                )
+                await connection.execute(
+                    update(documents).where(documents.c.id == document.id).values(
+                        payload=restored.model_dump(mode="json"),
+                        current_version_id=restored.current_version_id,
+                        status=restored.status.value,
+                    )
+                )
+            if value.generation_id is not None:
+                generation_row = (
+                    await connection.execute(
+                        select(generations.c.payload).where(
+                            generations.c.id == value.generation_id,
+                            generations.c.space_id == space.id,
+                        )
+                    )
+                ).first()
+                if not generation_row:
+                    raise ValueError("space version references a removed index generation")
+            generation_rows = (
+                await connection.execute(
+                    select(generations.c.payload).where(generations.c.space_id == space.id)
+                )
+            ).all()
+            for row in generation_rows:
+                generation = IndexGeneration.model_validate(row.payload)
+                if generation.id == value.generation_id:
+                    changed = generation.model_copy(update={"status": "active", "activated_at": now})
+                elif generation.status == "active":
+                    changed = generation.model_copy(update={"status": "retired"})
+                else:
+                    continue
+                await connection.execute(
+                    update(generations).where(generations.c.id == changed.id).values(
+                        payload=changed.model_dump(mode="json"), status=changed.status
+                    )
+                )
+            updated_space = space.model_copy(update={
+                "active_generation_id": value.generation_id,
+                "active_version_id": value.id,
+                "updated_at": now,
+            })
+            await connection.execute(
+                update(spaces).where(spaces.c.id == space.id).values(
+                    payload=updated_space.model_dump(mode="json"),
+                    active_generation_id=value.generation_id,
+                )
+            )
+            activated = value.model_copy(update={"activated_at": now})
+            await connection.execute(
+                update(space_versions).where(space_versions.c.id == value.id).values(
+                    payload=activated.model_dump(mode="json")
+                )
+            )
+        return updated_space
+
+    async def create_space_build(
+        self, build: SpaceBuild, generation: IndexGeneration,
+        document_versions: list[DocumentVersion], build_jobs: list[IngestionJob],
+    ) -> SpaceBuild:
+        async with self.engine.begin() as connection:
+            space = await self._lock_space(connection, build.space_id)
+            ensure_no_build(space)
+            base = await self._get_with_connection(
+                connection, space_versions, build.base_version_id, KnowledgeSpaceVersion,
+            )
+            current = await self._space_documents(connection, space.id)
+            validate_build_baseline(space, base, build, current)
+            active_job = (await connection.execute(select(jobs.c.id).where(
+                jobs.c.space_id == space.id,
+                jobs.c.status.in_(["queued", "running", "failed_retryable"]),
+            ).limit(1))).first()
+            if active_job:
+                raise ValueError("space has active ingestion jobs; wait until they finish")
+            validate_build_targets(build, generation, document_versions, build_jobs)
+            baseline_ids = [
+                state.version_id for state in base.documents.values()
+                if state.status == DocumentStatus.ACTIVE
+            ]
+            rows = (await connection.execute(select(versions.c.payload).where(
+                versions.c.id.in_(baseline_ids)
+            ))).all()
+            validate_build_sources(
+                build, base, [DocumentVersion.model_validate(row.payload) for row in rows],
+                document_versions,
+            )
+            if build.status != "building" or generation.id == space.active_generation_id:
+                raise ValueError("space build must start with a new unpublished generation")
+            await self._insert_with_connection(
+                connection, generations, generation, space_id=space.id, status=generation.status,
+            )
+            for version in document_versions:
+                await self._insert_with_connection(
+                    connection, versions, version, document_id=version.document_id,
+                    content_hash=version.content_hash,
+                )
+            for job in build_jobs:
+                await self._insert_with_connection(
+                    connection, jobs, job, space_id=space.id, document_id=job.document_id,
+                    status=job.status.value,
+                )
+            await self._insert_with_connection(
+                connection, space_builds, build, space_id=space.id, status=build.status,
+            )
+            updated = space.model_copy(update={
+                "active_build_id": build.id, "updated_at": datetime.now(UTC),
+            })
+            await connection.execute(update(spaces).where(spaces.c.id == space.id).values(
+                payload=updated.model_dump(mode="json"),
+            ))
+        return build
+
+    async def get_space_build(self, build_id: str) -> SpaceBuild | None:
+        return await self._get(space_builds, build_id, SpaceBuild)
+
+    async def list_space_builds(self, space_id: str) -> list[SpaceBuild]:
+        return await self._list(space_builds, SpaceBuild, space_builds.c.space_id == space_id)
+
+    async def publish_space_build(self, build_id: str) -> KnowledgeSpaceVersion:
+        async with self.engine.begin() as connection:
+            space, build = await self._lock_build(connection, build_id)
+            if build.status == "published" and build.published_version_id:
+                snapshot = await self._get_with_connection(
+                    connection, space_versions, build.published_version_id, KnowledgeSpaceVersion,
+                )
+                if snapshot is None:
+                    raise ValueError("published space build snapshot is missing")
+                return snapshot
+            if space.active_build_id != build.id or build.status == "cancelled":
+                raise ValueError("space build is not active")
+            base = await self._get_with_connection(
+                connection, space_versions, build.base_version_id, KnowledgeSpaceVersion,
+            )
+            current = await self._space_documents(connection, space.id)
+            validate_build_baseline(space, base, build, current)
+            generation = await self._get_with_connection(
+                connection, generations, build.generation_id, IndexGeneration,
+            )
+            if generation is None:
+                raise ValueError("space build index generation is missing")
+            target_ids = [
+                state.version_id for state in build.documents.values()
+                if state.status == DocumentStatus.ACTIVE
+            ]
+            version_rows = (await connection.execute(select(versions.c.payload).where(
+                versions.c.id.in_(target_ids)
+            ))).all()
+            job_rows = (await connection.execute(select(jobs.c.payload).where(
+                jobs.c.id.in_(build.job_ids)
+            ).order_by(jobs.c.id).with_for_update())).all()
+            validate_build_targets(
+                build, generation,
+                [DocumentVersion.model_validate(row.payload) for row in version_rows],
+                [IngestionJob.model_validate(row.payload) for row in job_rows], publishing=True,
+            )
+            chunk_rows = (await connection.execute(select(chunks.c.payload, chunks.c.embedding).where(
+                chunks.c.version_id.in_(target_ids),
+            ))).all()
+            validate_build_chunks(build, [_chunk_from_row(row) for row in chunk_rows])
+            now = datetime.now(UTC)
+            last_number = (await connection.execute(select(space_versions.c.version_number).where(
+                space_versions.c.space_id == space.id,
+            ).order_by(space_versions.c.version_number.desc()).limit(1))).scalar_one_or_none()
+            snapshot = KnowledgeSpaceVersion(
+                space_id=space.id, version_number=(last_number or 0) + 1,
+                generation_id=generation.id, documents=build.documents, note=build.note,
+                activated_at=now,
+            )
+            await self._insert_with_connection(
+                connection, space_versions, snapshot, space_id=space.id,
+                version_number=snapshot.version_number,
+            )
+            for document in current:
+                state = build.documents[document.id]
+                restored = document.model_copy(update={
+                    "current_version_id": state.version_id, "status": state.status, "updated_at": now,
+                })
+                await connection.execute(update(documents).where(documents.c.id == document.id).values(
+                    payload=restored.model_dump(mode="json"), current_version_id=state.version_id,
+                    status=state.status.value,
+                ))
+            await self._switch_generation(connection, space.id, generation.id, now)
+            updated = space.model_copy(update={
+                "active_generation_id": generation.id, "active_version_id": snapshot.id,
+                "active_build_id": None, "updated_at": now,
+            })
+            await connection.execute(update(spaces).where(spaces.c.id == space.id).values(
+                payload=updated.model_dump(mode="json"), active_generation_id=generation.id,
+            ))
+            published = build.model_copy(update={
+                "status": "published", "published_version_id": snapshot.id, "updated_at": now,
+            })
+            await connection.execute(update(space_builds).where(space_builds.c.id == build.id).values(
+                payload=published.model_dump(mode="json"), status=published.status,
+            ))
+            return snapshot
+
+    async def cancel_space_build(self, build_id: str) -> SpaceBuild:
+        async with self.engine.begin() as connection:
+            space, build = await self._lock_build(connection, build_id)
+            if build.status == "cancelled":
+                return build
+            if space.active_build_id != build.id or build.status == "published":
+                raise ValueError("space build is not active")
+            job_rows = (await connection.execute(select(jobs.c.payload).where(
+                jobs.c.id.in_(build.job_ids)
+            ).order_by(jobs.c.id).with_for_update())).all()
+            build_jobs = [IngestionJob.model_validate(row.payload) for row in job_rows]
+            if any(job.status == JobStatus.RUNNING for job in build_jobs):
+                raise ValueError("space build has running jobs; wait until they finish before cancelling")
+            now = datetime.now(UTC)
+            for job in build_jobs:
+                if job.status in {JobStatus.COMPLETED, JobStatus.CANCELLED}:
+                    continue
+                cancelled_job = job.model_copy(update={
+                    "status": JobStatus.CANCELLED, "retryable": False, "updated_at": now,
+                })
+                await connection.execute(update(jobs).where(jobs.c.id == job.id).values(
+                    payload=cancelled_job.model_dump(mode="json"), status=cancelled_job.status.value,
+                ))
+            generation = await self._get_with_connection(
+                connection, generations, build.generation_id, IndexGeneration,
+            )
+            if generation:
+                retired = generation.model_copy(update={"status": "retired"})
+                await connection.execute(update(generations).where(generations.c.id == generation.id).values(
+                    payload=retired.model_dump(mode="json"), status=retired.status,
+                ))
+            updated = space.model_copy(update={"active_build_id": None, "updated_at": now})
+            await connection.execute(update(spaces).where(spaces.c.id == space.id).values(
+                payload=updated.model_dump(mode="json"),
+            ))
+            cancelled = build.model_copy(update={"status": "cancelled", "updated_at": now})
+            await connection.execute(update(space_builds).where(space_builds.c.id == build.id).values(
+                payload=cancelled.model_dump(mode="json"), status=cancelled.status,
+            ))
+            return cancelled
 
     async def create_document(self, value: KnowledgeDocument) -> KnowledgeDocument:
         if await self.find_document(value.space_id, value.source_id):
             raise ValueError(f"document source already exists: {value.source_id}")
-        await self._insert(
-            documents,
-            value,
-            space_id=value.space_id,
-            source_id=value.source_id,
-            current_version_id=value.current_version_id,
-            status=value.status.value,
-        )
+        async with self.engine.begin() as connection:
+            await self._clear_active_space_version(connection, value.space_id)
+            await connection.execute(documents.insert().values(
+                id=value.id,
+                space_id=value.space_id,
+                source_id=value.source_id,
+                current_version_id=value.current_version_id,
+                status=value.status.value,
+                payload=value.model_dump(mode="json"),
+                created_at=value.created_at,
+            ))
         return value
 
     async def update_document(self, value: KnowledgeDocument) -> KnowledgeDocument:
-        await self._update(
-            documents,
-            value,
-            status=value.status.value,
-            current_version_id=value.current_version_id,
-        )
+        async with self.engine.begin() as connection:
+            await self._clear_active_space_version(connection, value.space_id)
+            await connection.execute(
+                update(documents).where(documents.c.id == value.id).values(
+                    payload=value.model_dump(mode="json"),
+                    status=value.status.value,
+                    current_version_id=value.current_version_id,
+                )
+            )
         return value
+
+    async def _clear_active_space_version(self, connection: Any, space_id: str) -> None:
+        row = (
+            await connection.execute(
+                select(spaces.c.payload).where(spaces.c.id == space_id).with_for_update()
+            )
+        ).first()
+        if row:
+            space = KnowledgeSpace.model_validate(row.payload)
+            ensure_no_build(space)
+            if space.active_version_id:
+                changed = space.model_copy(update={
+                    "active_version_id": None, "updated_at": datetime.now(UTC)
+                })
+                await connection.execute(
+                    update(spaces).where(spaces.c.id == space_id).values(
+                        payload=changed.model_dump(mode="json")
+                    )
+                )
 
     async def get_document(self, document_id: str) -> KnowledgeDocument | None:
         return await self._get(documents, document_id, KnowledgeDocument)
@@ -198,6 +663,13 @@ class PostgresKnowledgeRepository:
 
     async def purge_document(self, document_id: str) -> None:
         async with self.engine.begin() as connection:
+            row = (
+                await connection.execute(
+                    select(documents.c.space_id).where(documents.c.id == document_id)
+                )
+            ).first()
+            if row:
+                await self._clear_active_space_version(connection, row.space_id)
             await connection.execute(
                 delete(chunks).where(chunks.c.document_id == document_id)
             )
@@ -255,28 +727,17 @@ class PostgresKnowledgeRepository:
         if not selected:
             raise KeyError(generation_id)
         now = datetime.now(UTC)
-        previous = await self._list(
-            generations,
-            IndexGeneration,
-            (generations.c.space_id == selected.space_id)
-            & (generations.c.status == "active"),
-        )
-        for item in previous:
-            await self._update(
-                generations,
-                item.model_copy(update={"status": "retired"}),
-                status="retired",
-            )
         active = selected.model_copy(update={"status": "active", "activated_at": now})
-        await self._update(generations, active, status="active")
-        space = await self.get_space(selected.space_id)
-        if not space:
-            raise RuntimeError("generation references missing space")
-        await self.update_space(
-            space.model_copy(
-                update={"active_generation_id": active.id, "updated_at": now}
-            )
-        )
+        async with self.engine.begin() as connection:
+            space = await self._lock_space(connection, selected.space_id)
+            ensure_no_build(space)
+            await self._switch_generation(connection, space.id, selected.id, now)
+            changed = space.model_copy(update={
+                "active_generation_id": active.id, "active_version_id": None, "updated_at": now,
+            })
+            await connection.execute(update(spaces).where(spaces.c.id == space.id).values(
+                payload=changed.model_dump(mode="json"), active_generation_id=active.id,
+            ))
         return active
 
     async def replace_chunks(
@@ -332,17 +793,32 @@ class PostgresKnowledgeRepository:
             ).all()
         return len(rows)
 
+    async def count_version_searchable_chunks(
+        self, version_id: str, generation_id: str
+    ) -> int:
+        async with self.engine.connect() as connection:
+            rows = (
+                await connection.execute(
+                    select(chunks.c.id).where(
+                        chunks.c.version_id == version_id,
+                        chunks.c.generation_id == generation_id,
+                        chunks.c.chunk_kind == "child",
+                        chunks.c.embedding.is_not(None),
+                    )
+                )
+            ).all()
+        return len(rows)
+
     async def list_searchable_chunks(
         self, space_id: str, filters: KnowledgeFilter | None = None
     ) -> list[KnowledgeChunk]:
-        space = await self.get_space(space_id)
-        if not space or not space.active_generation_id:
-            return []
         statement = (
             select(chunks.c.payload, chunks.c.embedding)
-            .select_from(chunks.join(documents, chunks.c.document_id == documents.c.id))
+            .select_from(chunks.join(documents, chunks.c.document_id == documents.c.id)
+                         .join(spaces, documents.c.space_id == spaces.c.id))
             .where(
-                chunks.c.generation_id == space.active_generation_id,
+                spaces.c.id == space_id,
+                chunks.c.generation_id == spaces.c.active_generation_id,
                 chunks.c.chunk_kind == "child",
                 documents.c.status == DocumentStatus.ACTIVE.value,
                 chunks.c.version_id == documents.c.current_version_id,
@@ -354,17 +830,33 @@ class PostgresKnowledgeRepository:
         return [item for item in values if _matches(item, filters)]
 
     async def create_job(self, value: IngestionJob) -> IngestionJob:
-        await self._insert(
-            jobs,
-            value,
-            space_id=value.space_id,
-            document_id=value.document_id,
-            status=value.status.value,
-        )
+        async with self.engine.begin() as connection:
+            space = await self._lock_space(connection, value.space_id)
+            ensure_job_allowed(space, value)
+            if value.space_build_id:
+                raise ValueError("space build jobs must be created in the build transaction")
+            await self._insert_with_connection(
+                connection, jobs, value, space_id=value.space_id,
+                document_id=value.document_id, status=value.status.value,
+            )
         return value
 
     async def update_job(self, value: IngestionJob) -> IngestionJob:
-        await self._update(jobs, value, status=value.status.value)
+        async with self.engine.begin() as connection:
+            space = await self._lock_space(connection, value.space_id)
+            latest = await self._get_with_connection(connection, jobs, value.id, IngestionJob, lock=True)
+            if latest is None:
+                raise KeyError(f"knowledge job not found: {value.id}")
+            if (value.space_id, value.document_id, value.version_id, value.space_build_id, value.generation_id) != (
+                latest.space_id, latest.document_id, latest.version_id, latest.space_build_id, latest.generation_id
+            ):
+                raise ValueError("ingestion job identity cannot change")
+            ensure_job_allowed(space, value)
+            if latest.status in {JobStatus.COMPLETED, JobStatus.CANCELLED} and value.status != latest.status:
+                raise ValueError("terminal ingestion job cannot be restarted")
+            await connection.execute(update(jobs).where(jobs.c.id == value.id).values(
+                payload=value.model_dump(mode="json"), status=value.status.value,
+            ))
         return value
 
     async def get_job(self, job_id: str) -> IngestionJob | None:
@@ -376,22 +868,24 @@ class PostgresKnowledgeRepository:
         return sorted(values, key=lambda item: item.created_at, reverse=True)
 
     async def claim_job(self, job_id: str | None = None) -> IngestionJob | None:
+        # Find a candidate without a row lock, then lock its space before the
+        # job. Publish/cancel use the same order, so a claim cannot deadlock or
+        # resurrect a job cancelled while this worker was selecting it.
+        statement = select(jobs.c.payload).where(jobs.c.status.in_(["queued", "failed_retryable"]))
+        if job_id is not None:
+            statement = statement.where(jobs.c.id == job_id)
+        async with self.engine.connect() as connection:
+            candidate = (await connection.execute(statement.order_by(jobs.c.created_at).limit(1))).first()
+        if not candidate:
+            return None
+        initial = IngestionJob.model_validate(candidate.payload)
         async with self.engine.begin() as connection:
-            statement = select(jobs.c.payload).where(
-                jobs.c.status.in_(["queued", "failed_retryable"])
-            )
-            if job_id is not None:
-                statement = statement.where(jobs.c.id == job_id)
-            row = (
-                await connection.execute(
-                    statement.order_by(jobs.c.created_at)
-                    .limit(1)
-                    .with_for_update(skip_locked=True)
-                )
-            ).first()
-            if not row:
+            space = await self._lock_space(connection, initial.space_id)
+            item = await self._get_with_connection(connection, jobs, initial.id, IngestionJob, lock=True)
+            if not item or item.status not in {JobStatus.QUEUED, JobStatus.FAILED_RETRYABLE}:
                 return None
-            item = IngestionJob.model_validate(row.payload)
+            if item.space_build_id != space.active_build_id:
+                return None
             claimed = item.model_copy(
                 update={
                     "status": JobStatus.RUNNING,
@@ -412,6 +906,62 @@ class PostgresKnowledgeRepository:
         async with self.engine.connect() as connection:
             rows = (await connection.execute(select(chunks.c.id))).all()
         return len(rows)
+
+    async def _lock_space(self, connection: Any, space_id: str) -> KnowledgeSpace:
+        value = await self._get_with_connection(connection, spaces, space_id, KnowledgeSpace, lock=True)
+        if value is None:
+            raise KeyError(f"knowledge space not found: {space_id}")
+        return value
+
+    async def _lock_build(self, connection: Any, build_id: str) -> tuple[KnowledgeSpace, SpaceBuild]:
+        initial = await self._get_with_connection(connection, space_builds, build_id, SpaceBuild)
+        if initial is None:
+            raise KeyError(f"knowledge space build not found: {build_id}")
+        space = await self._lock_space(connection, initial.space_id)
+        build = await self._get_with_connection(connection, space_builds, build_id, SpaceBuild, lock=True)
+        if build is None:
+            raise KeyError(f"knowledge space build not found: {build_id}")
+        return space, build
+
+    async def _space_documents(self, connection: Any, space_id: str) -> list[KnowledgeDocument]:
+        rows = (await connection.execute(select(documents.c.payload).where(
+            documents.c.space_id == space_id,
+        ))).all()
+        return [KnowledgeDocument.model_validate(row.payload) for row in rows]
+
+    async def _get_with_connection(
+        self, connection: Any, table: Table, value_id: str, model: type[T], *, lock: bool = False
+    ) -> T | None:
+        statement = select(table.c.payload).where(table.c.id == value_id)
+        if lock:
+            statement = statement.with_for_update()
+        row = (await connection.execute(statement)).first()
+        return model.model_validate(row.payload) if row else None
+
+    async def _insert_with_connection(
+        self, connection: Any, table: Table, value: Any, **extra: Any
+    ) -> None:
+        await connection.execute(table.insert().values(
+            id=value.id, payload=value.model_dump(mode="json"), created_at=value.created_at, **extra,
+        ))
+
+    async def _switch_generation(
+        self, connection: Any, space_id: str, generation_id: str, now: datetime
+    ) -> None:
+        rows = (await connection.execute(select(generations.c.payload).where(
+            generations.c.space_id == space_id,
+        ))).all()
+        for row in rows:
+            item = IndexGeneration.model_validate(row.payload)
+            if item.id == generation_id:
+                changed = item.model_copy(update={"status": "active", "activated_at": now})
+            elif item.status == "active":
+                changed = item.model_copy(update={"status": "retired"})
+            else:
+                continue
+            await connection.execute(update(generations).where(generations.c.id == item.id).values(
+                payload=changed.model_dump(mode="json"), status=changed.status,
+            ))
 
     async def _insert(self, table: Table, value: Any, **extra: Any) -> None:
         async with self.engine.begin() as connection:

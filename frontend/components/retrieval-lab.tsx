@@ -161,7 +161,7 @@ function SearchResults({ snapshot, stale }: { snapshot: SearchSnapshot; stale: b
     rerank: Math.max(0.001, ...result.hits.map((hit) => hit.rerank_score ?? 0)),
   };
   const stages = [
-    { name: "双路召回", value: `${trace.lexical_candidates} / ${trace.vector_candidates}`, note: "关键词 / 向量" },
+    { name: "双路召回", value: `${trace.lexical_candidates} / ${trace.vector_candidates}`, note: "Top-K 关键词 / 向量" },
     { name: "融合候选", value: String(trace.fused_candidates), note: `上限 ${settings.candidate_limit}` },
     { name: "模型重排", value: trace.rerank_requested ? String(trace.rerank_candidates) : "跳过", note: trace.rerank_applied ? "已完成" : trace.rerank_requested ? "未应用" : "本次关闭" },
     { name: "返回证据", value: String(result.hits.length), note: `上限 ${settings.result_limit}` },
@@ -173,7 +173,7 @@ function SearchResults({ snapshot, stale }: { snapshot: SearchSnapshot; stale: b
     <div className="ragPipeline" aria-label="检索阶段统计">{stages.map((stage) => <div key={stage.name}><span>{stage.name}</span><strong>{stage.value}</strong><small>{stage.note}</small></div>)}</div>
     <div className={`ragDecision decision-${result.decision.status}`}><div><strong>{statusLabel}</strong><p>{result.decision.reasons.join("；") || "已获得多条可用上下文。"}</p></div><div><span>最高相关度</span><strong>{score(result.decision.best_relevance)}</strong><small>{result.decision.score_basis === "rerank" ? "重排分" : "归一化融合分"}</small></div></div>
     {trace.degraded.length > 0 && <div className="ragDegraded">部分检索能力降级：{trace.degraded.join("、")}。请结合下方分数判断结果。</div>}
-    <div className="ragResultCaption"><h4>返回的原文片段</h4><span>分数条分别按各自最大值显示，不能跨指标直接比较。</span></div>
+    <div className="ragResultCaption"><h4>返回的原文片段</h4><span>分数条分别按各自最大值显示；RRF 融合分不是相关概率，不能跨指标比较。</span></div>
     {result.hits.length === 0 ? <div className="ragNoHits"><strong>没有找到可用片段</strong><p>检查空间中是否已有可检索文档，或放宽问题中的限定词后再试。</p></div> : <div className="ragHitList">{result.hits.map((hit, index) => {
       const source = hit.chunk.metadata.canonical_uri;
       const sourceUrl = typeof source === "string" && /^https?:\/\//.test(source) ? source : null;

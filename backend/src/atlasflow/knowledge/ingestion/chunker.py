@@ -174,6 +174,10 @@ class StructuralChunker:
     ) -> KnowledgeChunk:
         pages = [item.page_number for item in blocks if item.page_number]
         orders = [item.order for item in blocks]
+        section_roles = {
+            role for item in blocks
+            if isinstance(role := item.source_locator.get("section_role"), str)
+        }
         return KnowledgeChunk(
             id=chunk_id,
             document_id=document_id,
@@ -191,6 +195,7 @@ class StructuralChunker:
             block_end=max(orders) if orders else None,
             metadata={
                 **metadata,
+                **({"section_role": section_roles.pop()} if len(section_roles) == 1 else {}),
                 "source_spans": [
                     {"order": item.order, **item.source_locator}
                     for item in blocks

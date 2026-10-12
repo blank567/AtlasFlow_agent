@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-CURRENT_PARSER_VERSION = "structured-parser-v2"
+CURRENT_PARSER_VERSION = "structured-parser-v3"
 CURRENT_CHUNKER_VERSION = "parent-child-v2"
 
 
@@ -60,6 +60,8 @@ class KnowledgeSpace(FrozenModel):
     embedding_profile: str = "default-embedding-v1"
     retrieval_profile: str = "default-hybrid-v1"
     active_generation_id: str | None = None
+    active_version_id: str | None = None
+    active_build_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -140,6 +142,8 @@ class IngestionJob(FrozenModel):
     space_id: str
     document_id: str
     version_id: str
+    space_build_id: str | None = None
+    generation_id: str | None = None
     status: JobStatus = JobStatus.QUEUED
     stage: JobStage = JobStage.QUEUED
     attempt: int = Field(default=0, ge=0)
@@ -159,6 +163,42 @@ class IndexGeneration(FrozenModel):
     retrieval_profile: str
     created_at: datetime = Field(default_factory=utc_now)
     activated_at: datetime | None = None
+
+
+class SpaceDocumentState(FrozenModel):
+    version_id: str | None = None
+    status: DocumentStatus
+
+
+class KnowledgeSpaceVersion(FrozenModel):
+    """An immutable manifest of a whole space; only its editorial note may change."""
+
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    space_id: str
+    version_number: int = Field(ge=1)
+    generation_id: str | None = None
+    documents: dict[str, SpaceDocumentState] = Field(default_factory=dict)
+    note: str = Field(default="", max_length=500)
+    created_at: datetime = Field(default_factory=utc_now)
+    activated_at: datetime | None = None
+
+
+class SpaceBuild(FrozenModel):
+    """Staged whole-space index; published pointers stay at the base until release."""
+
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    space_id: str
+    base_version_id: str
+    generation_id: str
+    documents: dict[str, SpaceDocumentState] = Field(default_factory=dict)
+    job_ids: list[str] = Field(default_factory=list)
+    status: Literal["building", "ready", "failed", "published", "cancelled"] = "building"
+    parser_version: str = CURRENT_PARSER_VERSION
+    chunker_version: str = CURRENT_CHUNKER_VERSION
+    note: str = Field(default="", max_length=500)
+    published_version_id: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class RetrievalProfile(FrozenModel):

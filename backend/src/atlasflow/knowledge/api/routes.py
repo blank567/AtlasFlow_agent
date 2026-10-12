@@ -9,6 +9,7 @@ from atlasflow.knowledge.api.schemas import (
     CreateSpaceRequest,
     IngestTextRequest,
     KnowledgeSearchRequest,
+    SpaceVersionNoteRequest,
 )
 from atlasflow.knowledge.domain import PrincipalContext
 
@@ -40,6 +41,90 @@ async def list_documents(space: str, request: Request):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/spaces/{space}/versions")
+async def list_space_versions(space: str, request: Request):
+    try:
+        return await platform(request).list_space_versions(space)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/spaces/{space}/versions", status_code=status.HTTP_201_CREATED)
+async def create_space_version(space: str, payload: SpaceVersionNoteRequest, request: Request):
+    try:
+        return await platform(request).create_space_version(space, payload.note)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/spaces/{space}/reindex", status_code=status.HTTP_202_ACCEPTED)
+async def start_space_build(space: str, payload: SpaceVersionNoteRequest, request: Request):
+    try:
+        return await platform(request).start_space_build(space, payload.note)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/spaces/{space}/builds")
+async def list_space_builds(space: str, request: Request):
+    try:
+        return await platform(request).list_space_builds(space)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/spaces/{space}/builds/{build_id}")
+async def get_space_build(space: str, build_id: str, request: Request):
+    try:
+        return await platform(request).get_space_build(space, build_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/spaces/{space}/builds/{build_id}/publish")
+async def publish_space_build(space: str, build_id: str, request: Request):
+    try:
+        return await platform(request).publish_space_build(space, build_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/spaces/{space}/builds/{build_id}/cancel")
+async def cancel_space_build(space: str, build_id: str, request: Request):
+    try:
+        return await platform(request).cancel_space_build(space, build_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.put("/spaces/{space}/versions/{version_id}/note")
+async def update_space_version_note(
+    space: str, version_id: str, payload: SpaceVersionNoteRequest, request: Request
+):
+    try:
+        return await platform(request).set_space_version_note(space, version_id, payload.note)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/spaces/{space}/versions/{version_id}/activate")
+async def activate_space_version(space: str, version_id: str, request: Request):
+    try:
+        return await platform(request).activate_space_version(space, version_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/spaces/{space}/documents", status_code=status.HTTP_202_ACCEPTED)
 async def ingest_text(space: str, payload: IngestTextRequest, request: Request):
     try:
@@ -56,6 +141,8 @@ async def ingest_text(space: str, payload: IngestTextRequest, request: Request):
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/spaces/{space}/upload", status_code=status.HTTP_202_ACCEPTED)
@@ -89,6 +176,8 @@ async def upload_document(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/documents/{document_id}")
@@ -106,6 +195,8 @@ async def archive_document(document_id: str, request: Request):
         return await platform(request).archive_document(document_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/documents/{document_id}/reindex", status_code=status.HTTP_202_ACCEPTED)

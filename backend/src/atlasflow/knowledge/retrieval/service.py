@@ -83,6 +83,9 @@ class RetrievalService:
             raise PermissionError("knowledge space is not available to this principal")
         generation = await self.repository.active_generation(selected_space.id)
         chunks = await self.repository.list_searchable_chunks(selected_space.id, filters)
+        # Chunks are read together with published pointers by the repository.
+        # A whole-space release may happen after the earlier generation lookup.
+        generation_id = chunks[0].generation_id if chunks else (generation.id if generation else None)
         if not chunks:
             return SearchResult(
                 query=query,
@@ -95,24 +98,41 @@ class RetrievalService:
                 applied_filters=filters,
                 trace=RetrievalTrace(
                     profile_id=profile.id,
-                    generation_id=generation.id if generation else None,
+                    generation_id=generation_id,
                     rerank_requested=rerank_enabled,
                     applied_parameters=applied_parameters,
                     duration_ms=int((perf_counter() - started) * 1000),
                 ),
             )
 
-        lexical_scores = await self._lexical(query, chunks)
+        lexical_scores = (
+            await self._lexical(query, chunks)
+            if profile.lexical_weight > 0 else {item.id: 0.0 for item in chunks}
+        )
         degraded: list[str] = []
-        try:
-            vector_scores = await self._vector(query, chunks)
-        except Exception as exc:  # noqa: BLE001 - vector retrieval has a specified fallback
+        if profile.vector_weight == 0:
             vector_scores = {item.id: 0.0 for item in chunks}
-            degraded.append(f"vector_unavailable:{type(exc).__name__}")
-        lexical_rank = ranks(lexical_scores)
-        vector_rank = ranks(vector_scores)
-        fused = await self._fuse(chunks, lexical_rank, vector_rank, profile)
-        candidate_pool = sorted(chunks, key=lambda item: (-fused[item.id], item.id))[
+        else:
+            try:
+                vector_scores = await self._vector(query, chunks)
+            except Exception as exc:  # noqa: BLE001 - vector retrieval has a specified fallback
+                vector_scores = {item.id: 0.0 for item in chunks}
+                degraded.append(f"vector_unavailable:{type(exc).__name__}")
+        lexical_rank = (
+            ranks(lexical_scores, limit=profile.candidate_limit)
+            if profile.lexical_weight > 0 else {}
+        )
+        vector_rank = (
+            ranks(vector_scores, limit=profile.candidate_limit)
+            if profile.vector_weight > 0 else {}
+        )
+        # RRF consumes the union of actual matches, never an arbitrary rank for
+        # zero-score chunks (including when a retrieval lane is unavailable).
+        eligible = [
+            item for item in chunks if item.id in lexical_rank or item.id in vector_rank
+        ]
+        fused = await self._fuse(eligible, lexical_rank, vector_rank, profile)
+        candidate_pool = sorted(eligible, key=lambda item: (-fused[item.id], item.id))[
             : profile.candidate_limit
         ]
         candidates = candidate_pool[: profile.rerank_limit] if rerank_enabled else candidate_pool
@@ -142,7 +162,11 @@ class RetrievalService:
             for item in ordered
         ]
         hits = await self.assembler.assemble(raw_hits, limit=limit)
-        fusion_ceiling = (profile.lexical_weight + profile.vector_weight) / (profile.rrf_k + 1)
+        available_weight = (
+            (profile.lexical_weight if lexical_rank else 0)
+            + (profile.vector_weight if vector_rank else 0)
+        )
+        fusion_ceiling = available_weight / (profile.rrf_k + 1)
         scored_hits = [
             (
                 hit.rerank_score,
@@ -161,9 +185,9 @@ class RetrievalService:
             applied_filters=filters,
             trace=RetrievalTrace(
                 profile_id=profile.id,
-                generation_id=generation.id if generation else None,
-                lexical_candidates=sum(score > 0 for score in lexical_scores.values()),
-                vector_candidates=sum(score > 0 for score in vector_scores.values()),
+                generation_id=generation_id,
+                lexical_candidates=len(lexical_rank),
+                vector_candidates=len(vector_rank),
                 fused_candidates=len(candidate_pool),
                 rerank_candidates=len(candidates) if rerank_enabled else 0,
                 rerank_requested=rerank_enabled,
@@ -193,8 +217,13 @@ class RetrievalService:
         profile: RetrievalProfile,
     ) -> dict[str, float]:
         return {
-            item.id: profile.lexical_weight / (profile.rrf_k + lexical_rank[item.id])
-            + profile.vector_weight / (profile.rrf_k + vector_rank[item.id])
+            item.id: (
+                profile.lexical_weight / (profile.rrf_k + lexical_rank[item.id])
+                if item.id in lexical_rank else 0.0
+            ) + (
+                profile.vector_weight / (profile.rrf_k + vector_rank[item.id])
+                if item.id in vector_rank else 0.0
+            )
             for item in chunks
         }
 

@@ -4,7 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 from atlasflow.knowledge.application import KnowledgePlatform
-from atlasflow.knowledge.domain import IngestionJob, RetrievalHit, RetrievalTuning
+from atlasflow.knowledge.domain import IngestionJob, KnowledgeSpace, RetrievalHit, RetrievalTuning
+from atlasflow.knowledge.domain.models import IndexGeneration
 from atlasflow.knowledge.infrastructure import InMemoryKnowledgeRepository, MemoryBlobStore
 from atlasflow.knowledge.ingestion import ParserRegistry, StructuralChunker
 from atlasflow.knowledge.ingestion.parsers.pdf_parser import PdfDocumentParser
@@ -211,6 +212,7 @@ async def test_context_uses_child_source_span_when_identical_text_repeats() -> N
 @pytest.mark.asyncio
 async def test_claim_specific_job_does_not_take_another_document() -> None:
     repository = InMemoryKnowledgeRepository()
+    await repository.create_space(KnowledgeSpace(id="space", slug="test-space", name="Test space"))
     first = await repository.create_job(
         IngestionJob(space_id="space", document_id="first", version_id="v1")
     )
@@ -288,7 +290,7 @@ async def test_reindex_creates_new_pipeline_version_and_keeps_old_until_ready() 
     assert document.current_version_id == original.version_id
     assert len(versions) == 2
     assert versions[0].blob_key == versions[1].blob_key
-    assert versions[1].parser_version == "structured-parser-v2"
+    assert versions[1].parser_version == "structured-parser-v3"
     assert (await platform.search("keyword")).hits[0].chunk.version_id == original.version_id
 
     completed = await platform.process_job(queued.id)
@@ -296,6 +298,103 @@ async def test_reindex_creates_new_pipeline_version_and_keeps_old_until_ready() 
     assert completed.status == "completed"
     assert document.current_version_id == queued.version_id
     assert (await platform.search("keyword")).hits[0].chunk.version_id == queued.version_id
+    await platform.close()
+
+
+@pytest.mark.asyncio
+async def test_space_versions_restore_every_document_and_hide_later_additions() -> None:
+    platform = make_platform()
+    await platform.start()
+    original_jobs = []
+    for source in ("alpha", "beta"):
+        job = await platform.submit(
+            space="user-default", title=source, source_id=source,
+            content=f"old {source} evidence".encode(), mime_type="text/plain",
+        )
+        await platform.process_job(job.id)
+        original_jobs.append(job)
+    first = await platform.create_space_version("user-default", "原始知识空间")
+    assert first.version_number == 1
+    assert len(first.documents) == 2
+    updated = await platform.set_space_version_note("user-default", first.id, "统一切块前")
+    assert updated.note == "统一切块前"
+
+    next_generation = await platform.repository.create_generation(
+        IndexGeneration(
+            space_id=first.space_id, embedding_profile="new", retrieval_profile="new"
+        )
+    )
+    await platform.repository.activate_generation(next_generation.id)
+    assert (await platform.get_space("user-default")).active_version_id is None
+    with pytest.raises(ValueError, match="complete child index"):
+        await platform.create_space_version("user-default", "mixed generations")
+    new_jobs = []
+    for source in ("alpha", "beta", "gamma"):
+        job = await platform.submit(
+            space="user-default", title=source, source_id=source,
+            content=f"new {source} evidence".encode(), mime_type="text/plain",
+        )
+        await platform.process_job(job.id)
+        new_jobs.append(job)
+    second = await platform.create_space_version("user-default", "更新后的知识空间")
+    assert (await platform.get_space("user-default")).active_version_id == second.id
+    chunk_count = await platform.repository.count_chunks()
+
+    restored = await platform.activate_space_version("user-default", first.id)
+    documents = {item.source_id: item for item in await platform.list_documents("user-default")}
+    searchable = await platform.repository.list_searchable_chunks(restored.id)
+    assert restored.active_generation_id == first.generation_id
+    assert restored.active_version_id == first.id
+    assert {documents[source].current_version_id for source in ("alpha", "beta")} == {
+        job.version_id for job in original_jobs
+    }
+    assert documents["gamma"].status == "archived"
+    assert {chunk.version_id for chunk in searchable} == {job.version_id for job in original_jobs}
+    assert await platform.repository.count_chunks() == chunk_count
+
+    current = await platform.activate_space_version("user-default", second.id)
+    documents = {item.source_id: item for item in await platform.list_documents("user-default")}
+    assert current.active_generation_id == next_generation.id
+    assert documents["gamma"].status == "active"
+    assert {chunk.version_id for chunk in await platform.repository.list_searchable_chunks(current.id)} == {
+        job.version_id for job in new_jobs
+    }
+    await platform.close()
+
+
+@pytest.mark.asyncio
+async def test_space_version_blocks_busy_incomplete_and_foreign_snapshots() -> None:
+    platform = make_platform()
+    await platform.start()
+    first = await platform.submit(
+        space="user-default", title="First", source_id="first-source",
+        content=b"First source", mime_type="text/plain",
+    )
+    with pytest.raises(ValueError, match="active ingestion jobs"):
+        await platform.create_space_version("user-default", "too early")
+    await platform.process_job(first.id)
+    snapshot = await platform.create_space_version("user-default", "ready")
+    second_space = await platform.create_space(slug="another-space", name="Another")
+    with pytest.raises(KeyError, match="not found"):
+        await platform.activate_space_version(second_space.slug, snapshot.id)
+
+    changed = await platform.submit(
+        space="user-default", title="First", source_id="first-source",
+        content=b"Changed source", mime_type="text/plain",
+    )
+    with pytest.raises(ValueError, match="active ingestion jobs"):
+        await platform.activate_space_version("user-default", snapshot.id)
+    await platform.process_job(changed.id)
+
+    repository = platform.repository
+    assert isinstance(repository, InMemoryKnowledgeRepository)
+    child = next(
+        chunk for chunk in repository.chunks.values()
+        if chunk.version_id == first.version_id and chunk.chunk_kind == "child"
+    )
+    repository.chunks[child.id] = child.model_copy(update={"embedding": None})
+    with pytest.raises(ValueError, match="complete child index"):
+        await platform.activate_space_version("user-default", snapshot.id)
     await platform.close()
 
 
