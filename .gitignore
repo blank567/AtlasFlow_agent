@@ -13,6 +13,7 @@ node_modules/
 .next/
 .next-build/
 .next-space-build-check/
+.next-design-check/
 coverage/
 *.log
 .npm-cache/

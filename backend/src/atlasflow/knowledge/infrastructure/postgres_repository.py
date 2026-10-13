@@ -36,6 +36,7 @@ from atlasflow.knowledge.domain import (
     SpaceDocumentState,
 )
 from atlasflow.knowledge.domain.build_validation import (
+    BUSY_JOB_STATUSES,
     ensure_job_allowed,
     ensure_no_build,
     validate_build_baseline,
@@ -264,6 +265,8 @@ class PostgresKnowledgeRepository:
             if not row:
                 raise KeyError(f"knowledge space version not found: {value.id}")
             latest = KnowledgeSpaceVersion.model_validate(row.payload)
+            if latest.space_id != value.space_id or latest.deleted_at is not None:
+                raise KeyError(f"knowledge space version not found: {value.id}")
             updated = latest.model_copy(update={"note": value.note})
             await connection.execute(
                 update(space_versions).where(space_versions.c.id == value.id).values(
@@ -279,7 +282,40 @@ class PostgresKnowledgeRepository:
         values = await self._list(
             space_versions, KnowledgeSpaceVersion, space_versions.c.space_id == space_id
         )
-        return sorted(values, key=lambda item: item.version_number)
+        return sorted(
+            (value for value in values if value.deleted_at is None),
+            key=lambda item: item.version_number,
+        )
+
+    async def delete_space_version(
+        self, space_id: str, version_id: str
+    ) -> KnowledgeSpaceVersion:
+        async with self.engine.begin() as connection:
+            # Lock the space before a child row, matching activation/build release.
+            space = await self._lock_space(connection, space_id)
+            version = await self._get_with_connection(
+                connection, space_versions, version_id, KnowledgeSpaceVersion, lock=True,
+            )
+            if version is None or version.space_id != space.id:
+                raise KeyError(f"knowledge space version not found: {version_id}")
+            if space.active_version_id == version.id:
+                raise ValueError(
+                    "current space version cannot be deleted; activate another version first"
+                )
+            if version.deleted_at is not None:
+                return version
+            ensure_no_build(space)
+            active_job = (await connection.execute(select(jobs.c.id).where(
+                jobs.c.space_id == space.id,
+                jobs.c.status.in_([status.value for status in BUSY_JOB_STATUSES]),
+            ).limit(1))).first()
+            if active_job:
+                raise ValueError("space has active ingestion jobs; wait until they finish")
+            deleted = version.model_copy(update={"deleted_at": datetime.now(UTC)})
+            await connection.execute(update(space_versions).where(
+                space_versions.c.id == version.id,
+            ).values(payload=deleted.model_dump(mode="json")))
+            return deleted
 
     async def activate_space_version(self, value: KnowledgeSpaceVersion) -> KnowledgeSpace:
         """Restore every document pointer and the generation in one transaction."""
@@ -298,8 +334,8 @@ class PostgresKnowledgeRepository:
             if not version_row:
                 raise KeyError(f"knowledge space version not found: {value.id}")
             value = KnowledgeSpaceVersion.model_validate(version_row.payload)
-            if value.space_id != space.id:
-                raise ValueError("space version belongs to a different space")
+            if value.space_id != space.id or value.deleted_at is not None:
+                raise KeyError(f"knowledge space version not found: {value.id}")
             doc_rows = (
                 await connection.execute(
                     select(documents.c.payload)

@@ -135,7 +135,7 @@ try {
   await evaluate("document.querySelector('.reportWorkspace').scrollIntoView()");
   await wait(100);
   writeFileSync(path.join(output, "desktop.png"), Buffer.from((await page.send("Page.captureScreenshot")).data, "base64"));
-  for (const [label, extension] of [["下载 Markdown", ".md"], ["下载 HTML", ".html"]]) {
+  for (const [label, extension] of [["下载Markdown", ".md"], ["下载HTML", ".html"]]) {
     await evaluate(`[...document.querySelectorAll('.reportActions button')].find(e=>e.textContent===${JSON.stringify(label)}).click()`);
     await until(() => readdirSync(output).some((name) => name.endsWith(extension)), `Missing ${extension} download`);
   }
@@ -143,7 +143,7 @@ try {
   assert.equal(markdown.replace(/^\uFEFF/, ""), report);
   const html = readFileSync(path.join(output, readdirSync(output).find((name) => name.endsWith(".html"))), "utf8");
   assert.match(html, /reportPaper/); assert.doesNotMatch(html, /reportToolbar|<script/i);
-  await evaluate(`[...document.querySelectorAll('.reportActions button')].find(e=>e.textContent==='打印 / 存为 PDF').click()`);
+  await evaluate(`[...document.querySelectorAll('.reportActions button')].find(e=>e.textContent==='打印/另存PDF').click()`);
   assert.equal(await evaluate("window.__printRequested"), true);
   await page.send("Emulation.setEmulatedMedia", { media: "print" });
   assert.equal(await evaluate("getComputedStyle(document.querySelector('.sidebar')).display"), "none");

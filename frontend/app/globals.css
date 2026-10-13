@@ -269,7 +269,7 @@ progress::-webkit-progress-value { background: var(--primary); } progress::-moz-
 .knowledgeSectionActions { display: flex; align-items: center; gap: 3px; }
 .ragLab { display: grid; gap: 16px; }
 .ragQueryForm { padding: 24px 28px 22px; background: white; border: 1px solid var(--line); border-top: 3px solid var(--primary); border-radius: 12px; box-shadow: var(--shadow); }
-.ragQueryHeader { display: flex; align-items: start; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+.ragQueryHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
 .ragQueryHeader h2 { margin: 0 0 6px; font-size: 20px; letter-spacing: -.025em; }
 .ragQueryHeader p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .ragSpaceBadge { display: grid; gap: 3px; min-width: 140px; padding-left: 16px; border-left: 1px solid var(--line); }
@@ -283,7 +283,7 @@ progress::-webkit-progress-value { background: var(--primary); } progress::-moz-
 .ragWorkbench { display: grid; grid-template-columns: minmax(250px, 294px) minmax(0, 1fr); gap: 16px; align-items: start; }
 .ragControls, .ragResults { min-width: 0; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
 .ragControls { display: grid; gap: 0; padding: 22px; background: #f9fafc; }
-.ragControlsHeader { display: flex; align-items: start; justify-content: space-between; gap: 10px; padding-bottom: 15px; border-bottom: 1px solid var(--line); }
+.ragControlsHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding-bottom: 15px; border-bottom: 1px solid var(--line); }
 .ragControlsHeader h3 { margin: 0; font-size: 15px; }
 .ragControlsHeader p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
 .ragControlsHeader button { padding: 2px 0; color: var(--primary-dark); background: none; border: 0; font-size: 11px; font-weight: 700; white-space: nowrap; }
@@ -293,7 +293,7 @@ progress::-webkit-progress-value { background: var(--primary); } progress::-moz-
 .ragControl input[type="number"] { width: 100%; height: 36px; margin-top: 3px; padding: 0 10px; color: var(--ink); background: white; border: 1px solid var(--line-strong); border-radius: 7px; font-variant-numeric: tabular-nums; }
 .ragWeightControl input[type="range"] { width: 100%; margin: 12px 0 1px; accent-color: var(--primary); }
 .ragWeightControl > div { display: flex; justify-content: space-between; color: var(--ink-soft); font-size: 11px; font-variant-numeric: tabular-nums; }
-.ragSwitch { display: flex; align-items: start; gap: 10px; padding: 18px 0 4px; }
+.ragSwitch { display: flex; align-items: flex-start; gap: 10px; padding: 18px 0 4px; }
 .ragSwitch input { width: 16px; height: 16px; margin: 1px 0 0; accent-color: var(--primary); }
 .ragSwitch span { display: grid; gap: 4px; }.ragSwitch strong { font-size: 12px; }.ragSwitch small { color: var(--muted); font-size: 11px; line-height: 1.5; }
 .ragAdvanced { padding: 15px 0; border-bottom: 1px solid var(--line); }
@@ -305,7 +305,7 @@ progress::-webkit-progress-value { background: var(--primary); } progress::-moz-
 .ragResultEmpty { display: grid; place-items: center; align-content: center; min-height: 500px; text-align: center; }
 .ragEmptyMark { display: grid; place-items: center; width: 58px; height: 58px; margin-bottom: 19px; color: var(--primary); background: var(--primary-soft); border-radius: 16px; font-size: 35px; line-height: 1; }
 .ragResultEmpty h3 { margin: 0 0 8px; font-size: 17px; }.ragResultEmpty p { max-width: 380px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
-.ragResultsHeader { display: flex; align-items: start; justify-content: space-between; gap: 14px; margin-bottom: 20px; }
+.ragResultsHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 20px; }
 .ragResultsHeader h3 { margin: 0 0 6px; font-size: 17px; }.ragResultsHeader p { margin: 0; color: var(--ink-soft); font-size: 12px; line-height: 1.55; }
 .ragResultsHeader > span { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ragStaleNotice, .ragDegraded { padding: 10px 12px; margin: 0 0 16px; color: #775316; background: var(--amber-soft); border-left: 2px solid var(--amber); font-size: 11px; line-height: 1.6; }

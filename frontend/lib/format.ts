@@ -13,9 +13,9 @@ export function formatDate(value?: string) {
 
 export function formatDuration(value?: number) {
   if (typeof value !== "number") return "不可用";
-  if (value < 1000) return `${Math.round(value)} ms`;
-  if (value < 60_000) return `${(value / 1000).toFixed(1)} s`;
-  return `${Math.floor(value / 60_000)}m ${Math.round((value % 60_000) / 1000)}s`;
+  if (value < 1000) return `${Math.round(value)}ms`;
+  if (value < 60_000) return `${(value / 1000).toFixed(1)}s`;
+  return `${Math.floor(value / 60_000)}min${Math.round((value % 60_000) / 1000)}s`;
 }
 
 export function formatBytes(value?: number) {
@@ -27,7 +27,7 @@ export function formatBytes(value?: number) {
     size /= 1024;
     unit += 1;
   }
-  return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+  return `${size.toFixed(unit === 0 ? 0 : 1)}${units[unit]}`;
 }
 
 export function formatPercent(value?: number) {

@@ -171,7 +171,7 @@ class SpaceDocumentState(FrozenModel):
 
 
 class KnowledgeSpaceVersion(FrozenModel):
-    """An immutable manifest of a whole space; only its editorial note may change."""
+    """Immutable whole-space manifest with editable notes and a retained deletion marker."""
 
     id: str = Field(default_factory=lambda: str(uuid4()))
     space_id: str
@@ -181,6 +181,7 @@ class KnowledgeSpaceVersion(FrozenModel):
     note: str = Field(default="", max_length=500)
     created_at: datetime = Field(default_factory=utc_now)
     activated_at: datetime | None = None
+    deleted_at: datetime | None = None
 
 
 class SpaceBuild(FrozenModel):

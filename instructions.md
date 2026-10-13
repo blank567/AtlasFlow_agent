@@ -333,3 +333,62 @@ E:\conda_envs\langchain\python.exe scripts/reindex_knowledge.py --space llm-engi
 ```
 
 `--enqueue` 不会自动发布，`--verify` 不调用模型，`--publish` 不重算向量。历史空间切换仍使用第 9 节的 `/versions/{version_id}/activate` 接口。解析器版本、切块器版本和空间 v1/v2/v3 是不同编号：空间版本在成功发布时顺序分配。空间版本恢复文档清单和索引，不恢复旧应用程序或旧检索算法。
+
+## 12. 前端视觉与交互验收（v0.6.0补记）
+
+以下浏览器脚本使用拦截API的本地样例，不需要后端，不会触发模型费用或修改知识库。需要已安装的Chrome或Edge；浏览器配置、截图和下载产物全部写入E盘 `build/`。
+
+```powershell
+# 终端A：启动独立验收页面，不与常用的3000端口共用构建缓存。
+Set-Location E:\codex\agent\frontend
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:NPM_CONFIG_CACHE = 'E:\codex\agent\.npm-cache'
+$env:NEXT_TELEMETRY_DISABLED = '1'
+$env:ATLASFLOW_NEXT_DIST_DIR = '.next-design-check'
+npm run dev -- --port 3210
+```
+
+```powershell
+# 终端B：静态类型及已有渲染安全、拓扑与事件映射检查。
+Set-Location E:\codex\agent\frontend
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:NPM_CONFIG_CACHE = 'E:\codex\agent\.npm-cache'
+npm run typecheck
+npm run test:flow
+npm run test:ui
+npm run test:report
+
+# 全页面：桌面/移动/深色截图、文字对比度、具名SSE事件、审批与诊断入口。
+node scripts/verify-design-browser.mjs http://localhost:3210
+
+# 首页输入与运行操作：长度限制、策略继承、预算校验、失败重试、确认及筛选。
+node scripts/verify-run-ui-browser.mjs http://localhost:3210
+
+# 知识库：整空间构建锁定/重试/发布/回退，检索参数、评分与原文交互。
+node scripts/verify-knowledge-browser.mjs http://localhost:3210
+
+# 报告：固定目录、真实Markdown/HTML下载、打印隔离与PDF生成。
+node scripts/verify-report-browser.mjs http://localhost:3210
+```
+
+脚本输出各自的产物目录；API样例仅用于验收，不是应用的Mock运行模式。浏览器脚本不会清理自己的截图与配置，确认无需保留后可手动删除指定的 `build/*-browser/check-*` 目录。结束终端A后，后续正常启动前清除该终端的临时构建变量，或使用新的终端。
+
+## 13. 历史空间版本删除（v0.6.0补记）
+
+新增接口需要重启后端加载，无需新数据库迁移。推荐在知识库「历史版本与说明」中删除，并核对确认框里的版本号。当前使用的版本不能删除；构建或摄取期间禁止新的删除。修改解析/切块/Embedding后，应按第11节重建并发布，不再在主区手工保存快照。
+
+```powershell
+# 只读：先确认空间标识、当前版本与历史版本完整ID。
+$knowledgeSpaceSlug = 'llm-engineering-v1'
+Invoke-RestMethod 'http://127.0.0.1:8000/api/v1/knowledge/spaces'
+Invoke-RestMethod "http://127.0.0.1:8000/api/v1/knowledge/spaces/$knowledgeSpaceSlug/versions"
+
+# 手动写操作：将占位符替换为上一步查到的历史版本ID，不是文档版本或build_id。
+# 请核对后单独执行；不建议把本节整体复制运行。
+$historicalSpaceVersionId = '<historical_space_version_id>'
+Invoke-RestMethod -Method Delete "http://127.0.0.1:8000/api/v1/knowledge/spaces/$knowledgeSpaceSlug/versions/$historicalSpaceVersionId"
+```
+
+这是空间快照的逻辑删除，不释放原文或索引占用的磁盘空间。成功响应带 `deleted_at`，公开历史列表将隐藏该快照且不能再切换到它；内部审计保留，当前检索不变。接口没有提供撤销删除，误操作时不要直接修改生产数据库。版本编号不会因删除而被复用。

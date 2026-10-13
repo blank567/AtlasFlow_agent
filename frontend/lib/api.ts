@@ -279,6 +279,10 @@ export function activateKnowledgeSpaceVersion(space: string, versionId: string) 
   return request<KnowledgeSpace>(`/knowledge/spaces/${encodeURIComponent(space)}/versions/${encodeURIComponent(versionId)}/activate`, { method: "POST" });
 }
 
+export function deleteKnowledgeSpaceVersion(space: string, versionId: string) {
+  return request<KnowledgeSpaceVersion>(`/knowledge/spaces/${encodeURIComponent(space)}/versions/${encodeURIComponent(versionId)}`, { method: "DELETE" });
+}
+
 export function uploadKnowledgeDocument(space: string, file: File) {
   const body = new FormData();
   body.set("file", file);

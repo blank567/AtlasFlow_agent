@@ -104,7 +104,7 @@ export function buildReportHtml(title: string, renderedArticle: string): string 
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
-<title>${escapeHtml(title)} — AtlasFlow</title>
+<title>${escapeHtml(title)} | AtlasFlow</title>
 <style>body{margin:0;padding:40px 16px;background:#edf2f6}.reportPaper{max-width:900px;margin:auto}a{color:inherit}@media print{body{padding:0;background:white}}${REPORT_DOCUMENT_STYLES}</style>
 </head><body>${renderedArticle}</body></html>`;
 }

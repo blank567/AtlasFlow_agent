@@ -1,65 +1,76 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { getAnalytics } from "../../lib/api";
 import { formatDuration, formatPercent } from "../../lib/format";
 import { AnalyticsData } from "../../lib/types";
 import { EmptyState, LoadingBlock, MetricCard, PageHeader, Panel } from "../../components/ui";
 
-const STATUS_COLORS: Record<string, string> = { pending: "#80949a", running: "#247d87", waiting_approval: "#b27a2f", completed: "#247a62", completed_with_warnings: "#b38834", failed: "#b84b59", cancelled: "#826d85" };
-const DECISION_COLORS: Record<string, string> = { accept: "#247a62", supplement: "#8067a6", replan: "#bd7146", revise: "#ae843a" };
+const STATUS_LABELS: Record<string,string> = { pending: "待执行", running: "执行中", waiting_approval: "待审批", completed: "已完成", completed_with_warnings: "完成且有警告", failed: "执行失败", cancelled: "已取消" };
+const STATUS_COLORS: Record<string,string> = { pending: "var(--muted)", running: "var(--primary)", waiting_approval: "var(--amber)", completed: "var(--green)", completed_with_warnings: "var(--amber)", failed: "var(--red)", cancelled: "var(--muted)" };
+const DECISION_LABELS: Record<string,string> = { accept: "接受", supplement: "补充研究", replan: "重新规划", revise: "报告修订" };
 
 export default function AnalyticsPage() {
   const [range, setRange] = useState("30d");
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [revision, setRevision] = useState(0);
   useEffect(() => {
+    let current = true;
     setData(null); setError(null);
-    void getAnalytics(range).then(setData).catch((reason) => setError(reason instanceof Error ? reason.message : "统计数据读取失败"));
-  }, [range]);
-
-  return (
-    <main className="pageContent">
-      <PageHeader eyebrow="运行分析" title="从运行记录看系统表现" description="指标只根据本地持久化的真实 Run 计算，不补造缺失数据。" actions={<div className="segmented">{[["7d", "最近 7 天"], ["30d", "最近 30 天"], ["all", "全部"]].map(([value, label]) => <button key={value} className={range === value ? "active" : ""} onClick={() => setRange(value)}>{label}</button>)}</div>} />
-      {error && <div className="inlineAlert errorAlert"><strong>Analytics 暂不可用</strong><span>{error}</span></div>}
-      {!data ? error ? <Panel><EmptyState title="没有可显示的统计" description="确认后端 Analytics 接口与 SQLite 运行数据库已启动。" /></Panel> : <LoadingBlock /> : <AnalyticsContent data={data} />}
-    </main>
-  );
+    void getAnalytics(range).then((value) => { if (current) setData(value); }).catch((reason) => { if (current) setError(reason instanceof Error ? reason.message : "运行分析数据读取失败"); });
+    return () => { current = false; };
+  }, [range, revision]);
+  return <main className="pageContent analyticsPage">
+    <PageHeader title="统计分析" description="执行效率、研究质量与协作决策的量化视图。" actions={<div className="segmented" aria-label="统计时间范围">{[["7d","近7天"],["30d","近30天"],["all","全部记录"]].map(([value,label]) => <button type="button" key={value} aria-pressed={range === value} className={range === value ? "active" : ""} onClick={() => setRange(value)}>{label}</button>)}</div>} />
+    {error ? <Panel><div className="inlineAlert errorAlert" role="alert"><strong>读取失败</strong><span>{error}</span></div><button type="button" className="secondaryButton" onClick={() => setRevision((value) => value + 1)}>重新加载</button></Panel> : !data ? <LoadingBlock label="正在汇总运行数据" /> : <AnalyticsContent data={data} />}
+  </main>;
 }
 
 function AnalyticsContent({ data }: { data: AnalyticsData }) {
   const summary = data.summary;
+  const quality = typeof summary.avg_quality_score === "number" && Number.isFinite(summary.avg_quality_score) ? summary.avg_quality_score.toFixed(1) : "未评估";
+  const statusMax = Math.max(1, ...data.status_distribution.map((item) => item.count));
+  const decisionMax = Math.max(1, ...data.decision_counts.map((item) => item.count));
   return <>
     <div className="analyticsHighlights">
-      <MetricCard label="运行总数" value={summary.total_runs ?? "不可用"} note="筛选范围内" />
-      <MetricCard label="成功率" value={formatPercent(summary.success_rate)} note="已完成 / 终态运行" />
-      <MetricCard label="平均耗时" value={formatDuration(summary.avg_duration_ms)} note="已结束的运行" />
+      <MetricCard label="运行总数" value={summary.total_runs ?? "未记录"} note="当前统计范围" />
+      <MetricCard label="运行成功率" value={formatPercent(summary.success_rate)} note="已完成运行占终态比例" />
+      <MetricCard label="平均耗时" value={formatDuration(summary.avg_duration_ms)} note="已结束运行" />
     </div>
-    <div className="analyticsSecondary">
-      <MetricCard label="模型调用" value={summary.total_model_calls ?? "不可用"} note="真实调用计数" />
-      <MetricCard label="研究任务" value={summary.total_tasks ?? "不可用"} note={`${summary.successful_tasks ?? "—"} 成功 · ${summary.failed_tasks ?? "—"} 失败`} />
-      <MetricCard label="任务成功率" value={formatPercent(summary.task_success_rate)} note="成功任务 / 已结束任务" />
-      <MetricCard label="平均质量分" value={summary.avg_quality_score !== undefined ? `${summary.avg_quality_score.toFixed(1)}/100` : "不可用"} note="Quality Gate 真实评分" />
-      <MetricCard label="补充研究" value={summary.total_supplement_rounds ?? "不可用"} note="累计补充轮次" />
-      <MetricCard label="重规划" value={summary.total_replans ?? "不可用"} note="累计重规划次数" />
-      <MetricCard label="报告修订" value={summary.total_revisions ?? "不可用"} note="累计修订次数" />
+    {summary.total_runs === 0 && <Panel><EmptyState title="尚无运行记录" description="完成研究任务后，可在此查看执行效率与质量表现。" /></Panel>}
+    <div className="analyticsPrimary">
+      <Panel title="执行耗时" meta={<span className="panelHint">每日平均值</span>} className="chartPanel">
+        {!data.duration_trend.length ? <ChartEmpty /> : <div className="chartCanvas"><ResponsiveContainer width="100%" height="100%"><LineChart data={data.duration_trend} margin={{top:20,right:14,left:0,bottom:8}}>
+          <CartesianGrid stroke="var(--line)" vertical={false} />
+          <XAxis dataKey="date" tick={{fill:"var(--muted)",fontSize:11}} axisLine={false} tickLine={false} />
+          <YAxis tickFormatter={(value) => Math.round(Number(value) / 1000) + "s"} tick={{fill:"var(--muted)",fontSize:11}} axisLine={false} tickLine={false} width={42} />
+          <Tooltip formatter={(value) => [formatDuration(Number(value)),"平均耗时"]} contentStyle={{background:"var(--surface)",color:"var(--ink)",borderRadius:8,border:"1px solid var(--line)"}} labelStyle={{color:"var(--ink)"}} />
+          <Line type="monotone" dataKey="avg_duration_ms" stroke="var(--primary)" strokeWidth={2} dot={{r:3,fill:"var(--surface)",strokeWidth:2}} activeDot={{r:5}} isAnimationActive={false} />
+        </LineChart></ResponsiveContainer></div>}
+      </Panel>
+      <Panel title="运行状态" meta={<span className="panelHint">按实际记录汇总</span>}>
+        {!data.status_distribution.length ? <ChartEmpty /> : <ul className="analyticsDistribution">{data.status_distribution.map((item) => <li key={item.status}><span>{STATUS_LABELS[item.status] ?? item.status}</span><strong>{item.count}次</strong><div className="distributionBar" aria-hidden="true"><i style={{width:Math.max(0,item.count / statusMax * 100) + "%",background:STATUS_COLORS[item.status] ?? "var(--primary)"}} /></div></li>)}</ul>}
+      </Panel>
     </div>
-    <div className="chartGrid">
-      <Panel title="运行耗时趋势" meta={<span className="panelHint">平均耗时 / 日</span>} className="chartPanel wideChart">
-        {!data.duration_trend.length ? <ChartEmpty /> : <div className="chartCanvas"><ResponsiveContainer width="100%" height="100%"><LineChart data={data.duration_trend} margin={{ top: 12, right: 14, left: 4, bottom: 0 }}><CartesianGrid stroke="#e8ebf0" vertical={false} /><XAxis dataKey="date" tick={{ fill: "#7c8797", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tickFormatter={(value) => `${Math.round(value / 1000)}s`} tick={{ fill: "#7c8797", fontSize: 11 }} axisLine={false} tickLine={false} width={45} /><Tooltip formatter={(value) => [formatDuration(Number(value)), "平均耗时"]} contentStyle={{ borderRadius: 10, border: "1px solid #e1e5eb" }} /><Line type="monotone" dataKey="avg_duration_ms" stroke="#4f67d8" strokeWidth={2.5} dot={{ r: 3, fill: "#fff", strokeWidth: 2 }} activeDot={{ r: 5 }} /></LineChart></ResponsiveContainer></div>}
+    <div className="analyticsDetail">
+      <Panel title="研究质量与资源">
+        <dl className="analyticsDefinition">
+          <div><dt>模型调用</dt><dd>{summary.total_model_calls ?? "未记录"}</dd></div>
+          <div><dt>研究任务</dt><dd>{summary.total_tasks ?? "未记录"}</dd></div>
+          <div><dt>任务完成</dt><dd>{summary.successful_tasks ?? "未记录"}成功 / {summary.failed_tasks ?? "未记录"}失败</dd></div>
+          <div><dt>任务成功率</dt><dd>{formatPercent(summary.task_success_rate)}</dd></div>
+          <div><dt>平均质量评分</dt><dd>{quality}{quality !== "未评估" && <span>/100</span>}</dd></div>
+        </dl>
       </Panel>
-      <Panel title="状态分布" meta={<span className="panelHint">Runs</span>} className="chartPanel">
-        {!data.status_distribution.length ? <ChartEmpty /> : <div className="chartCanvas"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data.status_distribution} dataKey="count" nameKey="status" innerRadius={55} outerRadius={82} paddingAngle={3}>{data.status_distribution.map((item) => <Cell key={item.status} fill={STATUS_COLORS[item.status] ?? "#80949a"} />)}</Pie><Tooltip contentStyle={{ borderRadius: 8, border: "1px solid #d9e3e0" }} /></PieChart></ResponsiveContainer><div className="chartLegend">{data.status_distribution.map((item) => <span key={item.status}><i style={{ background: STATUS_COLORS[item.status] ?? "#80949a" }} />{item.status} <strong>{item.count}</strong></span>)}</div></div>}
-      </Panel>
-      <Panel title="审查决策" meta={<span className="panelHint">Critic + Quality</span>} className="chartPanel">
-        {!data.decision_counts.length ? <ChartEmpty /> : <div className="chartCanvas"><ResponsiveContainer width="100%" height="100%"><BarChart data={data.decision_counts} layout="vertical" margin={{ left: 8, right: 22, top: 8, bottom: 8 }}><CartesianGrid stroke="#e3ebe8" horizontal={false} /><XAxis type="number" hide /><YAxis dataKey="decision" type="category" width={78} tick={{ fill: "#667b80", fontSize: 11 }} axisLine={false} tickLine={false} /><Tooltip cursor={{ fill: "#f4f7f5" }} contentStyle={{ borderRadius: 8, border: "1px solid #d9e3e0" }} /><Bar dataKey="count" radius={[0, 3, 3, 0]} maxBarSize={28}>{data.decision_counts.map((item) => <Cell key={item.decision} fill={DECISION_COLORS[item.decision.toLowerCase()] ?? "#547d86"} />)}</Bar></BarChart></ResponsiveContainer></div>}
-      </Panel>
-      <Panel title="计划版本分布" meta={<span className="panelHint">最终版本</span>} className="chartPanel wideChart">
-        {!data.plan_versions.length ? <ChartEmpty /> : <div className="chartCanvas"><ResponsiveContainer width="100%" height="100%"><BarChart data={data.plan_versions} margin={{ left: 0, right: 8, top: 10, bottom: 0 }}><CartesianGrid stroke="#edf0f4" vertical={false} /><XAxis dataKey="version" tick={{ fill: "#647083", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis allowDecimals={false} tick={{ fill: "#647083", fontSize: 11 }} axisLine={false} tickLine={false} width={30} /><Tooltip cursor={{ fill: "#f5f6f8" }} contentStyle={{ borderRadius: 10, border: "1px solid #e1e5eb" }} /><Bar dataKey="count" fill="#24a36a" radius={[5, 5, 0, 0]} maxBarSize={44} /></BarChart></ResponsiveContainer></div>}
+      <Panel title="协作决策">
+        <div className="analyticsDecisionTotals"><span>补充研究<strong>{summary.total_supplement_rounds ?? "未记录"}</strong></span><span>重新规划<strong>{summary.total_replans ?? "未记录"}</strong></span><span>报告修订<strong>{summary.total_revisions ?? "未记录"}</strong></span></div>
+        {data.decision_counts.length > 0 && <ul className="analyticsDistribution">{data.decision_counts.map((item) => <li key={item.decision}><span>{DECISION_LABELS[item.decision.toLowerCase()] ?? item.decision}</span><strong>{item.count}次</strong><div className="distributionBar" aria-hidden="true"><i style={{width:Math.max(0,item.count / decisionMax * 100) + "%"}} /></div></li>)}</ul>}
+        <section className="analyticsVersionDetails" aria-label="计划版本分布"><h3>计划版本分布</h3>{!data.plan_versions.length ? <p className="panelHint">尚无计划版本记录。</p> : <dl className="analyticsVersionChips">{data.plan_versions.map((item) => <div key={item.version}><dt>版本{item.version}</dt><dd>{item.count}次</dd></div>)}</dl>}</section>
       </Panel>
     </div>
   </>;
 }
 
-function ChartEmpty() { return <div className="chartEmpty"><span>暂无足够数据</span><small>产生更多终态 Run 后会自动绘制。</small></div>; }
+function ChartEmpty() { return <div className="chartEmpty"><span>样本不足</span><small>完成运行后生成统计视图。</small></div>; }

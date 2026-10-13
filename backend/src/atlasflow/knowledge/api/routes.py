@@ -59,6 +59,16 @@ async def create_space_version(space: str, payload: SpaceVersionNoteRequest, req
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@router.delete("/spaces/{space}/versions/{version_id}")
+async def delete_space_version(space: str, version_id: str, request: Request):
+    try:
+        return await platform(request).delete_space_version(space, version_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/spaces/{space}/reindex", status_code=status.HTTP_202_ACCEPTED)
 async def start_space_build(space: str, payload: SpaceVersionNoteRequest, request: Request):
     try:

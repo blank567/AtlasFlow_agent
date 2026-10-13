@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ReactNode } from "react";
+import { Tray } from "@phosphor-icons/react/dist/ssr";
 import { compactId, formatDate } from "../lib/format";
 import { RunRecord, RunStatus } from "../lib/types";
 
@@ -41,7 +42,7 @@ export function MetricCard({ label, value, note }: { label: string; value: React
 }
 
 export function EmptyState({ title, description }: { title: string; description: string }) {
-  return <div className="emptyState"><span>◇</span><strong>{title}</strong><p>{description}</p></div>;
+  return <div className="emptyState"><span><Tray size={25} weight="duotone" aria-hidden="true" /></span><strong>{title}</strong><p>{description}</p></div>;
 }
 
 export function RunRow({ run, actions }: { run: RunRecord; actions?: ReactNode }) {
@@ -59,5 +60,5 @@ export function RunRow({ run, actions }: { run: RunRecord; actions?: ReactNode }
 }
 
 export function LoadingBlock({ label = "正在读取数据" }: { label?: string }) {
-  return <div className="loadingBlock"><span className="spinner" />{label}</div>;
+  return <div className="loadingBlock" role="status" aria-label={label}><div className="loadingSkeleton" aria-hidden="true"><i /><i /><i /></div><span>{label}</span></div>;
 }

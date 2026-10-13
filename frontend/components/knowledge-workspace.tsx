@@ -2,12 +2,14 @@
 
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { UploadSimple } from "@phosphor-icons/react";
 import {
   activateKnowledgeSpaceVersion,
   archiveKnowledgeDocument,
   cancelKnowledgeSpaceBuild,
   createKnowledgeSpace,
   createKnowledgeSpaceVersion,
+  deleteKnowledgeSpaceVersion,
   listKnowledgeDocuments,
   listKnowledgeJobs,
   listKnowledgeSpaceVersions,
@@ -21,6 +23,7 @@ import {
 } from "../lib/api";
 import { KnowledgeDocument, KnowledgeJob, KnowledgeSpace, KnowledgeSpaceBuild, KnowledgeSpaceVersion } from "../lib/types";
 import { ConfirmDialog } from "./confirm-dialog";
+import { DetailDrawer } from "./detail-drawer";
 import { RetrievalLab } from "./retrieval-lab";
 
 const STAGE_LABELS: Record<string, string> = {
@@ -129,7 +132,7 @@ export function KnowledgeWorkspace({ view = "overview", initialSpace = "" }: { v
     <div className="knowledgeToolbar">
       <label><span>{view === "lab" ? "检索空间" : "当前空间"}</span><select value={selected} onChange={(event) => selectSpace(event.target.value)} disabled={spaces.length === 0 || archiving}>{spaces.length === 0 && <option value="">暂无知识空间</option>}{spaces.map((space) => <option value={space.slug} key={space.id}>{space.name} · {space.slug}</option>)}</select></label>
       <div><strong>{readyCount}</strong><span>已发布文档</span></div>
-      <div><strong>{jobs.filter((job) => job.status === "running" || job.status === "queued").length}</strong><span>处理中</span></div>
+      <Link className="knowledgeToolbarStat" href="/knowledge/jobs"><strong>{jobs.filter((job) => job.status === "running" || job.status === "queued").length}</strong><span>处理中</span></Link>
       <button className="secondaryButton" type="button" onClick={() => void refresh()}>刷新状态</button>
     </div>
     {view === "overview" && <SpaceVersionLedger key={`versions:${current?.id || "none"}`} space={current} build={activeBuild} jobs={jobs} documents={documents} locked={buildLocked} stateReady={stateReady} busy={archiving || jobs.some((job) => ["queued", "running", "failed_retryable"].includes(job.status))} onChanged={refresh} />}
@@ -145,22 +148,34 @@ function Overview({ current, documents, jobs, locked, onUploaded, onCreate, onAr
   const [submitting, setSubmitting] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [formError, setFormError] = useState("");
+  const [documentQuery, setDocumentQuery] = useState("");
+  const uploadInput = useRef<HTMLInputElement>(null);
+  const filteredDocuments = documents.filter((document) => `${document.title} ${document.source_id}`.toLocaleLowerCase().includes(documentQuery.trim().toLocaleLowerCase()));
   async function upload() {
     if (!current || !file || locked || submitting) return;
     setSubmitting(true); setFormError("");
-    try { await uploadKnowledgeDocument(current.slug, file); setFile(null); await onUploaded(); }
+    try { await uploadKnowledgeDocument(current.slug, file); setFile(null); if (uploadInput.current) uploadInput.current.value = ""; await onUploaded(); }
     catch (reason) { setFormError(reason instanceof Error ? reason.message : "上传失败"); }
     finally { setSubmitting(false); }
   }
-  return <div className="knowledgeGrid">
-    <aside className="knowledgeIndex">
-      <div className="knowledgeSectionHead"><div><h2>空间索引</h2><p>{current?.description || "这个空间还没有说明。"}</p></div><div className="knowledgeSectionActions"><Link href="/knowledge/lab" className="textButton">测试检索</Link><button type="button" className="textButton" onClick={() => setShowCreate((value) => !value)}>新建空间</button></div></div>
+  return <div className="knowledgeOverview">
+    <section className="knowledgeLedger knowledgeDocumentsPanel">
+      <div className="knowledgeSectionHead"><div><h2>文档</h2><p>原始资料、检索状态与来源记录。</p></div><span>{documents.length} 份</span></div>
+      {documents.length > 0 && <label className="knowledgeDocumentFilter" htmlFor="knowledge-document-query"><span>查找文档</span><input id="knowledge-document-query" type="search" value={documentQuery} placeholder="按标题或来源查找" onChange={(event) => setDocumentQuery(event.target.value)} /></label>}
+      {documents.length === 0 ? <div className="knowledgeEmpty"><strong>尚无文档</strong><p>导入原始资料并完成索引构建后，即可进行证据检索。</p></div> : filteredDocuments.length === 0 ? <div className="knowledgeEmpty"><strong>未找到匹配文档</strong><p>调整标题或来源筛选条件。</p></div> : <div className="knowledgeRows">{filteredDocuments.map((document) => { const job = jobs.find((item) => item.document_id === document.id); const failed = !document.current_version_id && job?.status.startsWith("failed"); return <article key={document.id}><div><strong title={document.title}>{document.title}</strong><span title={document.source_id}>{document.source_id}</span></div><div className="knowledgeDocState"><i className={`knowledgeState ${document.status === "archived" ? "archived" : document.current_version_id ? "ready" : failed ? "failed" : "pending"}`} />{document.status === "archived" ? "已归档" : document.current_version_id ? "可检索" : failed ? "处理失败" : STAGE_LABELS[job?.stage || "queued"]}</div><button type="button" className="textButton" disabled={document.status === "archived" || locked} onClick={() => onArchive(document)}>归档</button></article>; })}</div>}
+    </section>
+    <aside className="knowledgeActionsSidebar">
+      <section className="knowledgeImportPanel">
+        <div className="knowledgeSectionHead"><div><h2>导入文档</h2><p>添加到 {current?.name || "所选空间"}</p></div></div>
+        <div className="knowledgeDrop"><label className={`knowledgeFilePicker ${locked || submitting ? "isDisabled" : ""}`} htmlFor="knowledge-upload"><input ref={uploadInput} className="knowledgeFileInput" id="knowledge-upload" aria-label={file ? "重新选择知识文档" : "选择知识文档"} type="file" accept=".txt,.md,.html,.htm,.pdf" disabled={locked || submitting} onChange={(event) => setFile(event.target.files?.[0] || null)} /><UploadSimple size={23} aria-hidden="true" /><span><strong title={file?.name}>{file ? file.name : "选择文件"}</strong><small>{file ? "重新选择文件" : "TXT、Markdown、HTML、PDF"}</small></span></label><small>单文件上限25MB。</small><button type="button" className="primaryButton" disabled={!file || submitting || !current || locked} onClick={() => void upload()}>{submitting ? "正在提交" : "导入文档"}</button>{formError && <p className="formError" role="alert">{formError}</p>}</div>
+      </section>
+      <section className="knowledgeSpaceMeta">
+        <h2>空间信息</h2><p>{current?.description || "未填写空间说明。"}</p>
+        <dl className="knowledgeDefinition"><div><dt>可见性</dt><dd>{current ? { private: "私有", internal: "内部", public: "公开" }[current.visibility] : "未记录"}</dd></div><div><dt>Embedding</dt><dd title={current?.embedding_profile}>{current?.embedding_profile || "未记录"}</dd></div><div><dt>检索配置</dt><dd title={current?.retrieval_profile}>{current?.retrieval_profile || "未记录"}</dd></div><div><dt>索引世代</dt><dd title={current?.active_generation_id || undefined}>{current?.active_generation_id?.slice(0, 8) || "尚未建立"}</dd></div></dl>
+      </section>
+      <button type="button" className="secondaryButton" aria-expanded={showCreate} onClick={() => setShowCreate((value) => !value)}>{showCreate ? "收起创建表单" : "新建空间"}</button>
       {showCreate && <CreateSpaceForm onCreated={async () => { setShowCreate(false); await onCreate(); }} />}
-      <dl className="knowledgeDefinition"><div><dt>可见性</dt><dd>{current?.visibility || "—"}</dd></div><div><dt>Embedding</dt><dd>{current?.embedding_profile || "—"}</dd></div><div><dt>检索配置</dt><dd>{current?.retrieval_profile || "—"}</dd></div><div><dt>索引世代</dt><dd>{current?.active_generation_id?.slice(0, 8) || "尚未建立"}</dd></div></dl>
-      <div className="knowledgeDrop"><input aria-label="选择知识文档" type="file" accept=".txt,.md,.html,.htm,.pdf" disabled={locked || submitting} onChange={(event) => setFile(event.target.files?.[0] || null)} /><span>{file ? file.name : "选择 TXT、Markdown、HTML 或 PDF"}</span><small>单个文件不超过 25 MB；原始文件只保存在 E 盘。</small><button type="button" className="primaryButton" disabled={!file || submitting || !current || locked} onClick={() => void upload()}>{submitting ? "正在提交" : "导入文档"}</button>{formError && <p className="formError">{formError}</p>}</div>
     </aside>
-    <section className="knowledgeLedger"><div className="knowledgeSectionHead"><div><h2>文档台账</h2><p>当前空间的文档状态；版本切换请使用上方空间版本台账。</p></div><span>{documents.length} 份</span></div>{documents.length === 0 ? <div className="knowledgeEmpty"><strong>空间仍然是空的</strong><p>选择一份文档开始建立第一个可追溯版本。</p></div> : <div className="knowledgeRows">{documents.map((document) => { const job = jobs.find((item) => item.document_id === document.id); return <article key={document.id}><div><strong>{document.title}</strong><span>{document.source_id}</span></div><div className="knowledgeDocState"><i className={`knowledgeState ${document.status === "archived" ? "archived" : document.current_version_id ? "ready" : "pending"}`} />{document.status === "archived" ? "已归档" : document.current_version_id ? "可检索" : STAGE_LABELS[job?.stage || "queued"]}</div><button type="button" className="textButton" disabled={document.status === "archived" || locked} onClick={() => onArchive(document)}>归档</button></article>; })}</div>}</section>
-    <aside className="knowledgePulse"><div className="knowledgeSectionHead"><div><h2>处理状态</h2><p>最近的摄取任务</p></div></div>{jobs.slice(0, 6).map((job) => <div className="jobPulse" key={job.id}><span><i className={`knowledgeState ${job.status === "completed" ? "ready" : job.status.startsWith("failed") ? "failed" : "pending"}`} />{STAGE_LABELS[job.stage] || job.stage}</span><strong>{Math.round(job.progress * 100)}%</strong><progress value={job.progress} max={1} /></div>)}{jobs.length === 0 && <p className="quietCopy">尚无处理任务。</p>}</aside>
   </div>;
 }
 
@@ -179,13 +194,22 @@ function SpaceVersionLedger({ space, build, jobs, documents, busy, locked, state
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [working, setWorking] = useState(false);
   const [confirmTarget, setConfirmTarget] = useState<KnowledgeSpaceVersion | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<KnowledgeSpaceVersion | null>(null);
+  const [snapshotConfirmation, setSnapshotConfirmation] = useState(false);
   const [buildConfirmation, setBuildConfirmation] = useState<"start" | "publish" | "cancel" | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
   const slug = space?.slug;
   const alive = useRef(true);
   const actionPending = useRef(false);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  useEffect(() => {
+    if (locked || busy || !stateReady || space?.active_version_id) {
+      setDeleteTarget(null);
+      setSnapshotConfirmation(false);
+    }
+  }, [locked, busy, stateReady, space?.active_version_id]);
 
   const load = useCallback(async () => {
     if (!slug) return;
@@ -219,7 +243,7 @@ function SpaceVersionLedger({ space, build, jobs, documents, busy, locked, state
     if (!stateReady || actionPending.current || !alive.current) return;
     actionPending.current = true;
     setWorking(true); setError(""); setMessage("");
-    setBuildConfirmation(null); setConfirmTarget(null);
+    setBuildConfirmation(null); setConfirmTarget(null); setDeleteTarget(null); setSnapshotConfirmation(false);
     try {
       const message = await operation();
       await Promise.all([load(), onChanged()]);
@@ -232,12 +256,12 @@ function SpaceVersionLedger({ space, build, jobs, documents, busy, locked, state
     }
   }
 
-  async function create() {
-    if (!slug || locked || busy) return;
+  async function createSnapshot() {
+    if (!slug || !snapshotReady || disabled) return;
     await perform(async () => {
       const created = await createKnowledgeSpaceVersion(slug, note);
       if (alive.current) setNote("");
-      return `空间版本 v${created.version_number} 已保存`;
+      return `当前索引快照已保存为v${created.version_number}`;
     });
   }
 
@@ -245,7 +269,7 @@ function SpaceVersionLedger({ space, build, jobs, documents, busy, locked, state
     if (!slug) return;
     await perform(async () => {
       await updateKnowledgeSpaceVersionNote(slug, version.id, drafts[version.id] || "");
-      return `空间版本 v${version.version_number} 的说明已保存`;
+      return `空间版本v${version.version_number}的说明已保存`;
     });
   }
 
@@ -253,7 +277,15 @@ function SpaceVersionLedger({ space, build, jobs, documents, busy, locked, state
     if (!slug || locked || busy) return;
     await perform(async () => {
       await activateKnowledgeSpaceVersion(slug, version.id);
-      return `整个空间已切换至 v${version.version_number}`;
+      return `整个空间已切换至v${version.version_number}`;
+    });
+  }
+
+  async function removeVersion(version: KnowledgeSpaceVersion) {
+    if (!slug || locked || busy || version.space_id !== space?.id || version.id === space?.active_version_id || version.deleted_at || !versions.some((item) => item.id === version.id)) return;
+    await perform(async () => {
+      await deleteKnowledgeSpaceVersion(slug, version.id);
+      return `历史版本v${version.version_number}已删除，当前检索索引保持不变。`;
     });
   }
 
@@ -265,7 +297,9 @@ function SpaceVersionLedger({ space, build, jobs, documents, busy, locked, state
   const progress = total ? buildJobs.reduce((sum, job) => sum + (job.status === "completed" ? 1 : Math.max(0, Math.min(1, job.progress))), 0) / total : 0;
   const canPublish = build?.status === "ready" && total > 0 && completedCount === total;
   const activeDocumentCount = documents.filter((document) => document.status === "active").length;
+  const snapshotReady = !space?.active_version_id && !locked && !busy && activeDocumentCount > 0 && documents.filter((document) => document.status === "active").every((document) => Boolean(document.current_version_id));
   const baseVersion = versions.find((version) => version.id === build?.base_version_id);
+  const activeVersion = versions.find((version) => version.id === space?.active_version_id);
   const disabled = working || !stateReady;
 
   async function startBuild() {
@@ -281,7 +315,7 @@ function SpaceVersionLedger({ space, build, jobs, documents, busy, locked, state
     if (!slug || !build || !canPublish) return;
     await perform(async () => {
       const version = await publishKnowledgeSpaceBuild(slug, build.id);
-      return `整个空间已发布为 v${version.version_number}`;
+      return `整个空间已发布为v${version.version_number}`;
     });
   }
 
@@ -303,13 +337,9 @@ function SpaceVersionLedger({ space, build, jobs, documents, busy, locked, state
 
   if (!space) return null;
   return <section className="spaceVersionLedger" aria-label="知识空间版本">
-    <div className="spaceVersionIntro"><div><h2>空间版本</h2><p>每个版本保存整个空间的文档清单、发布状态和索引世代。</p></div><span className="spaceVersionIndicator">{space.active_version_id ? `当前 v${versions.find((version) => version.id === space.active_version_id)?.version_number ?? "…"}` : versions.length ? "当前有未保存变更" : "尚无空间版本"}</span></div>
-    <div className="spaceVersionCreate"><label htmlFor="space-version-note">新版本说明</label><input id="space-version-note" maxLength={500} value={note} placeholder="例如：统一解析与父子切块完成" disabled={disabled || locked} onChange={(event) => setNote(event.target.value)} /><div className="spaceVersionActions"><button type="button" className="primaryButton" disabled={disabled || busy || locked || activeDocumentCount === 0} onClick={() => setBuildConfirmation("start")}>重建整个空间</button><button type="button" className="secondaryButton" disabled={disabled || busy || locked} onClick={() => void create()}>保存当前空间版本</button></div></div>
-    {!locked && <p className="spaceVersionHint">重建会按当前解析与切块规则处理全部有效文档；保存当前版本仅记录现有清单。</p>}
-    {locked && <p className="spaceVersionHint">空间构建期间暂停导入、归档、保存快照与历史版本切换。检索继续使用旧版。</p>}
-    {busy && !locked && <p className="spaceVersionHint">摄取任务完成后才能重建、保存或切换空间版本。</p>}
+    <div className="spaceVersionIntro"><div className="knowledgeVersionSummary"><h2>空间版本</h2><p>{activeVersion?.note || "管理全量索引构建、版本发布与历史回退。"}</p></div><span className="spaceVersionIndicator">{space.active_version_id ? `当前v${activeVersion?.version_number ?? "…"}` : versions.length ? "有未保存变更" : "尚无空间版本"}</span></div>
     {build && <div className="spaceBuildPanel" aria-label="整个空间构建状态">
-      <div className="spaceBuildHeading"><div><strong>{build.status === "ready" ? "全部文档已就绪，等待发布" : build.status === "failed" ? "部分文档处理失败" : "正在重建整个空间"}</strong><p>正在服务{baseVersion ? ` v${baseVersion.version_number}` : "构建前的版本"}，发布时一次切换全部文档。</p></div><span>{completedCount} / {total} 份完成</span></div>
+      <div className="spaceBuildHeading"><div><strong>{build.status === "ready" ? "索引构建完成，待发布" : build.status === "failed" ? "索引构建存在失败项" : "正在重建整个空间"}</strong><p>当前检索版本：{baseVersion ? `v${baseVersion.version_number}` : "构建前版本"}。发布后整体切换索引。</p></div><span>{completedCount} / {total} 份完成</span></div>
       <progress aria-label="空间重建进度" value={progress} max={1} />
       {build.note && <p className="spaceVersionHint">版本说明：{build.note}</p>}
       {failedJobs.length > 0 && <div className="spaceBuildFailures">{failedJobs.map((job) => <div key={job.id}><div><strong>{documents.find((document) => document.id === job.document_id)?.title || job.document_id}</strong><p>{job.error_message || "处理失败，请重试该文档。"}</p></div><button type="button" className="secondaryButton" disabled={disabled} onClick={() => void retryJob(job)}>重试文档</button></div>)}</div>}
@@ -318,8 +348,24 @@ function SpaceVersionLedger({ space, build, jobs, documents, busy, locked, state
     </div>}
     {error && <div className="spaceVersionError" role="alert"><p>{error === "Failed to fetch" ? "无法连接后端，请确认服务已启动并完成数据库迁移。" : error}</p><button type="button" className="textButton" onClick={() => void retry()}>重试读取</button></div>}
     {message && <p className="knowledgeVersionMessage" role="status">{message}</p>}
-    {!error && versions.length === 0 ? <p className="spaceVersionEmpty">尚未保存空间版本。所有文档处理完成后，可将当前空间保存为第一个版本。</p> : <div className="spaceVersionRows">{versions.slice().reverse().map((version) => { const current = version.id === space.active_version_id; const draft = drafts[version.id] ?? ""; const activeCount = Object.values(version.documents).filter((item) => item.status === "active").length; return <div className="spaceVersionRow" key={version.id}><div className="spaceVersionNumber"><strong>v{version.version_number}</strong><span className={current ? "knowledgeVersionCurrent" : "knowledgeVersionStatus"}>{current ? "当前版本" : "历史版本"}</span></div><div className="spaceVersionBody"><span>{activeCount} 份可检索文档 · {new Date(version.created_at).toLocaleString("zh-CN")}</span><label><span>版本说明</span><input maxLength={500} value={draft} disabled={disabled} onChange={(event) => setDrafts((values) => ({ ...values, [version.id]: event.target.value }))} /></label></div><div className="spaceVersionActions"><button type="button" className="textButton" disabled={disabled || draft === version.note} onClick={() => void saveNote(version)}>保存说明</button>{!current && <button type="button" className="secondaryButton" disabled={disabled || busy || locked} onClick={() => setConfirmTarget(version)}>切换整个空间</button>}</div></div>; })}</div>}
-    {confirmTarget && !locked && <ConfirmDialog title={`将整个空间切换到 v${confirmTarget.version_number}？`} description="空间内所有文档将按该版本的清单恢复。之后新增的文档会停止参与检索，但不会删除；索引和原文不会重算。" confirmLabel="确认切换整个空间" onCancel={() => setConfirmTarget(null)} onConfirm={() => void activate(confirmTarget)} />}
+    <div className="knowledgeVersionTools">
+        <div className="spaceVersionCreate"><label htmlFor="space-version-note">新版本说明</label><input id="space-version-note" maxLength={500} value={note} placeholder="记录这次版本的变化" disabled={disabled || locked} onChange={(event) => setNote(event.target.value)} /><div className="spaceVersionActions"><button type="button" className="primaryButton" disabled={disabled || busy || locked || activeDocumentCount === 0} onClick={() => setBuildConfirmation("start")}>重建整个空间</button></div></div>
+        {!locked && <p className="spaceVersionHint">重建更新全部有效文档的索引，发布时自动生成新版本，无需另行保存。</p>}
+        {locked && <p className="spaceVersionHint">空间构建期间暂停导入、归档、快照创建、删除与历史切换。检索继续使用旧版。</p>}
+        {busy && !locked && <p className="spaceVersionHint">等待当前处理任务完成后进行版本操作。</p>}
+        {!error && versions.length === 0 && <p className="spaceVersionEmpty">尚无空间版本。重建前自动保存基线，发布后生成新版本。</p>}
+        <button type="button" className="textButton knowledgeVersionHistoryButton" onClick={() => setHistoryOpen(true)}>历史版本与说明（{versions.length}）</button>
+    </div>
+    {historyOpen && <DetailDrawer title="空间版本历史" subtitle={space.name} onClose={() => setHistoryOpen(false)}><div className="knowledgeVersionDrawer">
+      {error && <p className="formError" role="alert">{error}</p>}
+      {message && <p className="knowledgeVersionMessage" role="status">{message}</p>}
+      <div className="spaceVersionRows">{versions.slice().reverse().map((version) => { const current = version.id === space.active_version_id; const draft = drafts[version.id] ?? ""; const activeCount = Object.values(version.documents).filter((item) => item.status === "active").length; return <div className="spaceVersionRow" key={version.id}><div className="spaceVersionNumber"><strong>v{version.version_number}</strong><span className={current ? "knowledgeVersionCurrent" : "knowledgeVersionStatus"}>{current ? "当前版本" : "历史版本"}</span></div><div className="spaceVersionBody"><span>{activeCount} 份文档 · {new Date(version.created_at).toLocaleString("zh-CN")}</span><label htmlFor={`space-version-note-${version.id}`}><span>版本说明</span><input id={`space-version-note-${version.id}`} maxLength={500} value={draft} disabled={disabled} placeholder="未填写版本说明" onChange={(event) => setDrafts((values) => ({ ...values, [version.id]: event.target.value }))} /></label></div><div className="spaceVersionActions"><button type="button" className="textButton" disabled={disabled || draft === version.note} onClick={() => void saveNote(version)}>保存说明</button>{!current && <button type="button" className="secondaryButton" disabled={disabled || busy || locked} onClick={() => { setHistoryOpen(false); setConfirmTarget(version); }}>切换整个空间</button>}<button type="button" className="textButton dangerText" disabled={current || disabled || busy || locked} title={current ? "当前检索版本不能删除" : "从历史列表移除此版本快照"} onClick={() => { if (current || disabled || busy || locked) return; setHistoryOpen(false); setDeleteTarget(version); }}>删除版本</button></div></div>; })}</div>
+      {versions.length === 0 && <p className="spaceVersionEmpty">暂无历史版本。</p>}
+      <div className="knowledgeSnapshotAction"><div><strong>当前索引快照</strong><p>{space.active_version_id ? "当前发布状态已有对应快照，无需重复保存。" : "记录尚未保存的当前文档清单与已发布索引；应用代码或模型变更需重建整个空间。"}</p></div><button type="button" className="textButton" disabled={disabled || !snapshotReady} onClick={() => { if (disabled || !snapshotReady) return; setHistoryOpen(false); setSnapshotConfirmation(true); }}>创建当前索引快照</button></div>
+    </div></DetailDrawer>}
+    {confirmTarget && !locked && <ConfirmDialog title={`将整个空间切换到v${confirmTarget.version_number}？`} description="恢复该版本的全空间文档清单与索引。之后新增的文档将停止参与检索，原始资料和历史记录仍保留。" confirmLabel="确认切换整个空间" onCancel={() => setConfirmTarget(null)} onConfirm={() => void activate(confirmTarget)} />}
+    {deleteTarget && !locked && !busy && !disabled && deleteTarget.id !== space.active_version_id && <ConfirmDialog title={`删除历史版本v${deleteTarget.version_number}？`} description="仅从历史列表移除此版本快照，之后无法再切换到该快照。原始文档、切块与向量仍保留，当前检索索引不会改变。" confirmLabel="确认删除版本" tone="danger" onCancel={() => setDeleteTarget(null)} onConfirm={() => void removeVersion(deleteTarget)} />}
+    {snapshotConfirmation && snapshotReady && !disabled && <ConfirmDialog title="创建当前索引快照？" description="仅记录当前文档清单与已发布索引，不应用新的解析代码、切块规则或模型配置。需要应用这些变更时，应重建整个空间并发布新版本。" confirmLabel="确认创建索引快照" onCancel={() => setSnapshotConfirmation(false)} onConfirm={() => void createSnapshot()} />}
     {buildConfirmation === "start" && !locked && <ConfirmDialog title="重建整个空间？" description={`将重新解析、切块并生成当前 ${activeDocumentCount} 份有效文档的向量，可能产生模型调用费用。构建期间检索继续使用旧版，全部完成后由你发布。`} confirmLabel="开始整空间重建" onCancel={() => setBuildConfirmation(null)} onConfirm={() => void startBuild()} />}
     {buildConfirmation === "publish" && build && canPublish && <ConfirmDialog title="发布整个空间版本？" description={`本次 ${total} 份文档已全部完成。确认后整个空间将同时切换到新索引，历史版本仍可回退。`} confirmLabel="确认发布整个空间" onCancel={() => setBuildConfirmation(null)} onConfirm={() => void publishBuild()} />}
     {buildConfirmation === "cancel" && build && !running && <ConfirmDialog title="取消本次空间构建？" description="尚未执行的任务会停止，本次构建不会发布。当前检索版本保持不变。" confirmLabel="确认取消构建" tone="danger" onCancel={() => setBuildConfirmation(null)} onConfirm={() => void cancelBuild()} />}
@@ -327,9 +373,9 @@ function SpaceVersionLedger({ space, build, jobs, documents, busy, locked, state
 }
 
 function CreateSpaceForm({ onCreated }: { onCreated: () => Promise<void> }) {
-  const [name, setName] = useState(""); const [slug, setSlug] = useState(""); const [error, setError] = useState("");
-  async function submit(event: FormEvent) { event.preventDefault(); try { await createKnowledgeSpace({ name, slug, description: "用户创建的独立知识空间。" }); await onCreated(); } catch (reason) { setError(reason instanceof Error ? reason.message : "创建失败"); } }
-  return <form className="spaceCreate" onSubmit={(event) => void submit(event)}><input value={name} placeholder="空间名称" onChange={(event) => setName(event.target.value)} required /><input value={slug} placeholder="英文标识，如 llm-notes" pattern="[a-z0-9][a-z0-9-]{1,62}" onChange={(event) => setSlug(event.target.value)} required /><button className="primaryButton" type="submit">创建</button>{error && <p className="formError">{error}</p>}</form>;
+  const [name, setName] = useState(""); const [slug, setSlug] = useState(""); const [error, setError] = useState(""); const [submitting, setSubmitting] = useState(false);
+  async function submit(event: FormEvent) { event.preventDefault(); if (submitting) return; setSubmitting(true); setError(""); try { await createKnowledgeSpace({ name, slug, description: "用户创建的独立知识空间。" }); await onCreated(); } catch (reason) { setError(reason instanceof Error ? reason.message : "创建失败"); } finally { setSubmitting(false); } }
+  return <form className="spaceCreate" onSubmit={(event) => void submit(event)}><label htmlFor="knowledge-space-name">空间名称</label><input id="knowledge-space-name" value={name} placeholder="例如：LLM工程资料" onChange={(event) => setName(event.target.value)} required /><label htmlFor="knowledge-space-slug">空间标识</label><input id="knowledge-space-slug" value={slug} placeholder="例如：llm-notes" pattern="[a-z0-9][a-z0-9-]{1,62}" onChange={(event) => setSlug(event.target.value)} required /><button className="primaryButton" type="submit" disabled={submitting}>{submitting ? "正在创建" : "创建空间"}</button>{error && <p className="formError" role="alert">{error}</p>}</form>;
 }
 
 function JobLedger({ jobs, documents }: { jobs: KnowledgeJob[]; documents: KnowledgeDocument[] }) {

@@ -22,4 +22,13 @@ for (const type of backendTypes) {
   assert.ok(visual.label, `${type} must have a readable label`);
 }
 assert.deepEqual(eventVisual("future_event"), eventVisual("future_event"), "unknown event color must stay stable");
-console.log(`Event visual mapping covers ${backendTypes.length} unique event types.`);
+// A complete palette alone is insufficient: the final stylesheet must actually
+// consume the per-event variables, in light mode as well as in dark mode.
+const styles = readFileSync(fileURLToPath(new URL("../app/visual-system.css", import.meta.url)), "utf8");
+const labelStyle = styles.match(/^\.eventTypeLabel\s*\{([^}]+)\}/m)?.[1];
+const dotStyle = styles.match(/^\.eventIcon span\s*\{([^}]+)\}/m)?.[1];
+assert.ok(labelStyle, "event type label needs a base style, not a dark-only override");
+assert.match(labelStyle, /color:\s*color-mix\(in srgb,var\(--event-color\)/, "labels must use the event type color, with a readable text shade");
+assert.match(labelStyle, /background:\s*var\(--event-tint\)/, "labels must use the event type tint");
+assert.match(dotStyle ?? "", /background:\s*var\(--event-color\)/, "timeline dots must use the event type color");
+console.log(`Event visual mapping and label/dot styling cover ${backendTypes.length} unique event types.`);

@@ -101,7 +101,12 @@ class InMemoryKnowledgeRepository:
 
     async def update_space_version(self, version: KnowledgeSpaceVersion) -> KnowledgeSpaceVersion:
         async with self._lock:
-            latest = self.space_versions[version.id]
+            latest = self.space_versions.get(version.id)
+            if (
+                latest is None or latest.space_id != version.space_id
+                or latest.deleted_at is not None
+            ):
+                raise KeyError(f"knowledge space version not found: {version.id}")
             updated = latest.model_copy(update={"note": version.note})
             self.space_versions[version.id] = updated
         return updated
@@ -111,13 +116,45 @@ class InMemoryKnowledgeRepository:
 
     async def list_space_versions(self, space_id: str) -> list[KnowledgeSpaceVersion]:
         return sorted(
-            (item for item in self.space_versions.values() if item.space_id == space_id),
+            (
+                item for item in self.space_versions.values()
+                if item.space_id == space_id and item.deleted_at is None
+            ),
             key=lambda item: item.version_number,
         )
+
+    async def delete_space_version(
+        self, space_id: str, version_id: str
+    ) -> KnowledgeSpaceVersion:
+        async with self._lock:
+            space = self.spaces[space_id]
+            version = self.space_versions.get(version_id)
+            if version is None or version.space_id != space.id:
+                raise KeyError(f"knowledge space version not found: {version_id}")
+            if space.active_version_id == version.id:
+                raise ValueError(
+                    "current space version cannot be deleted; activate another version first"
+                )
+            if version.deleted_at is not None:
+                return version
+            ensure_no_build(space)
+            if any(job.space_id == space.id and job.status in BUSY_JOB_STATUSES
+                   for job in self.jobs.values()):
+                raise ValueError("space has active ingestion jobs; wait until they finish")
+            deleted = version.model_copy(update={"deleted_at": datetime.now(UTC)})
+            self.space_versions[version.id] = deleted
+            return deleted
 
     async def activate_space_version(self, version: KnowledgeSpaceVersion) -> KnowledgeSpace:
         async with self._lock:
             space = self.spaces[version.space_id]
+            latest = self.space_versions.get(version.id)
+            if (
+                latest is None or latest.space_id != space.id
+                or latest.deleted_at is not None
+            ):
+                raise KeyError(f"knowledge space version not found: {version.id}")
+            version = latest
             ensure_no_build(space)
             if any(job.space_id == space.id and job.status in BUSY_JOB_STATUSES for job in self.jobs.values()):
                 raise ValueError("space has active ingestion jobs; wait until they finish")

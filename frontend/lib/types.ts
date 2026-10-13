@@ -335,6 +335,7 @@ export type KnowledgeSpaceVersion = {
   note: string;
   created_at: string;
   activated_at?: string | null;
+  deleted_at?: string | null;
 };
 
 export type KnowledgeJob = {

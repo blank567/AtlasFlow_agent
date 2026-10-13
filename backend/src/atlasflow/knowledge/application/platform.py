@@ -129,6 +129,21 @@ class KnowledgePlatform:
         selected = await self.get_space(space)
         return await self.repository.list_space_versions(selected.id)
 
+    async def delete_space_version(
+        self, space: str, version_id: str
+    ) -> KnowledgeSpaceVersion:
+        """Hide a historical manifest while retaining its index and audit references."""
+        selected = await self.get_space(space)
+        version = await self.repository.get_space_version(version_id)
+        if version is None or version.space_id != selected.id:
+            raise KeyError(f"knowledge space version not found: {version_id}")
+        if selected.active_version_id == version.id:
+            raise ValueError("current space version cannot be deleted; activate another version first")
+        if version.deleted_at is None:
+            await self._require_idle_space(selected.id)
+        # The repository checks these conditions again under its space lock.
+        return await self.repository.delete_space_version(selected.id, version.id)
+
     async def start_space_build(self, space: str, note: str = "") -> SpaceBuild:
         return await self.space_builds.start(space, note)
 
@@ -210,7 +225,7 @@ class KnowledgePlatform:
     async def _space_version(self, space: str, version_id: str) -> KnowledgeSpaceVersion:
         selected = await self.get_space(space)
         version = await self.repository.get_space_version(version_id)
-        if version is None or version.space_id != selected.id:
+        if version is None or version.space_id != selected.id or version.deleted_at is not None:
             raise KeyError(f"knowledge space version not found: {version_id}")
         return version
 

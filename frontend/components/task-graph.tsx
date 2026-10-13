@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Background, Controls, Edge, MarkerType, Node, ReactFlow } from "@xyflow/react";
+import { Background, Controls, Edge, MarkerType, Node, Position, ReactFlow } from "@xyflow/react";
 import { ResearchTask, RunEvent, RunRecord, SupplementBatch } from "../lib/types";
 import { formatDuration } from "../lib/format";
 import { DetailDrawer, DrawerSection } from "./detail-drawer";
@@ -41,30 +41,32 @@ export function TaskGraph({ run, events }: { run: RunRecord; events: RunEvent[] 
         position: { x: xLevel * 280, y: row * 150 },
         data: { label: <div className="taskNodeLabel"><div><code>{task.task_id}</code><span className={`nodeState ${state}`} /></div><strong>{task.title}</strong><small>{task.objective}</small>{(result?.confidence ?? liveConfidence) !== undefined && <em>置信度 {Math.round((result?.confidence ?? liveConfidence ?? 0) * 100)}%</em>}</div> },
         className: `taskNode node-${state}`,
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
         style: { width: 230 },
       };
     });
     const nextEdges: Edge[] = plan.tasks.flatMap((task) => task.dependencies.map((dependency) => ({
       id: `${dependency}-${task.task_id}`, source: dependency, target: task.task_id,
-      markerEnd: { type: MarkerType.ArrowClosed, color: "#98a4b5" }, style: { stroke: "#aeb8c6", strokeWidth: 1.4 },
+      markerEnd: { type: MarkerType.ArrowClosed, color: "var(--muted)" }, style: { stroke: "var(--muted)", strokeWidth: 1.6 },
     })));
     return { nodes: nextNodes, edges: nextEdges };
   }, [events, plan, run.errors, run.research_results]);
 
-  if (!plan) return <div className="emptyInline">Planner 尚未生成任务 DAG。</div>;
+  if (!plan) return <div className="emptyInline">Planner尚未生成任务依赖图。</div>;
   const supplementIds = new Set(run.plan_lineage?.supplements?.flatMap(supplementTaskIds) ?? []);
   return (
     <div className="taskGraphLayout">
       <aside className="planLineage">
-        <span className="sectionLabel">Plan lineage</span>
-        {allPlans.map((item) => <button key={item.plan_version} className={item.plan_version === plan.plan_version ? "active" : ""} onClick={() => setSelectedVersion(item.plan_version)}><span>v{item.plan_version}</span><small>{item.tasks.length} tasks</small></button>)}
-        {!!run.plan_lineage?.supplements?.length && <div className="supplementList"><strong>增量补充</strong>{run.plan_lineage.supplements.map((batch) => { const ids = supplementTaskIds(batch); return <p key={`${batch.round}-${ids.join("-")}`}><span>Round {batch.round}</span>{ids.join(", ")}</p>; })}</div>}
+        <span className="sectionLabel">Plan版本</span>
+        {allPlans.map((item) => <button key={item.plan_version} className={item.plan_version === plan.plan_version ? "active" : ""} onClick={() => setSelectedVersion(item.plan_version)}><span>v{item.plan_version}</span><small>{item.tasks.length} 项任务</small></button>)}
+        {!!run.plan_lineage?.supplements?.length && <div className="supplementList"><strong>增量补充</strong>{run.plan_lineage.supplements.map((batch) => { const ids = supplementTaskIds(batch); return <p key={`${batch.round}-${ids.join("-")}`}><span>第{batch.round}轮</span>{ids.join(", ")}</p>; })}</div>}
       </aside>
       <div className="taskCanvasWrap">
         <div className="graphLegend"><span><i className="legendDot initial" />初始任务</span><span><i className="legendDot supplement" />补充任务</span></div>
         <div className="flowCanvas taskFlowCanvas">
-          <ReactFlow nodes={nodes.map((node) => ({ ...node, className: `${node.className} ${supplementIds.has(node.id) ? "supplementNode" : ""}` }))} edges={edges} fitView fitViewOptions={{ padding: 0.24 }} minZoom={0.4} maxZoom={1.5} nodesDraggable={false} nodesConnectable={false} onNodeClick={(_, node) => setSelectedTaskId(node.id)}>
-            <Background color="#dce1e9" gap={20} size={1} /><Controls showInteractive={false} />
+          <ReactFlow nodes={nodes.map((node) => ({ ...node, className: `${node.className} ${supplementIds.has(node.id) ? "supplementNode" : ""}` }))} edges={edges} fitView fitViewOptions={{ padding: 0.12 }} minZoom={0.4} maxZoom={1.5} nodesDraggable={false} nodesConnectable={false} onNodeClick={(_, node) => setSelectedTaskId(node.id)}>
+            <Background color="var(--line)" gap={24} size={1} /><Controls showInteractive={false} />
           </ReactFlow>
           {selectedTaskId && <TaskDrawer task={plan.tasks.find((item) => item.task_id === selectedTaskId)} run={run} events={events} onClose={() => setSelectedTaskId(null)} />}
         </div>
@@ -84,12 +86,12 @@ function TaskDrawer({ task, run, events, onClose }: { task?: ResearchTask; run: 
   const liveConfidence = typeof liveResult.confidence === "number" ? liveResult.confidence : completedEvent?.data.confidence;
   const summary = result?.summary ?? (typeof liveResult.summary === "string" ? liveResult.summary : undefined);
   const liveError = typeof completedEvent?.data.error === "string" ? completedEvent.data.error : undefined;
-  return <DetailDrawer title={`${task.task_id} · ${task.title}`} subtitle={`Plan v${task.plan_version}`} onClose={onClose}>
-    <div className="drawerStats"><div><span>状态</span><strong>{result || completedEvent?.status === "succeeded" ? "完成" : error || completedEvent?.status === "failed" ? "失败" : lastEvent?.status ?? "等待"}</strong></div><div><span>置信度</span><strong>{typeof result?.confidence === "number" ? `${Math.round(result.confidence * 100)}%` : typeof liveConfidence === "number" ? `${Math.round(liveConfidence * 100)}%` : "不可用"}</strong></div><div><span>耗时</span><strong>{formatDuration(result?.duration_ms ?? completedEvent?.duration_ms ?? [...taskEvents].reverse().find((event) => event.duration_ms !== undefined)?.duration_ms)}</strong></div></div>
+  return <DetailDrawer title={`${task.task_id} · ${task.title}`} subtitle={`Plan版本v${task.plan_version}`} onClose={onClose}>
+    <div className="drawerStats"><div><span>状态</span><strong>{result || completedEvent?.status === "succeeded" ? "完成" : error || completedEvent?.status === "failed" ? "失败" : lastEvent?.status ?? "等待"}</strong></div><div><span>置信度</span><strong>{typeof result?.confidence === "number" ? `${Math.round(result.confidence * 100)}%` : typeof liveConfidence === "number" ? `${Math.round(liveConfidence * 100)}%` : "未记录"}</strong></div><div><span>耗时</span><strong>{formatDuration(result?.duration_ms ?? completedEvent?.duration_ms ?? [...taskEvents].reverse().find((event) => event.duration_ms !== undefined)?.duration_ms)}</strong></div></div>
     <DrawerSection title="任务输入"><dl className="drawerDefinition"><div><dt>研究目标</dt><dd>{task.objective}</dd></div><div><dt>依赖</dt><dd>{task.dependencies.length ? task.dependencies.join(", ") : "无"}</dd></div><div><dt>优先级</dt><dd>{task.priority}</dd></div></dl></DrawerSection>
     <DrawerSection title="成功标准"><ul className="criteriaList">{task.success_criteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></DrawerSection>
-    <DrawerSection title="工具能力要求"><p>{task.required_capabilities?.length ? `全部必需：${task.required_capabilities.join(" · ")}` : "无全部必需项"}</p>{task.capability_alternatives?.map((group, index) => <p key={index}>任选一种：{group.join(" / ")}</p>)}<p className="drawerMuted">{task.requires_fresh_data ? "需要新获取数据；数据是否足够新、是否满足目标仍需审查" : "没有强制数据时效要求"}</p></DrawerSection>
-    <DrawerSection title="研究结果">{summary ? <p>{summary}</p> : <p className="drawerMuted">结果尚未写入 RunRecord。</p>}{error && <p className="drawerError">{error.code} · {error.message}</p>}{!error && liveError && <p className="drawerError">{liveError}</p>}</DrawerSection>
+    <DrawerSection title="工具能力要求"><p>{task.required_capabilities?.length ? `必需能力：${task.required_capabilities.join(" · ")}` : "未指定必需能力"}</p>{task.capability_alternatives?.map((group, index) => <p key={index}>可选能力（至少一种）：{group.join(" / ")}</p>)}<p className="drawerMuted">{task.requires_fresh_data ? "要求获取最新数据，并在审查阶段核验时效与目标覆盖。" : "未指定数据时效要求。"}</p></DrawerSection>
+    <DrawerSection title="研究结果">{summary ? <p>{summary}</p> : <p className="drawerMuted">尚未记录研究结果。</p>}{error && <p className="drawerError">{error.code} · {error.message}</p>}{!error && liveError && <p className="drawerError">{liveError}</p>}</DrawerSection>
     <DrawerSection title="实时事件"><ol className="drawerEvents">{taskEvents.map((event) => <li key={event.event_id}><span>#{event.sequence}</span>{event.message}</li>)}</ol></DrawerSection>
   </DetailDrawer>;
 }
