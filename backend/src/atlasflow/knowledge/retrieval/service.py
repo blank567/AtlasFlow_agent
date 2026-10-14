@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from time import perf_counter
 from typing import Literal
 
@@ -16,7 +17,7 @@ from atlasflow.knowledge.domain import (
 from atlasflow.knowledge.ports.repository import KnowledgeRepository
 from atlasflow.knowledge.retrieval.context_assembler import ContextAssembler
 from atlasflow.knowledge.retrieval.query_pipeline import QueryPipeline
-from atlasflow.knowledge.retrieval.scoring import bm25, cosine, ranks
+from atlasflow.knowledge.retrieval.scoring import bm25, cosine, pool_query_scores
 from atlasflow.observability import traced
 from atlasflow.providers import EmbeddingProvider, RerankProvider
 
@@ -29,13 +30,14 @@ class RetrievalService:
         embedding_provider: EmbeddingProvider,
         rerank_provider: RerankProvider,
         profile: RetrievalProfile | None = None,
+        query_pipeline: QueryPipeline | None = None,
     ) -> None:
         self.repository = repository
         self.embedding_provider = embedding_provider
         self.rerank_provider = rerank_provider
         self.profile = profile or RetrievalProfile()
         self.assembler = ContextAssembler(repository)
-        self.query_pipeline = QueryPipeline()
+        self.query_pipeline = query_pipeline or QueryPipeline()
 
     @traced(name="knowledge.search")
     async def search(
@@ -74,6 +76,8 @@ class RetrievalService:
             "rerank_limit": profile.rerank_limit,
             "rerank_enabled": rerank_enabled,
             "result_limit": limit,
+            "query_expansion_enabled": profile.query_expansion_enabled,
+            "query_expansion_limit": profile.query_expansion_limit,
         }
         query = await self.query_pipeline.normalize(query)
         selected_space = await self.repository.get_space(space)
@@ -100,31 +104,73 @@ class RetrievalService:
                     profile_id=profile.id,
                     generation_id=generation_id,
                     rerank_requested=rerank_enabled,
+                    query_expansion_requested=profile.query_expansion_enabled,
+                    query_expansion_method=(
+                        "bilingual-terms-v1" if profile.query_expansion_enabled else "disabled"
+                    ),
+                    query_variants=[query],
                     applied_parameters=applied_parameters,
                     duration_ms=int((perf_counter() - started) * 1000),
                 ),
             )
 
-        lexical_scores = (
-            await self._lexical(query, chunks)
-            if profile.lexical_weight > 0 else {item.id: 0.0 for item in chunks}
-        )
         degraded: list[str] = []
+        queries = [query]
+        matched_terms: list[str] = []
+        expansion_method = "disabled" if not profile.query_expansion_enabled else "bilingual-terms-v1"
+        if profile.query_expansion_enabled:
+            try:
+                expansion = await self.query_pipeline.expand(
+                    query, enabled=True, limit=profile.query_expansion_limit
+                )
+                # The pipeline is replaceable, but the original query and bounded
+                # cost are invariants even for a future model-backed expander.
+                seen = {query.casefold()}
+                for variant in expansion.queries:
+                    normalized = " ".join(variant.split())
+                    if (normalized and len(normalized) <= 4500
+                            and normalized.casefold() not in seen):
+                        seen.add(normalized.casefold())
+                        queries.append(normalized)
+                    if len(queries) > profile.query_expansion_limit:
+                        break
+                matched_terms = expansion.matched_terms[:8]
+                expansion_method = expansion.method
+            except Exception as exc:  # noqa: BLE001 - expansion must not break the original query
+                queries = [query]
+                matched_terms = []
+                degraded.append(f"query_expansion_unavailable:{type(exc).__name__}")
+        zero_scores = {item.id: 0.0 for item in chunks}
+        lexical_rows = (
+            [await self._lexical(variant, chunks) for variant in queries]
+            if profile.lexical_weight > 0 else [zero_scores]
+        )
         if profile.vector_weight == 0:
-            vector_scores = {item.id: 0.0 for item in chunks}
+            vector_rows = [zero_scores]
         else:
             try:
-                vector_scores = await self._vector(query, chunks)
+                vector_rows = (
+                    await self._vector_queries(queries, chunks)
+                    if len(queries) > 1 else [await self._vector(query, chunks)]
+                )
             except Exception as exc:  # noqa: BLE001 - vector retrieval has a specified fallback
-                vector_scores = {item.id: 0.0 for item in chunks}
-                degraded.append(f"vector_unavailable:{type(exc).__name__}")
-        lexical_rank = (
-            ranks(lexical_scores, limit=profile.candidate_limit)
-            if profile.lexical_weight > 0 else {}
+                if len(queries) > 1:
+                    # Providers rejecting the batch must not suppress the original
+                    # vector lane. At most one original-only fallback is attempted.
+                    degraded.append(f"vector_expansion_unavailable:{type(exc).__name__}")
+                    try:
+                        vector_rows = [await self._vector(query, chunks)]
+                    except Exception as original_exc:  # noqa: BLE001 - keep lexical matches
+                        vector_rows = [zero_scores]
+                        degraded.append(f"vector_unavailable:{type(original_exc).__name__}")
+                else:
+                    vector_rows = [zero_scores]
+                    degraded.append(f"vector_unavailable:{type(exc).__name__}")
+        lexical_scores, lexical_rank = pool_query_scores(
+            lexical_rows, limit=profile.candidate_limit, rrf_k=profile.rrf_k
         )
-        vector_rank = (
-            ranks(vector_scores, limit=profile.candidate_limit)
-            if profile.vector_weight > 0 else {}
+        vector_scores, vector_rank = pool_query_scores(
+            vector_rows, limit=profile.candidate_limit, rrf_k=profile.rrf_k
         )
         # RRF consumes the union of actual matches, never an arbitrary rank for
         # zero-score chunks (including when a retrieval lane is unavailable).
@@ -192,6 +238,12 @@ class RetrievalService:
                 rerank_candidates=len(candidates) if rerank_enabled else 0,
                 rerank_requested=rerank_enabled,
                 rerank_applied=rerank_applied,
+                query_expansion_requested=profile.query_expansion_enabled,
+                query_expansion_applied=len(queries) > 1,
+                query_expansion_method=expansion_method,
+                query_variants=queries,
+                matched_terms=matched_terms,
+                score_scope="best_query_variant" if len(queries) > 1 else "original_query",
                 applied_parameters=applied_parameters,
                 degraded=degraded,
                 duration_ms=int((perf_counter() - started) * 1000),
@@ -207,6 +259,27 @@ class RetrievalService:
         vectors = await self.embedding_provider.embed([query], input_type="search_query")
         query_vector = vectors[0]
         return {item.id: cosine(query_vector, item.embedding or []) for item in chunks}
+
+    @traced(name="knowledge.retrieve.vector.expanded_queries")
+    async def _vector_queries(self, queries: list[str], chunks: list) -> list[dict[str, float]]:
+        """Batch all variants without repeating document embedding or crossing spaces."""
+        vectors = await self.embedding_provider.embed(queries, input_type="search_query")
+        if len(vectors) != len(queries):
+            raise ValueError("query embedding count does not match query variants")
+        dimensions: set[int] = set()
+        for vector in vectors:
+            if not isinstance(vector, list) or not vector or any(
+                isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) for value in vector
+            ):
+                raise ValueError("query embedding must be a non-empty finite numeric vector")
+            dimensions.add(len(vector))
+        if len(dimensions) != 1:
+            raise ValueError("query embedding dimensions do not match")
+        return [
+            {item.id: cosine(vector, item.embedding or []) for item in chunks}
+            for vector in vectors
+        ]
 
     @traced(name="knowledge.fusion.rrf")
     async def _fuse(

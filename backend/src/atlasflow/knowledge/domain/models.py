@@ -213,6 +213,8 @@ class RetrievalProfile(FrozenModel):
     result_limit: int = Field(default=5, ge=1, le=20)
     min_relevance: float = Field(default=0.05, ge=0, le=1)
     context_token_budget: int = Field(default=5000, ge=500, le=50000)
+    query_expansion_enabled: bool = True
+    query_expansion_limit: int = Field(default=2, ge=1, le=4)
 
 
 class RetrievalTuning(FrozenModel):
@@ -224,6 +226,8 @@ class RetrievalTuning(FrozenModel):
     candidate_limit: int | None = Field(default=None, ge=1, le=200)
     rerank_limit: int | None = Field(default=None, ge=1, le=100)
     rerank_enabled: bool | None = None
+    query_expansion_enabled: bool | None = None
+    query_expansion_limit: int | None = Field(default=None, ge=1, le=4)
 
 
 class FilterValue(FrozenModel):
@@ -276,6 +280,12 @@ class RetrievalTrace(FrozenModel):
     rerank_candidates: int = 0
     rerank_requested: bool = True
     rerank_applied: bool = False
+    query_expansion_requested: bool = False
+    query_expansion_applied: bool = False
+    query_expansion_method: str = "bilingual-terms-v1"
+    query_variants: list[str] = Field(default_factory=list)
+    matched_terms: list[str] = Field(default_factory=list)
+    score_scope: Literal["original_query", "best_query_variant"] = "original_query"
     applied_parameters: dict[str, float | int | bool] = Field(default_factory=dict)
     degraded: list[str] = Field(default_factory=list)
     duration_ms: int = 0

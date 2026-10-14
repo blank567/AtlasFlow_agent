@@ -7,6 +7,7 @@ from atlasflow.agents.tool_runtime import ToolRuntime
 from atlasflow.agents.workflow import ResearchWorkflow
 from atlasflow.config import Settings
 from atlasflow.knowledge.application import KnowledgePlatform
+from atlasflow.knowledge.domain import RetrievalProfile
 from atlasflow.knowledge.infrastructure import (
     InMemoryKnowledgeRepository,
     LocalBlobStore,
@@ -16,6 +17,8 @@ from atlasflow.knowledge.infrastructure.postgres_repository import (
     PostgresKnowledgeRepository,
 )
 from atlasflow.knowledge.retrieval import RetrievalService
+from atlasflow.knowledge.retrieval.bilingual_query_expander import BilingualQueryExpander
+from atlasflow.knowledge.retrieval.query_pipeline import QueryPipeline
 from atlasflow.observability import configure_langsmith
 from atlasflow.providers import EmbeddingProvider, RerankProvider
 from atlasflow.providers.openrouter import (
@@ -66,6 +69,17 @@ def build_container(settings: Settings, providers: ProviderBundle | None = None)
         repository=knowledge_repository,
         embedding_provider=providers.embedding,
         rerank_provider=providers.reranker,
+        profile=RetrievalProfile(
+            query_expansion_enabled=settings.knowledge_query_expansion_enabled,
+            query_expansion_limit=settings.knowledge_query_expansion_limit,
+        ),
+        query_pipeline=QueryPipeline(
+            expander=(
+                BilingualQueryExpander.from_file(settings.knowledge_query_aliases_path)
+                if settings.knowledge_query_aliases_path.strip()
+                else None
+            )
+        ),
     )
     knowledge = KnowledgePlatform(
         repository=knowledge_repository,

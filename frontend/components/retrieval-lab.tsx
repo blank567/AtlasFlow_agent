@@ -21,6 +21,8 @@ const DEFAULT_SETTINGS: LabSettings = {
   vector_weight: 1,
   rrf_k: 60,
   rerank_enabled: true,
+  query_expansion_enabled: true,
+  query_expansion_limit: 2,
 };
 
 function settingsError(settings: LabSettings): string {
@@ -29,6 +31,7 @@ function settingsError(settings: LabSettings): string {
     [settings.candidate_limit, 1, 200, "融合候选"],
     [settings.rerank_limit, 1, 100, "重排候选"],
     [settings.rrf_k, 1, 200, "RRF常数"],
+    [settings.query_expansion_limit, 1, 4, "扩展查询上限"],
   ] as const;
   for (const [value, minimum, maximum, label] of bounded) {
     if (!Number.isInteger(value) || value < minimum || value > maximum) {
@@ -88,6 +91,8 @@ export function RetrievalLab({ space }: { space: string }) {
           candidate_limit: submittedSettings.candidate_limit,
           rerank_limit: submittedSettings.rerank_limit,
           rerank_enabled: submittedSettings.rerank_enabled,
+          query_expansion_enabled: submittedSettings.query_expansion_enabled,
+          query_expansion_limit: submittedSettings.query_expansion_limit,
         },
       });
       if (requestId === searchId.current) {
@@ -134,6 +139,11 @@ export function RetrievalLab({ space }: { space: string }) {
           <div className="ragControl"><label htmlFor="rag-rrf-k">RRF常数</label><p>调节召回名次差异对融合评分的影响。</p><input id="rag-rrf-k" type="number" min={1} max={200} value={settings.rrf_k} onChange={(event) => setSettings((previous) => ({ ...previous, rrf_k: Number(event.target.value) }))} /></div>
         <div className="ragWeightControl"><label htmlFor="rag-lexical-share">召回策略</label><p>关键词与语义召回的融合权重。</p><span id="rag-weight-hint" className="srOnly">向右增加关键词权重，向左增加语义权重。</span><input id="rag-lexical-share" type="range" min={0} max={100} step={5} value={lexicalShare} aria-label="关键词召回占比" aria-describedby="rag-weight-hint" aria-valuetext={`关键词${lexicalShare}%，语义${100 - lexicalShare}%`} title="向右增加关键词权重，向左增加语义权重" onChange={(event) => changeLexicalShare(Number(event.target.value))} /><div><span>关键词 {lexicalShare}%</span><span>语义 {100 - lexicalShare}%</span></div></div>
         <label className="ragSwitch"><input type="checkbox" checked={settings.rerank_enabled} onChange={(event) => setSettings((previous) => ({ ...previous, rerank_enabled: event.target.checked }))} /><span><strong>启用重排</strong><small>重新评估候选片段的相关性。</small></span></label>
+        <div className="ragExpansionControl">
+          <label className="ragSwitch" htmlFor="rag-query-expansion"><input id="rag-query-expansion" type="checkbox" checked={settings.query_expansion_enabled} onChange={(event) => setSettings((previous) => ({ ...previous, query_expansion_enabled: event.target.checked }))} /><span><strong>中英查询扩展</strong><small>补充中英术语与缩写，保留原始问题。</small></span></label>
+          <div className="ragExpansionLimit"><label htmlFor="rag-query-expansion-limit">扩展查询上限</label><input id="rag-query-expansion-limit" type="number" min={1} max={4} value={settings.query_expansion_limit} disabled={!settings.query_expansion_enabled} aria-describedby="rag-expansion-limit-hint" onChange={(event) => setSettings((previous) => ({ ...previous, query_expansion_limit: Number(event.target.value) }))} /></div>
+          <p id="rag-expansion-limit-hint">额外查询数，不计原始问题。仅扩展召回，不改写重排问题。</p>
+        </div>
         </div>
         {validation && <p className="ragValidation" role="alert">{validation}</p>}
         <p className="ragControlNote">参数仅在本次查询中生效。</p>
@@ -151,6 +161,11 @@ function SearchResults({ snapshot, stale }: { snapshot: SearchSnapshot; stale: b
   const [expandedHits, setExpandedHits] = useState<Record<string, boolean>>({});
   const { result, settings } = snapshot;
   const trace = result.trace;
+  // The trace owns the executed query forms, including server normalization.
+  // Never prepend the raw textarea value as another retrieval variant.
+  const queryVariants = trace.query_variants?.length ? trace.query_variants : [result.query || snapshot.query];
+  const expansionRecorded = typeof trace.query_expansion_requested === "boolean";
+  const expansionLabel = !trace.query_expansion_requested ? "本次关闭" : trace.query_expansion_applied ? `已生成${queryVariants.length - 1}条扩展查询` : "未追加查询，保留原始问题";
   const statusLabel = result.decision.status === "sufficient" ? "证据充分" : result.decision.status === "partial" ? "证据有限" : "证据不足";
   const stages = [
     { name: "双路召回", value: `${trace.lexical_candidates} / ${trace.vector_candidates}`, note: "关键词/语义Top-K" },
@@ -163,9 +178,14 @@ function SearchResults({ snapshot, stale }: { snapshot: SearchSnapshot; stale: b
     <div className="ragResultsHeader"><div><h3>检索结果</h3><p>{snapshot.query}</p></div><span>{trace.duration_ms}ms</span></div>
     {stale && <div className="ragStaleNotice">查询条件已变更。当前显示上次结果，请重新运行检索。</div>}
     <div className="ragPipeline" aria-label="检索阶段统计">{stages.map((stage) => <div key={stage.name}><span>{stage.name}</span><strong>{stage.value}</strong><small>{stage.note}</small></div>)}</div>
+    {expansionRecorded && <section className="ragQueryExpansion" aria-label="查询扩展">
+      <header><h4>查询扩展</h4><span>{expansionLabel}</span></header>
+      <ul>{queryVariants.map((variant, index) => <li key={variant}><span>{index === 0 ? "原始问题" : "扩展查询"}</span><p>{variant}</p></li>)}</ul>
+      <p className="ragExpansionNote">扩展仅用于召回，模型重排仍使用原始问题。</p>
+    </section>}
     <div className={`ragDecision decision-${result.decision.status}`}><div><strong>{statusLabel}</strong><p>{result.decision.reasons.join("；") || "已获得多条可用上下文。"}</p></div><div><span>最高相关度</span><strong>{score(result.decision.best_relevance)}</strong><small>{result.decision.score_basis === "rerank" ? "重排分" : "归一化融合分"}</small></div></div>
     {trace.degraded.length > 0 && <div className="ragDegraded">检索能力降级：{trace.degraded.join("、")}</div>}
-    <div className="ragResultCaption"><h4>原文证据</h4><span>评分使用不同量纲，分别比较；融合分不代表概率。</span></div>
+    <div className="ragResultCaption"><h4>原文证据</h4><span>{trace.score_scope === "best_query_variant" ? "关键词与语义分取查询变体中的最高原始分；融合按名次计算，非概率。" : "评分使用不同量纲，分别比较；融合分不代表概率。"}</span></div>
     {result.hits.length === 0 ? <div className="ragNoHits"><strong>未检索到有效证据</strong><p>确认空间已有发布文档，或调整查询条件。</p></div> : <div className="ragHitList">{result.hits.map((hit, index) => {
       const source = hit.chunk.metadata.canonical_uri;
       const sourceUrl = typeof source === "string" && /^https?:\/\//.test(source) ? source : null;
@@ -186,7 +206,7 @@ function SearchResults({ snapshot, stale }: { snapshot: SearchSnapshot; stale: b
       </article>;
     })}</div>}
     <footer className="ragResultParameters"><h4>本次参数与索引</h4><dl>{[
-      ["返回证据上限", settings.result_limit], ["关键词权重", trace.applied_parameters.lexical_weight], ["语义权重", trace.applied_parameters.vector_weight], ["融合候选上限", trace.applied_parameters.candidate_limit], ["重排候选上限", trace.applied_parameters.rerank_limit], ["RRF常数", trace.applied_parameters.rrf_k], ["重排开关", trace.rerank_requested ? "启用" : "关闭"], ["检索配置", trace.profile_id], ["索引世代", trace.generation_id || "未记录"],
+      ["返回证据上限", settings.result_limit], ["关键词权重", trace.applied_parameters.lexical_weight], ["语义权重", trace.applied_parameters.vector_weight], ["融合候选上限", trace.applied_parameters.candidate_limit], ["重排候选上限", trace.applied_parameters.rerank_limit], ["RRF常数", trace.applied_parameters.rrf_k], ["重排开关", trace.rerank_requested ? "启用" : "关闭"], ["中英查询扩展", expansionRecorded ? trace.query_expansion_requested ? "启用" : "关闭" : "未记录"], ["扩展查询上限", trace.applied_parameters.query_expansion_limit], ["检索配置", trace.profile_id], ["索引世代", trace.generation_id || "未记录"],
     ].map(([label, value]) => <div key={String(label)}><dt>{label}</dt><dd title={value == null ? undefined : String(value)}>{value == null ? "未记录" : String(value)}</dd></div>)}</dl></footer>
   </>;
 }

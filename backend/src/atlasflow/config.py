@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     knowledge_default_space: str = "user-default"
     knowledge_worker_enabled: bool = True
     knowledge_worker_poll_seconds: float = Field(default=0.5, ge=0.1, le=30.0)
+    knowledge_query_expansion_enabled: bool = True
+    knowledge_query_expansion_limit: int = Field(default=2, ge=1, le=4)
+    knowledge_query_aliases_path: str = ""
 
     sse_heartbeat_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
     sse_poll_seconds: float = Field(default=0.25, ge=0.05, le=2.0)

@@ -392,3 +392,63 @@ Invoke-RestMethod -Method Delete "http://127.0.0.1:8000/api/v1/knowledge/spaces/
 ```
 
 这是空间快照的逻辑删除，不释放原文或索引占用的磁盘空间。成功响应带 `deleted_at`，公开历史列表将隐藏该快照且不能再切换到它；内部审计保留，当前检索不变。接口没有提供撤销删除，误操作时不要直接修改生产数据库。版本编号不会因删除而被复用。
+
+## 14. 中英混合查询扩展（v0.6.0补记）
+
+默认开启术语级扩展，最多追加2条查询；原始问题始终保留。重启后端、刷新前端即可使用，不需重建索引或保存新的空间版本。前端「检索参数」中的开关和上限仅影响下一次显式运行的查询，不修改空间配置；请求未覆盖的参数及Agent工具使用.env服务默认。
+
+```dotenv
+# 服务默认：启用中英术语扩展，不增加LLM调用。
+KNOWLEDGE_QUERY_EXPANSION_ENABLED=true
+# 上限是额外查询数量，允许1–4；不是证据条数，也不包括原始问题。
+KNOWLEDGE_QUERY_EXPANSION_LIMIT=2
+# 可选：UTF-8 JSON词表覆盖/扩展内置术语。留空使用内置词表，路径放在E盘。
+KNOWLEDGE_QUERY_ALIASES_PATH=
+```
+
+```powershell
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+
+# 运行正常后端后，显式执行一次仅关键词召回，比较中英术语扩展的效果。
+# 该示例禁用向量与重排，不发出模型请求；请使用已有已发布文档的空间。
+$bilingualSearchBody = @{
+    space = 'llm-engineering-v1'
+    query = '注意力机制的计算原理是什么？'
+    result_limit = 5
+    tuning = @{
+        query_expansion_enabled = $true
+        query_expansion_limit = 2
+        vector_weight = 0
+        rerank_enabled = $false
+    }
+} | ConvertTo-Json -Depth 5
+$bilingualSearchResult = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8000/api/v1/knowledge/search/debug' -ContentType 'application/json; charset=utf-8' -Body ([System.Text.Encoding]::UTF8.GetBytes($bilingualSearchBody))
+# 查看原始问题和实际扩展查询；未匹配词表或内容为空时可能只有原问题。
+$bilingualSearchResult.trace.query_variants
+$bilingualSearchResult.trace.matched_terms
+$bilingualSearchResult.trace.degraded
+```
+
+自定义词表格式如下，在编辑器中保存为例如`E:\codex\agent\data\knowledge\query-aliases.json`，再将该路径写入.env并重启后端。相同`id`替换整条内置记录，新的`id`增加术语；每种语言第一项作为扩展用的正式短语，后续项作为匹配别名。文件应仅包含`terms`，每条必须有`id/zh/en`；跨术语的重复别名和无效格式会显式报错。不要将密钥或敏感信息放入术语表。
+
+```json
+{
+  "terms": [
+    {"id": "document_layout", "zh": ["文档版面分析", "版面识别"], "en": ["document layout analysis", "layout parsing"]}
+  ]
+}
+```
+
+词表不是自由翻译模型，未配置的领域需要自行补充别名。英文短语按词边界匹配，中文优先匹配更完整的术语；无可靠映射则只使用原问题。查询变体之间先按排名合并，关键词与语义原始分取变体最大值，融合分仍为名次分而非概率。开启向量召回时，会对实际查询列表进行一次批量Embedding；批量不可用时回退一次原查询Embedding，并在Trace中记录降级。关闭扩展恢复原单查询链路。
+
+本地专项回归命令如下。显式指定pytest临时目录，避免系统目录不可写时回退到C盘；每次使用新的目录名。浏览器命令需先按第12节启动3210端口隔离前端，API仅使用测试样例。
+
+```powershell
+# 查询扩展及检索集成回归；无真实模型请求，不更改知识空间。
+$queryTestStamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+E:\conda_envs\langchain\python.exe -m pytest backend/tests/test_query_pipeline.py backend/tests/test_bilingual_retrieval.py -q --basetemp="E:/codex/agent/build/query-expansion-tests-$queryTestStamp" -o cache_dir=build/pytest-cache
+# 前端显式提交、原问题/变体显示、开关和上限，以及旧版本管理回归。
+node frontend/scripts/verify-knowledge-browser.mjs http://127.0.0.1:3210
+```

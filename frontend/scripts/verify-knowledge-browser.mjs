@@ -63,15 +63,22 @@ function responseFor(request) {
     const payload = JSON.parse(request.postData || "{}");
     searchRequests.push(payload);
     assert.equal(payload.space, space.slug);
+    const normalizedQuery = payload.query.replace(/\s+/g, " ").trim();
+    const expansionRequested = payload.tuning.query_expansion_enabled;
+    const expansionMatched = /注意力|attention/i.test(normalizedQuery);
+    // This fixture represents an injectable expander with four aliases;
+    // the built-in glossary need not produce four variants for every term.
+    const aliases = ["attention", "attention mechanism", "self-attention", "注意力机制"];
+    const queryVariants = [normalizedQuery, ...(expansionRequested && expansionMatched ? aliases.slice(0, payload.tuning.query_expansion_limit).map((alias) => `${normalizedQuery} ${alias}`) : [])];
     return {
-      query: payload.query,
+      query: normalizedQuery,
       decision: { status: "sufficient", reasons: ["两份来源提供有效证据"], coverage: 1, evidence_count: 2, best_relevance: 0.882, score_basis: "rerank" },
       hits: documents.map((doc, index) => ({
         chunk: { id: `chunk-${index}`, title: doc.title, content: `命中原文${index + 1}：注意力机制基于查询、键和值计算相关性。本段为界面回归测试资料。`, heading_path: ["模型架构", "注意力机制"], page_number: 3 + index, metadata: { canonical_uri: "https://arxiv.org/abs/1706.03762" } },
         context_excerpt: index === 0 ? "邻近上下文：多头注意力在不同表示空间中并行计算。" : null,
         lexical_score: 4.281 - index, vector_score: 0.814 - index * 0.1, fusion_score: 0.032 - index * 0.005, rerank_score: index === 0 ? 0.882 : null,
       })),
-      trace: { profile_id: space.retrieval_profile, generation_id: space.active_generation_id, lexical_candidates: 24, vector_candidates: 31, fused_candidates: 40, rerank_candidates: 20, rerank_requested: payload.tuning.rerank_enabled, rerank_applied: payload.tuning.rerank_enabled, applied_parameters: payload.tuning, degraded: [], duration_ms: 361 },
+      trace: { profile_id: space.retrieval_profile, generation_id: space.active_generation_id, lexical_candidates: 24, vector_candidates: 31, fused_candidates: 40, rerank_candidates: 20, rerank_requested: payload.tuning.rerank_enabled, rerank_applied: payload.tuning.rerank_enabled, query_expansion_requested: expansionRequested, query_expansion_applied: queryVariants.length > 1, query_expansion_method: "bilingual-terms-v1", query_variants: queryVariants, matched_terms: expansionRequested && expansionMatched ? ["attention"] : [], score_scope: queryVariants.length > 1 ? "best_query_variant" : "original_query", applied_parameters: payload.tuning, degraded: [], duration_ms: 361 },
     };
   }
   if (route.endsWith("/knowledge/spaces")) return [space];
@@ -377,14 +384,23 @@ try {
   // Search is fully intercepted; controls, evidence and scores remain directly visible.
   await page.send("Page.navigate", { url: `${process.argv[2] ?? "http://localhost:3210"}/knowledge/lab` });
   await until(() => evaluate("!!document.querySelector('.ragParameterGrid')"), "Retrieval lab failed to load");
-  for (const selector of ["#rag-result-limit", "#rag-candidate-limit", "#rag-rerank-limit", "#rag-rrf-k", "#rag-lexical-share", ".ragSwitch input"]) assert.ok(await isRendered(`document.querySelector(${JSON.stringify(selector)})`), `${selector} must be directly visible`);
+  for (const selector of ["#rag-result-limit", "#rag-candidate-limit", "#rag-rerank-limit", "#rag-rrf-k", "#rag-lexical-share", ".ragSwitch input", "#rag-query-expansion", "#rag-query-expansion-limit"]) assert.ok(await isRendered(`document.querySelector(${JSON.stringify(selector)})`), `${selector} must be directly visible`);
   assert.equal(await evaluate("document.querySelectorAll('.ragLab details').length"), 0, "Retrieval controls must not require disclosures");
+  assert.equal(await evaluate("document.querySelector('#rag-query-expansion').checked"), true, "Bilingual expansion should default to enabled");
+  assert.equal(await evaluate("document.querySelector('#rag-query-expansion-limit').value"), "2", "The default limit is two additional queries");
   await fill("#rag-query", "注意力机制的计算过程");
   await until(() => evaluate(`${button("运行检索")} && !${button("运行检索")}.disabled`), "Query input did not enable search");
   await evaluate(`${button("运行检索")}.click()`);
   await until(() => evaluate("document.querySelectorAll('.ragHit').length===2"), "Fixture search results missing");
   assert.equal(searchRequests.length, 1, "Search should use one intercepted fixture request");
   assert.equal(searchRequests[0].query, "注意力机制的计算过程");
+  assert.equal(searchRequests[0].tuning.query_expansion_enabled, true);
+  assert.equal(searchRequests[0].tuning.query_expansion_limit, 2);
+  assert.ok(await isRendered("document.querySelector('.ragQueryExpansion')"), "Actual expansion variants must be directly visible");
+  assert.deepEqual(await evaluate("[...document.querySelectorAll('.ragQueryExpansion li > p')].map(e=>e.textContent)"), ["注意力机制的计算过程", "注意力机制的计算过程 attention", "注意力机制的计算过程 attention mechanism"]);
+  assert.equal(await evaluate("document.querySelector('.ragQueryExpansion li > span').textContent"), "原始问题", "The original query must stay first");
+  assert.ok(await evaluate("document.querySelector('.ragQueryExpansion').innerText.includes('模型重排仍使用原始问题')"), "Recall aliases must not imply rewriting the rerank question");
+  assert.ok(await evaluate("document.querySelector('.ragResultCaption').innerText.includes('最高原始分')"), "Expanded scores must explain their query-variant scope");
   assert.ok(await isRendered("document.querySelector('.ragResultParameters')"), "Applied parameters and generation must be visible");
   assert.ok(await evaluate("document.querySelector('.ragResultParameters').innerText.includes('generation-old')"), "Search must show the currently activated generation");
   assert.equal(await evaluate("document.querySelectorAll('.ragScoreRows > div').length"), 8, "Every hit must display all four score labels");
@@ -399,6 +415,71 @@ try {
   await fill("#rag-rrf-k", "80");
   await until(() => evaluate("!!document.querySelector('.ragStaleNotice')"), "Parameter editing must mark the existing result stale");
   assert.equal(searchRequests.length, 1, "Parameter editing must not start an implicit search");
+
+  // Bilingual expansion is a per-query tuning control, never an implicit request.
+  const beforeExpansionLimit = searchRequests.length;
+  await fill("#rag-query-expansion-limit", "4");
+  await until(() => evaluate("document.querySelector('#rag-query-expansion-limit').value==='4'"), "Expansion limit did not update");
+  await wait(120);
+  assert.equal(searchRequests.length, beforeExpansionLimit, "Changing the expansion limit must not issue a search");
+  assert.ok(await evaluate("!!document.querySelector('.ragStaleNotice')"), "Expansion limit changes must identify stale results");
+  await evaluate(`${button("运行检索")}.click()`);
+  await until(() => searchRequests.length === beforeExpansionLimit + 1, "Expansion limit was not submitted");
+  await until(() => evaluate("document.querySelectorAll('.ragQueryExpansion li').length===5&&!document.querySelector('.ragStaleNotice')"), "Four variants should accompany the unchanged original query");
+  assert.equal(searchRequests.at(-1).tuning.query_expansion_limit, 4);
+  assert.ok(await evaluate("document.querySelector('.ragQueryExpansion header').innerText.includes('4条扩展查询')"));
+
+  const beforeInvalidLimit = searchRequests.length;
+  await fill("#rag-query-expansion-limit", "5");
+  await until(() => evaluate(`!!document.querySelector('.ragValidation')&&${button("运行检索")}.disabled`), "Expansion limit above four must be invalid");
+  assert.equal(searchRequests.length, beforeInvalidLimit);
+  await fill("#rag-query-expansion-limit", "1");
+  await until(() => evaluate(`!${button("运行检索")}.disabled`), "A single additional query must be accepted");
+  await evaluate(`${button("运行检索")}.click()`);
+  await until(() => searchRequests.length === beforeInvalidLimit + 1, "Minimum expansion limit was not submitted");
+  await until(() => evaluate("document.querySelectorAll('.ragQueryExpansion li').length===2&&!document.querySelector('.ragStaleNotice')"), "Minimum limit must show the original plus one expansion");
+  assert.equal(searchRequests.at(-1).tuning.query_expansion_limit, 1);
+
+  const beforeExpansionToggle = searchRequests.length;
+  await evaluate("document.querySelector('#rag-query-expansion').click()");
+  await until(() => evaluate("document.querySelector('#rag-query-expansion-limit').disabled&&!!document.querySelector('.ragStaleNotice')"), "Disabling expansion must disable its limit and mark existing results stale");
+  await wait(120);
+  assert.equal(searchRequests.length, beforeExpansionToggle, "Toggling expansion must not issue a search");
+  await evaluate(`${button("运行检索")}.click()`);
+  await until(() => searchRequests.length === beforeExpansionToggle + 1, "Disabled expansion setting was not submitted");
+  await until(() => evaluate("document.querySelector('.ragQueryExpansion header').innerText.includes('本次关闭')&&!document.querySelector('.ragStaleNotice')"), "Disabled expansion must be distinguished from a terminology miss");
+  assert.equal(searchRequests.at(-1).tuning.query_expansion_enabled, false);
+  assert.equal(await evaluate("document.querySelectorAll('.ragQueryExpansion li').length"), 1, "Disabled expansion must retain only the original query");
+  assert.equal(await evaluate("document.querySelector('.ragResultCaption').innerText.includes('最高原始分')"), false, "Original-query scores must not claim a variant scope");
+
+  const beforeNoMatch = searchRequests.length;
+  await evaluate("document.querySelector('#rag-query-expansion').click()");
+  await fill("#rag-query", "火星  岩石\n的成分如何判定");
+  await wait(120);
+  assert.equal(searchRequests.length, beforeNoMatch, "Editing the query and expansion switch must not auto-search");
+  await evaluate(`${button("运行检索")}.click()`);
+  await until(() => searchRequests.length === beforeNoMatch + 1, "Unmatched query was not submitted");
+  await until(() => evaluate("document.querySelector('.ragQueryExpansion header').innerText.includes('未追加查询，保留原始问题')&&!document.querySelector('.ragStaleNotice')"), "Enabled expansion without additional queries must retain the original question explicitly");
+  assert.equal(await evaluate("document.querySelectorAll('.ragQueryExpansion li').length"), 1);
+  assert.equal(await evaluate("document.querySelector('.ragQueryExpansion li > p').textContent"), "火星 岩石 的成分如何判定", "Whitespace normalization alone must not create a second query variant");
+  assert.equal(searchRequests.at(-1).tuning.query_expansion_enabled, true);
+
+  // Server-normalized variants are authoritative: a raw input containing
+  // newlines or repeated spaces must not be counted as an extra query.
+  const beforeWhitespaceExpansion = searchRequests.length;
+  await fill("#rag-query", "注意力机制  的\n计算过程");
+  await fill("#rag-query-expansion-limit", "2");
+  await wait(120);
+  assert.equal(searchRequests.length, beforeWhitespaceExpansion, "Normalizing display must not start an implicit search");
+  await evaluate(`${button("运行检索")}.click()`);
+  await until(() => searchRequests.length === beforeWhitespaceExpansion + 1, "Mixed-whitespace query was not submitted");
+  await until(() => evaluate("document.querySelector('.ragQueryExpansion header').innerText.includes('2条扩展查询')&&!document.querySelector('.ragStaleNotice')"), "Expansion count must use the executed variants, not the raw input");
+  assert.equal(searchRequests.at(-1).query, "注意力机制  的\n计算过程", "The original submitted question must not be silently rewritten by the UI");
+  assert.deepEqual(await evaluate("[...document.querySelectorAll('.ragQueryExpansion li > p')].map(e=>e.textContent)"), ["注意力机制 的 计算过程", "注意力机制 的 计算过程 attention", "注意力机制 的 计算过程 attention mechanism"]);
+  assert.equal(await evaluate("document.querySelectorAll('.ragQueryExpansion li').length"), 3, "A normalized original must appear once, followed only by actual expansions");
+  assert.equal(await evaluate("document.querySelector('.ragQueryExpansion li > span').textContent"), "原始问题");
+  await fill("#rag-query", "注意力机制的计算过程");
+  await fill("#rag-query-expansion-limit", "4");
 
   // The slider measures keyword share; visible ratios,
   // assistive text and the request weights must agree at every tested value.
@@ -440,7 +521,7 @@ try {
 
   const beforeRestore = searchRequests.length;
   await evaluate(`${button("恢复默认")}.click()`);
-  await until(() => evaluate("document.querySelector('#rag-lexical-share').value==='50'&&document.querySelector('#rag-rrf-k').value==='60'"), "Restoring defaults must reset both recall balance and RRF constant");
+  await until(() => evaluate("document.querySelector('#rag-lexical-share').value==='50'&&document.querySelector('#rag-rrf-k').value==='60'&&document.querySelector('#rag-query-expansion').checked&&document.querySelector('#rag-query-expansion-limit').value==='2'"), "Restoring defaults must reset recall balance, RRF constant and bilingual expansion");
   assert.deepEqual(await evaluate("[...document.querySelectorAll('.ragWeightControl > div span')].map(e=>e.textContent.replace(/\\s+/g,''))"), ["关键词50%", "语义50%"]);
   assert.equal(await evaluate("document.querySelector('#rag-lexical-share').getAttribute('aria-valuetext')"), "关键词50%，语义50%");
   await wait(120);
@@ -449,14 +530,15 @@ try {
   await evaluate(`${button("运行检索")}.click()`);
   await until(() => searchRequests.length === beforeRestore + 1, "Restored defaults were not submitted");
   await until(() => evaluate("!document.querySelector('.ragStaleNotice')"), "Restored result snapshot did not settle");
-  assert.deepEqual(searchRequests.at(-1).tuning, { lexical_weight: 1, vector_weight: 1, rrf_k: 60, candidate_limit: 40, rerank_limit: 20, rerank_enabled: true });
+  assert.deepEqual(searchRequests.at(-1).tuning, { lexical_weight: 1, vector_weight: 1, rrf_k: 60, candidate_limit: 40, rerank_limit: 20, rerank_enabled: true, query_expansion_enabled: true, query_expansion_limit: 2 });
+  assert.equal(await evaluate("document.querySelectorAll('.ragQueryExpansion li').length"), 3, "Restored expansion should show the original plus two variants");
   writeFileSync(path.join(output, "retrieval-desktop.png"), Buffer.from((await page.send("Page.captureScreenshot")).data, "base64"));
   await page.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await wait(200);
   assert.ok(await evaluate("document.documentElement.scrollWidth <= window.innerWidth"), "Retrieval lab overflows on mobile");
   writeFileSync(path.join(output, "retrieval-mobile.png"), Buffer.from((await page.send("Page.captureScreenshot")).data, "base64"));
   assert.deepEqual(failures, []);
-  console.log(`Knowledge browser checks passed: main rebuild without duplicate snapshots, staged build and job locking, confirmed cancellation/retry/release, history activation, advanced confirmed snapshots, confirmed soft deletion without index changes, RAG parameters/scores/evidence, recall UI/ARIA/request mapping at 20/80, 80/20, 0/100, 100/0 and 50/50, native arrow-key direction, explicit search/default restoration, mobile layout. Artifacts: ${output}`);
+  console.log(`Knowledge browser checks passed: main rebuild without duplicate snapshots, staged build and job locking, confirmed cancellation/retry/release, history activation, advanced confirmed snapshots, confirmed soft deletion without index changes, RAG parameters/scores/evidence, bilingual expansion defaults/limits/toggle/no-match/visible original-first variants/no implicit search, recall UI/ARIA/request mapping at 20/80, 80/20, 0/100, 100/0 and 50/50, native arrow-key direction, explicit search/default restoration, mobile layout. Artifacts: ${output}`);
 } catch (error) {
   if (page) {
     const state = await page.send("Runtime.evaluate", { expression: "JSON.stringify({text:document.querySelector('.spaceVersionLedger')?.innerText,buttons:[...document.querySelectorAll('.spaceVersionLedger button')].map(e=>({text:e.textContent,disabled:e.disabled}))})", returnByValue: true }).catch(() => null);

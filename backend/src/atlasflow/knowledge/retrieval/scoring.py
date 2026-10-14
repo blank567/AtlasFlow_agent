@@ -56,3 +56,34 @@ def ranks(scores: dict[str, float], *, limit: int) -> dict[str, int]:
             start=1,
         )
     }
+
+
+def pool_query_scores(
+    rows: list[dict[str, float]], *, limit: int, rrf_k: int
+) -> tuple[dict[str, float], dict[str, int]]:
+    """Pool query variants by rank, keeping the original query as the anchor.
+
+    The original has weight 1; expansions share a total weight of 0.5. More
+    aliases therefore cannot amplify an expansion's total influence. Raw score
+    maxima are returned only for inspection, not used to compare query lengths.
+    With a single query this is exactly the existing single-lane ranking.
+    """
+    if not rows:
+        return {}, {}
+    if len(rows) == 1:
+        return rows[0], ranks(rows[0], limit=limit)
+    item_ids = set().union(*(row.keys() for row in rows))
+    scores = {
+        item_id: max(
+            (row.get(item_id, 0.0) for row in rows if math.isfinite(row.get(item_id, 0.0))),
+            default=0.0,
+        )
+        for item_id in item_ids
+    }
+    pooled: dict[str, float] = {}
+    expansion_weight = 0.5 / (len(rows) - 1)
+    for index, row in enumerate(rows):
+        weight = 1.0 if index == 0 else expansion_weight
+        for item_id, rank in ranks(row, limit=limit).items():
+            pooled[item_id] = pooled.get(item_id, 0.0) + weight / (rrf_k + rank)
+    return scores, ranks(pooled, limit=limit)

@@ -382,7 +382,25 @@ export type KnowledgeSearchResult = {
     fusion_score: number;
     rerank_score?: number | null;
   }>;
-  trace: { profile_id: string; generation_id?: string | null; lexical_candidates: number; vector_candidates: number; fused_candidates: number; rerank_candidates: number; rerank_requested: boolean; rerank_applied: boolean; applied_parameters: Record<string, number | boolean>; degraded: string[]; duration_ms: number };
+  trace: {
+    profile_id: string;
+    generation_id?: string | null;
+    lexical_candidates: number;
+    vector_candidates: number;
+    fused_candidates: number;
+    rerank_candidates: number;
+    rerank_requested: boolean;
+    rerank_applied: boolean;
+    query_expansion_requested?: boolean;
+    query_expansion_applied?: boolean;
+    query_expansion_method?: string;
+    query_variants?: string[];
+    matched_terms?: string[];
+    score_scope?: "best_query_variant" | "original_query";
+    applied_parameters: Record<string, number | boolean>;
+    degraded: string[];
+    duration_ms: number;
+  };
 };
 
 export type KnowledgeSearchTuning = {
@@ -392,4 +410,6 @@ export type KnowledgeSearchTuning = {
   candidate_limit: number;
   rerank_limit: number;
   rerank_enabled: boolean;
+  query_expansion_enabled: boolean;
+  query_expansion_limit: number;
 };

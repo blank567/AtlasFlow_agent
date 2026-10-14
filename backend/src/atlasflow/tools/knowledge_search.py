@@ -21,7 +21,8 @@ class KnowledgeSearchTool(BaseTool):
     allowed_agents = ("researcher", "critic", "quality_gate")
     name = "knowledge_search"
     description = (
-        "Search an authorized knowledge space with lexical, vector, fusion and reranking; "
+        "Search an authorized knowledge space with bilingual query expansion, "
+        "lexical/vector retrieval, fusion and original-query reranking; "
         "returns source-located evidence and an explicit sufficiency decision."
     )
     risk_level = RiskLevel.LOW

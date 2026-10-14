@@ -311,6 +311,13 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
 .ragParameterGrid small { line-height: 1.6; font-size: 10px; }.ragParameterGrid + label { margin-top: 22px; }
 .ragParameterGrid .ragControl { margin-top: 0; display: grid; align-content: start; grid-template-rows: auto 42px auto; }.ragParameterGrid .ragControl p { font-size: 11px; line-height: 1.6; }
 .ragParameterGrid .ragWeightControl, .ragParameterGrid .ragSwitch { grid-column: 1/-1; }
+.ragExpansionControl { grid-column: 1/-1; padding-top: 16px; border-top: 1px solid var(--line); }
+.ragExpansionControl .ragSwitch { margin: 0; }.ragExpansionControl > p { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.ragExpansionLimit { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }.ragExpansionLimit label { color: var(--ink-soft); }.ragParameterGrid .ragExpansionLimit input { flex: 0 0 64px; width: 64px; height: 36px; }
+.ragQueryExpansion { margin-block: 18px; padding-block: 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.ragQueryExpansion header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }.ragQueryExpansion h4 { margin: 0; font-size: 12px; font-weight: 600; color: var(--ink-soft); }.ragQueryExpansion header > span { color: var(--muted); font-size: 11px; }
+.ragQueryExpansion ul { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }.ragQueryExpansion li { display: grid; grid-template-columns: 58px minmax(0,1fr); gap: 10px; align-items: baseline; }.ragQueryExpansion li > span { color: var(--muted); font-size: 10px; }.ragQueryExpansion li > p { margin: 0; font-size: 12px; line-height: 1.75; color: var(--ink-soft); overflow-wrap: anywhere; }
+.ragQueryExpansion .ragExpansionNote { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
 .ragResults { padding: 0; background: transparent; border: 0; border-radius: 0; box-shadow: none; }.ragResults h2 { font-size: 16px; }.ragPipeline { border-color: var(--line); background: var(--surface-soft); border-radius: 8px; }
 .ragPipeline strong { font-size: 19px; }.ragPipeline span, .ragPipeline small { color: var(--muted); font-size: 11px; }
 .ragDecision { color: var(--ink-soft); background: var(--surface-soft); border-color: var(--line); border-radius: 8px; }
