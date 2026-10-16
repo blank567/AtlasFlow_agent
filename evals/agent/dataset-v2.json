@@ -1,0 +1,188 @@
+{
+  "dataset_id": "llm-agent-v2",
+  "kind": "agent",
+  "name": "Agent任务与工程场景v2",
+  "version": "2.0.0",
+  "scoring_version": "agent-four-dimensions-2.0.0",
+  "protocols": ["agent-task-v2", "agent-contract-v2"],
+  "space": "llm-engineering-v1",
+  "label_note": "来源locator继承已核验原始语料；目标rubric尚待人工审核，不将来源核验冒充任务答案核验。A09/A10属于独立工程协议。",
+  "cases": [
+    {
+      "case_id": "A01", "protocol": "agent-task-v2",
+      "query": "仅根据所选知识库说明Transformer不使用循环网络的设计与适用边界，首版计划只生成2个任务。",
+      "tags": ["research", "initial-plan"], "requires_knowledge": true,
+      "gold_status": "draft", "source_gold_status": "verified",
+      "expected_sources": [{"source_id": "attention-is-all-you-need", "content_hash": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697", "source_path": "data/knowledge/corpus/llm-engineering-v1/attention-is-all-you-need.pdf", "anchor": "dispensing with recurrence and convolutions entirely", "page_number": 1}],
+      "expected_facts": ["Transformer论文提出基于注意力的架构，不使用循环或卷积；需解释设计动机而非仅复述名称。"],
+      "policy_requirements": {"initial_task_count": 2},
+      "assertions": [
+        {"assertion_id": "initial-two", "kind": "initial_task_count", "parameters": {"count": 2}},
+        {"assertion_id": "budget", "kind": "tool_budget"},
+        {"assertion_id": "critical-replan", "kind": "replan_requires_critical_issue"}
+      ],
+      "report_rubric": [
+        {"criterion_id": "architecture-reason", "description": "根据论文证据解释不使用循环的架构动机及注意力结构，不将省略循环误称不含顺序信息。", "gold_status": "draft"},
+        {"criterion_id": "scope-and-limitations", "description": "区分论文结论、适用条件与未核实推断，不凭一段摘要扩张到所有任务。", "gold_status": "draft"},
+        {"criterion_id": "supported-citations", "dimension": "citation_support", "description": "关键设计结论由对应论文具体证据支持，非仅存在合法引用编号。", "gold_status": "draft"}
+      ]
+    },
+    {
+      "case_id": "A02", "protocol": "agent-task-v2",
+      "query": "比较KVCache与FlashAttention：首版2个任务，Critic第一次审核补充1个对比任务，研究完成后再次审核验收；不能因总数变成3而重规划。",
+      "tags": ["research", "supplement", "two-three-accept"], "requires_knowledge": true,
+      "gold_status": "draft", "source_gold_status": "verified",
+      "expected_sources": [
+        {"source_id": "flashattention", "content_hash": "ca7f9fda10b90fc05dd291a3accc85e9c1a4a860b99b31928dab03ed3fcb14e4", "source_path": "data/knowledge/corpus/llm-engineering-v1/flashattention.pdf", "anchor": "GPU high bandwidth memory (HBM) and GPU on-chip SRAM", "page_number": 1},
+        {"source_id": "transformers-cache-explanation", "content_hash": "7191ad30202c4dad646065807da67ab9ab1d9d32b559050c483256138cb7d3b2", "source_path": "data/knowledge/corpus/llm-engineering-v1/transformers-cache-explanation.md", "anchor": "storing kv pairs derived from the attention layers of previously processed tokens"}
+      ],
+      "expected_facts": ["KVCache复用此前token的key/value；FlashAttention关注注意力计算的IO与显存访问，两者不是同一种优化。"],
+      "policy_requirements": {"initial_task_count": 2, "required_supplement_rounds": 1, "supplement_task_count": 1},
+      "assertions": [
+        {"assertion_id": "two-three-accept", "kind": "supplement_sequence", "parameters": {"initial_count": 2, "added_count": 1}},
+        {"assertion_id": "critical-replan", "kind": "replan_requires_critical_issue"},
+        {"assertion_id": "budget", "kind": "tool_budget"}
+      ],
+      "report_rubric": [
+        {"criterion_id": "mechanism-distinction", "description": "准确比较两种技术的优化对象、计算阶段和资源瓶颈，不将KVCache和FlashAttention等同。", "gold_status": "draft"},
+        {"criterion_id": "combined-use", "description": "解释可以组合使用的条件，并清楚标识证据未覆盖的性能推断。", "gold_status": "draft"},
+        {"criterion_id": "supported-comparison", "dimension": "citation_support", "description": "对比结论分别有两份原始资料的对应证据，不用单份来源支撑全部结论。", "gold_status": "draft"}
+      ]
+    },
+    {
+      "case_id": "A03", "protocol": "agent-task-v2",
+      "query": "分析LoRA与Chinchilla的不同目标；只有证据缺口构成结构化关键问题时才重新规划，无关键缺口不要为了展示流程强行replan。",
+      "tags": ["research", "conditional-replan"], "requires_knowledge": true,
+      "gold_status": "draft", "source_gold_status": "verified",
+      "expected_sources": [
+        {"source_id": "lora", "content_hash": "e9a0d3128767db616085dc0f4e6e455e672e89af823e8ed1282793682787395a", "source_path": "data/knowledge/corpus/llm-engineering-v1/lora.pdf", "anchor": "rank decomposition matrices", "page_number": 1},
+        {"source_id": "chinchilla", "content_hash": "3fd3632a8ef48171bd25282990221d49535d75356192f068b3b2ebe08f2aedd4", "source_path": "data/knowledge/corpus/llm-engineering-v1/chinchilla.pdf", "anchor": "the model size and the number of training tokens should be scaled equally", "page_number": 1}
+      ],
+      "expected_facts": ["LoRA关注参数高效适配；Chinchilla研究固定计算预算下模型规模与训练token数的配置。"],
+      "policy_requirements": {"replan_requires_critical_issue": true},
+      "assertions": [
+        {"assertion_id": "critical-replan", "kind": "replan_requires_critical_issue"},
+        {"assertion_id": "budget", "kind": "tool_budget"}
+      ],
+      "report_rubric": [
+        {"criterion_id": "different-objectives", "description": "准确区分参数高效微调与预训练计算最优分配，避免将两者描述为互斥替代方案。", "gold_status": "draft"},
+        {"criterion_id": "conditional-conclusions", "description": "对使用条件及证据局限给出有依据的比较，不编造统一收益倍数。", "gold_status": "draft"}
+      ]
+    },
+    {
+      "case_id": "A04", "protocol": "agent-task-v2",
+      "query": "先研究KVCache，再基于该结果解释PagedAttention解决的内存问题。必须显式声明后一个任务对前一个任务的依赖。",
+      "tags": ["research", "dependency"], "requires_knowledge": true,
+      "gold_status": "draft", "source_gold_status": "verified",
+      "expected_sources": [
+        {"source_id": "transformers-cache-explanation", "content_hash": "7191ad30202c4dad646065807da67ab9ab1d9d32b559050c483256138cb7d3b2", "source_path": "data/knowledge/corpus/llm-engineering-v1/transformers-cache-explanation.md", "anchor": "storing kv pairs derived from the attention layers of previously processed tokens"},
+        {"source_id": "pagedattention", "content_hash": "55b3b324d779a67c59dac2519445e3b07c14e6ff5c656fadb47a3d7b5997469e", "source_path": "data/knowledge/corpus/llm-engineering-v1/pagedattention.pdf", "anchor": "near-zero waste in KV cache memory", "page_number": 1}
+      ],
+      "expected_facts": ["先解释自回归KV缓存，再解释PagedAttention的分页式内存管理及其针对的内存浪费问题。"],
+      "policy_requirements": {"initial_task_count": 2},
+      "assertions": [
+        {"assertion_id": "initial-two", "kind": "initial_task_count", "parameters": {"count": 2}},
+        {"assertion_id": "dependency-before-dispatch", "kind": "dependency_order", "parameters": {"require_dependencies": true}},
+        {"assertion_id": "budget", "kind": "tool_budget"}
+      ],
+      "report_rubric": [
+        {"criterion_id": "cache-foundation", "description": "以正确的KVCache工作方式作为后续分页解释的基础。", "gold_status": "draft"},
+        {"criterion_id": "paged-memory", "description": "准确解释PagedAttention解决的内存分配/浪费问题，并避免宣称消除全部推理计算开销。", "gold_status": "draft"}
+      ]
+    },
+    {
+      "case_id": "A05", "protocol": "agent-task-v2",
+      "query": "分别研究DeepSeek-V3与Qwen2.5的模型训练特点，形成可核验的比较报告，区分资料覆盖范围和无法直接比较的实验条件。",
+      "tags": ["research", "multi-source"], "requires_knowledge": true,
+      "gold_status": "draft", "source_gold_status": "verified",
+      "expected_sources": [
+        {"source_id": "deepseek-v3-report", "content_hash": "812a3fd645c80725354de9d831a6785503007a60681461407f64e97305fa9330", "source_path": "data/knowledge/corpus/llm-engineering-v1/deepseek-v3-report.pdf", "anchor": "671B total parameters with 37B activated for each token", "page_number": 1},
+        {"source_id": "qwen2.5-report", "content_hash": "73b3292bead3ac8896679d3ac8be87439756faf356566cbda3ccc8a3dc7d79d3", "source_path": "data/knowledge/corpus/llm-engineering-v1/qwen2.5-report.pdf", "anchor": "offline learning DPO and online learning GRPO", "page_number": 1}
+      ],
+      "expected_facts": ["比较训练特征时保留模型系列、规模和实验条件，不混同总参数与每token激活参数。"],
+      "policy_requirements": {},
+      "assertions": [{"assertion_id": "budget", "kind": "tool_budget"}],
+      "report_rubric": [
+        {"criterion_id": "grounded-comparison", "description": "分别陈述两份报告支持的模型及训练特点；准确区分总参数与激活参数。", "gold_status": "draft"},
+        {"criterion_id": "comparability", "description": "明确比较限制，不用不同条件下的指标直接证明某模型全面优越。", "gold_status": "draft"}
+      ]
+    },
+    {
+      "case_id": "A06", "protocol": "agent-task-v2",
+      "query": "根据ReAct论文和多Agent综述撰写协作研究报告，解释推理与行动交替、Agent协作的关系，并提供支持具体结论的引用。",
+      "tags": ["research", "citation"], "requires_knowledge": true,
+      "gold_status": "draft", "source_gold_status": "verified",
+      "expected_sources": [
+        {"source_id": "react", "content_hash": "f285b0971ae4a790e402fb93966bed3adde2cf0a04977d08b2b40d6ab0cace69", "source_path": "data/knowledge/corpus/llm-engineering-v1/react.pdf", "anchor": "reasoning traces help the model induce, track, and update action plans", "page_number": 1},
+        {"source_id": "multi-agent-survey", "content_hash": "d3410856f2b8629ab7365af3bd62fe8291b1a595ec954f1feb859a2688c7179c", "source_path": "data/knowledge/corpus/llm-engineering-v1/multi-agent-survey.pdf", "anchor": "complex problem-solving and world simulation", "page_number": 1}
+      ],
+      "expected_facts": ["ReAct的推理-行动机制与多Agent协作是不同层次的设计，可以关联但不等同。"],
+      "policy_requirements": {},
+      "assertions": [{"assertion_id": "budget", "kind": "tool_budget"}],
+      "report_rubric": [
+        {"criterion_id": "mechanism-and-collaboration", "description": "准确说明ReAct机制与多Agent协作的关系，避免将角色数量当作有效协作的充分条件。", "gold_status": "draft"},
+        {"criterion_id": "claim-support", "dimension": "citation_support", "description": "逐项关键结论可由所引用的实际证据支持，不能只检验引用编号合法。", "gold_status": "draft"}
+      ]
+    },
+    {
+      "case_id": "A07", "protocol": "agent-task-v2",
+      "query": "只使用所选LLM知识库，解释为什么无法据此回答今天美元人民币实时汇率；不要编造实时点位，也不要偷偷调用联网工具。",
+      "tags": ["research", "abstention", "tool-policy"], "requires_knowledge": true,
+      "gold_status": "draft", "source_gold_status": "not_applicable", "expected_sources": [],
+      "expected_facts": ["所选LLM语料不提供本次查询时点的实时汇率证据；应陈述缺口而不是输出猜测值。"],
+      "policy_requirements": {},
+      "assertions": [
+        {"assertion_id": "knowledge-only", "kind": "tool_allowlist", "parameters": {"tools": ["knowledge_search"]}},
+        {"assertion_id": "budget", "kind": "tool_budget"}
+      ],
+      "report_rubric": [
+        {"criterion_id": "no-invented-rate", "description": "明确不提供未经实时证据支持的汇率数字，并解释语料/时效缺口；不能靠匹配某个拒答词判定。", "gold_status": "draft"},
+        {"criterion_id": "useful-limitation", "description": "说明获得有效答案所需的报价口径、时间和数据来源，而不是仅输出无法回答。", "gold_status": "draft"}
+      ]
+    },
+    {
+      "case_id": "A08", "protocol": "agent-task-v2",
+      "query": "根据RAG综述核对“接入RAG就能保证永远没有幻觉”是否成立，区分资料支持的结论与没有核实的观点。",
+      "tags": ["research", "claim-verification"], "requires_knowledge": true,
+      "gold_status": "draft", "source_gold_status": "verified",
+      "expected_sources": [{"source_id": "rag-survey", "content_hash": "396a0fadeb4cd40f5c8ccc36b73a0815f6cb4d7f6bfa53b6c48c1f9aba7c7e02", "source_path": "data/knowledge/corpus/llm-engineering-v1/rag-survey.pdf", "anchor": "hallucination, outdated knowledge", "page_number": 1}],
+      "expected_facts": ["缓解幻觉与保证永不幻觉不是同一命题；结论应有明确证据与限制。"],
+      "policy_requirements": {"replan_requires_critical_issue": true},
+      "assertions": [
+        {"assertion_id": "critical-replan", "kind": "replan_requires_critical_issue"},
+        {"assertion_id": "no-terminal-repeat", "kind": "nonretryable_failure_not_repeated"},
+        {"assertion_id": "budget", "kind": "tool_budget"}
+      ],
+      "report_rubric": [
+        {"criterion_id": "no-absolute-guarantee", "description": "明确核对绝对保证命题，使用资料解释RAG能缓解问题但仍依赖检索和生成质量；不编造论文保证。", "gold_status": "draft"},
+        {"criterion_id": "support-and-boundaries", "dimension": "citation_support", "description": "支持与反驳均对应实际证据，并把缺证据项与已确认错误分开。", "gold_status": "draft"}
+      ]
+    },
+    {
+      "case_id": "A09", "protocol": "agent-contract-v2",
+      "query": "研究LoRA的低秩适配原理，计划必须经过实际人工审批门控后才允许研究任务执行。",
+      "tags": ["engineering-contract", "approval"], "requires_knowledge": true,
+      "gold_status": "draft", "source_gold_status": "verified",
+      "expected_sources": [{"source_id": "lora", "content_hash": "e9a0d3128767db616085dc0f4e6e455e672e89af823e8ed1282793682787395a", "source_path": "data/knowledge/corpus/llm-engineering-v1/lora.pdf", "anchor": "rank decomposition matrices", "page_number": 1}],
+      "expected_facts": [], "policy_requirements": {"initial_task_count": 2},
+      "assertions": [
+        {"assertion_id": "approval-before-research", "kind": "approval_before_research"},
+        {"assertion_id": "budget", "kind": "tool_budget"}
+      ],
+      "report_rubric": []
+    },
+    {
+      "case_id": "A10", "protocol": "agent-contract-v2",
+      "query": "分析Continuous Batching；导入真实跨进程中断/恢复轨迹，验证同Run从持久化检查点继续且不重发已完成调用。",
+      "tags": ["engineering-contract", "recovery"], "requires_knowledge": true,
+      "gold_status": "draft", "source_gold_status": "verified",
+      "expected_sources": [{"source_id": "transformers-continuous-batching", "content_hash": "d23bd1a51950b4b016bb74e9462c84c1fbf271a1bf2e9c63f6fdb63da8769eef", "source_path": "data/knowledge/corpus/llm-engineering-v1/transformers-continuous-batching.md", "anchor": "dynamically rescheduling the batch at every generation step"}],
+      "expected_facts": [], "policy_requirements": {},
+      "assertions": [
+        {"assertion_id": "real-process-recovery", "kind": "recovery_evidence"},
+        {"assertion_id": "budget", "kind": "tool_budget"}
+      ],
+      "report_rubric": []
+    }
+  ]
+}

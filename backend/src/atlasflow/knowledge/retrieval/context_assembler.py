@@ -19,12 +19,18 @@ class ContextAssembler:
         seen_parents: set[str] = set()
         parent_ids = [hit.chunk.parent_id for hit in hits if hit.chunk.parent_id]
         parents = {item.id: item for item in await self.repository.get_chunks(parent_ids)}
+        if set(parent_ids) - set(parents):
+            raise ValueError("SEARCH_SNAPSHOT_DATA_MISSING: pinned parent context was removed")
         for hit in hits:
             identity = hit.chunk.parent_id or hit.chunk.id
             if identity in seen_parents:
                 continue
             seen_parents.add(identity)
             parent = parents.get(identity)
+            if parent is not None and (parent.document_id != hit.chunk.document_id
+                    or parent.version_id != hit.chunk.version_id
+                    or parent.generation_id != hit.chunk.generation_id):
+                raise ValueError("SEARCH_SNAPSHOT_DATA_MISSING: parent context belongs to another index")
             excerpt = self._excerpt(parent, hit.chunk) if parent else None
             selected.append(hit.model_copy(update={"context_excerpt": excerpt}))
             if len(selected) >= limit:

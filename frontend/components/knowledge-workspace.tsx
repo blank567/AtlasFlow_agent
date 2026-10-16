@@ -7,6 +7,7 @@ import {
   activateKnowledgeSpaceVersion,
   archiveKnowledgeDocument,
   cancelKnowledgeSpaceBuild,
+  cancelKnowledgeJob,
   createKnowledgeSpace,
   createKnowledgeSpaceVersion,
   deleteKnowledgeSpaceVersion,
@@ -25,6 +26,7 @@ import { KnowledgeDocument, KnowledgeJob, KnowledgeSpace, KnowledgeSpaceBuild, K
 import { ConfirmDialog } from "./confirm-dialog";
 import { DetailDrawer } from "./detail-drawer";
 import { RetrievalLab } from "./retrieval-lab";
+import { IndexIdentity } from "./index-identity";
 
 const STAGE_LABELS: Record<string, string> = {
   queued: "等待处理", extracting: "读取文件", parsing: "解析结构", chunking: "生成分块",
@@ -137,7 +139,8 @@ export function KnowledgeWorkspace({ view = "overview", initialSpace = "" }: { v
     </div>
     {view === "overview" && <SpaceVersionLedger key={`versions:${current?.id || "none"}`} space={current} build={activeBuild} jobs={jobs} documents={documents} locked={buildLocked} stateReady={stateReady} busy={archiving || jobs.some((job) => ["queued", "running", "failed_retryable"].includes(job.status))} onChanged={refresh} />}
     {view === "overview" && <Overview key={`overview:${current?.id || "none"}`} current={current} documents={documents} jobs={jobs} locked={buildLocked || !stateReady || archiving} onUploaded={refresh} onCreate={refresh} onArchive={setArchiveTarget} />}
-    {view === "jobs" && <JobLedger jobs={jobs} documents={documents} />}
+    {view === "overview" && <IndexIdentity space={selected} refreshKey={`${current?.active_generation_id}:${current?.active_version_id}:${jobs.filter(job => job.status === "completed").length}`} />}
+    {view === "jobs" && <JobLedger jobs={jobs} documents={documents} onChanged={refresh} />}
     {view === "lab" && <RetrievalLab space={selected} />}
     {archiveTarget && !buildLocked && <ConfirmDialog title="归档这份文档？" description="归档后它会立即停止参与检索，但版本和审计记录仍然保留，可以通过后端重新激活。" confirmLabel="归档文档" onCancel={() => setArchiveTarget(null)} onConfirm={() => void archive(archiveTarget)} />}
   </>;
@@ -378,6 +381,25 @@ function CreateSpaceForm({ onCreated }: { onCreated: () => Promise<void> }) {
   return <form className="spaceCreate" onSubmit={(event) => void submit(event)}><label htmlFor="knowledge-space-name">空间名称</label><input id="knowledge-space-name" value={name} placeholder="例如：LLM工程资料" onChange={(event) => setName(event.target.value)} required /><label htmlFor="knowledge-space-slug">空间标识</label><input id="knowledge-space-slug" value={slug} placeholder="例如：llm-notes" pattern="[a-z0-9][a-z0-9-]{1,62}" onChange={(event) => setSlug(event.target.value)} required /><button className="primaryButton" type="submit" disabled={submitting}>{submitting ? "正在创建" : "创建空间"}</button>{error && <p className="formError" role="alert">{error}</p>}</form>;
 }
 
-function JobLedger({ jobs, documents }: { jobs: KnowledgeJob[]; documents: KnowledgeDocument[] }) {
-  return <section className="jobLedger"><header><span>任务</span><span>文档</span><span>阶段</span><span>进度</span><span>尝试</span></header>{jobs.map((job) => <article key={job.id}><code>{job.id.slice(0, 8)}</code><strong>{documents.find((item) => item.id === job.document_id)?.title || job.document_id.slice(0, 8)}</strong><span><i className={`knowledgeState ${job.status === "completed" ? "ready" : job.status.startsWith("failed") ? "failed" : "pending"}`} />{STAGE_LABELS[job.stage] || job.stage}</span><progress value={job.progress} max={1} /><span>{job.attempt}</span>{job.error_message && <p>{job.error_message}</p>}</article>)}{jobs.length === 0 && <div className="knowledgeEmpty"><strong>没有摄取任务</strong><p>上传文档后，解析和索引阶段会显示在这里。</p></div>}</section>;
+function JobLedger({ jobs, documents, onChanged }: { jobs: KnowledgeJob[]; documents: KnowledgeDocument[]; onChanged: () => Promise<void> }) {
+  const [target, setTarget] = useState<KnowledgeJob | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const cancelling = useRef(false);
+  async function cancel() {
+    const latest = jobs.find(job => job.id === target?.id);
+    if (!target || cancelling.current || !latest || latest.space_build_id || !(latest.status === "queued" || latest.status.startsWith("failed"))) return;
+    cancelling.current = true; setBusy(true); setError("");
+    try { await cancelKnowledgeJob(target.id); setTarget(null); await onChanged(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "取消未完成"); }
+    finally { cancelling.current = false; setBusy(false); }
+  }
+  return <section className="jobLedger">
+    {error && <p className="formError" role="alert">{error}</p>}
+    <header><span>任务</span><span>文档</span><span>阶段</span><span>进度</span><span>尝试 / 操作</span></header>
+    {jobs.map(job => <article key={job.id}><code>{job.id.slice(0, 8)}</code><strong>{documents.find(item => item.id === job.document_id)?.title || job.document_id.slice(0, 8)}</strong>
+      <span><i className={`knowledgeState ${job.status === "completed" ? "ready" : job.status.startsWith("failed") ? "failed" : "pending"}`} />{job.status === "cancelled" ? "已取消" : STAGE_LABELS[job.stage] || job.stage}</span>
+      <progress value={job.progress} max={1} /><span className="jobCancelActions">{job.attempt}{!job.space_build_id && (job.status === "queued" || job.status.startsWith("failed")) && <button className="textButton dangerText" disabled={busy} onClick={() => setTarget(job)}>取消任务</button>}</span>
+      {job.error_message && <p>{job.error_message}</p>}</article>)}
+    {jobs.length === 0 && <div className="knowledgeEmpty"><strong>没有摄取任务</strong><p>上传文档后，解析和索引阶段会显示在这里。</p></div>}
+    {target && <ConfirmDialog title="取消这个导入任务？" description="保留原文和处理记录。若文档尚无已发布版本，整空间重建前仍需显式归档这份文档。" tone="danger" confirmLabel={busy ? "正在取消" : "取消任务"} onCancel={() => { if (!busy) setTarget(null); }} onConfirm={() => void cancel()} />}
+  </section>;
 }

@@ -16,7 +16,7 @@ mkdirSync(root, { recursive: true });
 const output = mkdtempSync(path.join(root, "check-"));
 const binary = ["C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"].find(existsSync);
 assert.ok(binary, "Chrome or Edge is required");
-const browser = spawn(binary, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-breakpad", "--disable-crash-reporter", "--disable-sync", "--remote-debugging-port=0", `--user-data-dir=${path.join(output, "profile")}`, "about:blank"], {
+const browser = spawn(binary, ["--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-breakpad", "--disable-crash-reporter", "--disable-sync", "--remote-debugging-port=0", `--user-data-dir=${path.join(output, "profile")}`, "about:blank"], {
   windowsHide: true, env: { ...process.env, TEMP: "E:\\codex\\tmp", TMP: "E:\\codex\\tmp" }, stdio: ["ignore", "ignore", "pipe"],
 });
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -82,6 +82,7 @@ function responseFor(request) {
     };
   }
   if (route.endsWith("/knowledge/spaces")) return [space];
+  if (route.endsWith("/snapshot")) return { schema_version: "search-snapshot-v1", space_id: space.id, space_slug: space.slug, space_version_id: space.active_version_id, generation_id: space.active_generation_id, identity_status: "verified", manifest_hash: "f".repeat(64), documents: Object.fromEntries(documents.map(doc => [doc.id, { version_id: doc.current_version_id, status: doc.status }])), build_spec: { parser_version: "structured-parser-v3", chunker_version: "parent-child-v2", child_tokens: 350, parent_tokens: 1200, embedding: { model: "qa-fixture-embedding", observed_dimensions: 16 } } };
   if (route.endsWith("/documents")) return documents;
   if (route.endsWith("/knowledge/jobs")) return jobs;
   if (route.endsWith("/versions") && request.method === "GET") return versions.filter((version) => !version.deleted_at);

@@ -14,6 +14,8 @@ node_modules/
 .next-build/
 .next-space-build-check/
 .next-design-check/
+.next-*/
+.next-*/
 coverage/
 *.log
 .npm-cache/
@@ -29,6 +31,7 @@ data/*.sqlite-*
 data/*.sqlite3
 data/*.sqlite3-*
 data/knowledge/
+data/evaluations/
 data/postgres/
 data/redis/
 corpus_downloads/

@@ -25,6 +25,8 @@ export const EVENT_VISUALS: Record<string, EventVisual> = {
   run_degraded: { label: "有警告完成", color: "#a6771d", tint: "#fbf3df" },
   run_failed: { label: "运行失败", color: "#a52d43", tint: "#fbe6e9" },
   run_cancelled: { label: "运行取消", color: "#85657b", tint: "#f2eaf0" },
+  run_interrupted: { label: "执行中断", color: "#95631f", tint: "#faf0dd" },
+  run_resumed: { label: "断点恢复", color: "#2a7288", tint: "#e7f2f5" },
 };
 
 export function eventVisual(type: string): EventVisual {

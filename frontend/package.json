@@ -1,6 +1,6 @@
 {
   "name": "atlasflow-web",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -10,7 +10,11 @@
     "test:flow": "node scripts/verify-agent-flow.mjs",
     "test:ui": "node scripts/verify-event-visuals.mjs",
     "test:report": "node scripts/verify-report.mjs",
-    "test:report:browser": "node scripts/verify-report-browser.mjs"
+    "test:report:browser": "node scripts/verify-report-browser.mjs",
+    "test:evaluation:browser": "node scripts/verify-evaluation-browser.mjs",
+    "test:evaluations:v2:browser": "node scripts/verify-evaluations-v2-browser.mjs",
+    "test:evaluations:chart": "node scripts/verify-evaluation-chart.mjs",
+    "test:retrieval:controls": "node scripts/verify-retrieval-controls.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

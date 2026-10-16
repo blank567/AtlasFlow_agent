@@ -53,7 +53,7 @@ export default function SettingsPage() {
   const state = langsmith?.state ?? (langsmith?.configured ? langsmith.enabled ? "ready" : "disabled" : "not_configured");
   const stateLabel = state === "ready" && langsmith?.connection_status !== "reachable" ? "配置就绪，待验证" : STATE_LABELS[state] ?? state;
   return <main className="pageContent settingsPage">
-    <PageHeader title="系统设置" description="模型接入、追踪服务与本地持久化状态。" actions={<span className="softBadge">v{status?.app_version ?? "0.6.0"}</span>} />
+    <PageHeader title="系统设置" description="模型接入、追踪服务与本地持久化状态。" actions={<span className="softBadge">v{status?.app_version ?? "0.7.0"}</span>} />
     {error && <div className="inlineAlert errorAlert" role="alert"><strong>操作未完成</strong><span>{error}</span></div>}
     {!status ? error ? <Panel><EmptyState title="配置状态读取失败" description="后端恢复连接后可重新加载配置状态。" /><button className="secondaryButton" type="button" onClick={() => void load()}>重新加载</button></Panel> : <LoadingBlock label="正在读取系统配置" /> : <div className="settingsGrid">
       <Panel title="LangSmith追踪" meta={<span className={"connectionBadge connection-" + state}><i />{stateLabel}</span>} className="settingsMain">

@@ -1,3 +1,10 @@
+from atlasflow.knowledge.domain.index_specs import (
+    EmbeddingSpec,
+    IndexBuildSpec,
+    RetrievalSnapshotRef,
+    SearchSnapshot,
+    SnapshotDocument,
+)
 from atlasflow.knowledge.domain.models import (
     DocumentStatus,
     DocumentVersion,
@@ -27,6 +34,8 @@ from atlasflow.knowledge.domain.models import (
 __all__ = [
     "DocumentStatus",
     "DocumentVersion",
+    "EmbeddingSpec",
+    "IndexBuildSpec",
     "IndexGeneration",
     "IngestionJob",
     "JobStage",
@@ -41,9 +50,12 @@ __all__ = [
     "RetrievalDecision",
     "RetrievalHit",
     "RetrievalProfile",
+    "RetrievalSnapshotRef",
     "RetrievalTrace",
     "RetrievalTuning",
     "SearchResult",
+    "SearchSnapshot",
+    "SnapshotDocument",
     "SourceLocator",
     "SpaceBuild",
     "SpaceDocumentState",

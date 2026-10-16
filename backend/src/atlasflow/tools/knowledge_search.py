@@ -5,7 +5,8 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from atlasflow.knowledge.application import KnowledgePlatform
-from atlasflow.knowledge.domain import KnowledgeFilter
+from atlasflow.knowledge.domain import KnowledgeFilter, RetrievalTuning
+from atlasflow.knowledge.domain.index_specs import SearchSnapshot
 from atlasflow.schemas import Evidence
 from atlasflow.tools.base import BaseTool, Capability, RiskLevel, ToolContext, ToolResult
 
@@ -36,19 +37,28 @@ class KnowledgeSearchTool(BaseTool):
     )
     cache_identical_calls = True
 
-    def __init__(self, platform: KnowledgePlatform) -> None:
+    def __init__(self, platform: KnowledgePlatform, *, tuning: RetrievalTuning | None = None,
+                 result_limit: int | None = None) -> None:
         self.platform = platform
+        self.tuning = tuning
+        self.result_limit = result_limit
 
     async def run(self, arguments: KnowledgeSearchArguments, context: ToolContext) -> ToolResult:
         result = await self.platform.search(
             arguments.query,
             space=arguments.space,
             filters=arguments.filters,
-            result_limit=arguments.result_limit,
+            result_limit=self.result_limit or arguments.result_limit,
+            tuning=self.tuning,
+            snapshot=(
+                SearchSnapshot.model_validate(context.retrieval_snapshot)
+                if context.retrieval_snapshot is not None
+                else None
+            ),
         )
         evidence = [
             Evidence(
-                source_id=hit.chunk.id,
+                source_id=str(hit.chunk.metadata.get("source_id") or hit.chunk.id),
                 title=hit.chunk.title,
                 content=hit.chunk.content,
                 uri=(
@@ -60,6 +70,7 @@ class KnowledgeSearchTool(BaseTool):
                 metadata={
                     **hit.chunk.metadata,
                     "document_id": hit.chunk.document_id,
+                    "chunk_id": hit.chunk.id,
                     "version_id": hit.chunk.version_id,
                     "heading_path": hit.chunk.heading_path,
                     "page_number": hit.chunk.page_number,

@@ -35,10 +35,12 @@ class SpaceBuildService:
         active = [item for item in documents if item.status == DocumentStatus.ACTIVE]
         if not active:
             raise ValueError("space has no active documents to rebuild")
+        spec = self.platform.current_build_spec()
         generation = IndexGeneration(
             space_id=selected.id,
             embedding_profile=selected.embedding_profile,
             retrieval_profile=selected.retrieval_profile,
+            identity_status="declared", build_spec=spec,
         )
         build_id = str(uuid4())
         targets = {
@@ -69,6 +71,7 @@ class SpaceBuildService:
                 source_updated_at=current.source_updated_at,
                 rights=current.rights,
                 provenance=current.provenance,
+                build_request_hash=spec.request_hash,
             )
             new_versions.append(version)
             targets[document.id] = SpaceDocumentState(
@@ -80,6 +83,7 @@ class SpaceBuildService:
                 version_id=version.id,
                 space_build_id=build_id,
                 generation_id=generation.id,
+                build_request_hash=spec.request_hash,
             ))
         if not selected.active_version_id:
             baseline = await self.platform.create_space_version(
@@ -99,6 +103,7 @@ class SpaceBuildService:
             documents=targets,
             job_ids=[job.id for job in build_jobs],
             note=note,
+            build_request_hash=spec.request_hash,
         )
         # The repository rechecks baseline and competing writes under its lock.
         return await self.repository.create_space_build(build, generation, new_versions, build_jobs)

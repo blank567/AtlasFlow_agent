@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from atlasflow.evaluation.budget import reserve_http_attempt
 from atlasflow.schemas import Evidence
 from atlasflow.tools.base import BaseTool, Capability, RiskLevel, ToolContext, ToolResult
 
@@ -67,6 +68,7 @@ class WeatherForecastTool(BaseTool):
             geocode_params["apikey"] = self._api_key
         try:
             async with httpx.AsyncClient(timeout=12, transport=self._transport) as client:
+                await reserve_http_attempt("weather", "geocoding")
                 lookup = await client.get(f"{geocode_host}/v1/search", params=geocode_params)
                 lookup.raise_for_status()
                 locations = lookup.json().get("results", [])
@@ -94,6 +96,7 @@ class WeatherForecastTool(BaseTool):
                 }
                 if paid:
                     params["apikey"] = self._api_key
+                await reserve_http_attempt("weather", "forecast")
                 forecast = await client.get(f"{forecast_host}/v1/forecast", params=params)
                 forecast.raise_for_status()
                 payload = forecast.json()

@@ -2,6 +2,7 @@ export type RunStatus =
   | "pending"
   | "running"
   | "waiting_approval"
+  | "interrupted"
   | "completed"
   | "completed_with_warnings"
   | "failed"
@@ -203,6 +204,16 @@ export type ToolEvidence = {
   uri?: string | null;
 };
 
+export type RecoveryInfo = {
+  available: boolean;
+  reason?: string | null;
+  checkpoint_id?: string | null;
+  recovery_count: number;
+  blocked_by?: string | null;
+  unknown_calls: Array<{ call_id: string; kind: string; name: string; tool_budget_counted?: boolean; usage?: Record<string, unknown> | null }>;
+  provider_usage?: { http_attempts?: number; provider_requests?: number; model_calls?: number; known_tokens?: number | null; known_cost?: number | null; token_usage_coverage?: number | null; cost_usage_coverage?: number | null };
+};
+
 export type RunRecord = {
   id: string;
   query: string;
@@ -210,6 +221,8 @@ export type RunRecord = {
   auto_approve?: boolean;
   policy?: RunPolicy;
   source_run_id?: string;
+  recovery?: RecoveryInfo;
+  retrieval_snapshot?: Record<string, unknown> | null;
   created_at?: string;
   updated_at?: string;
   started_at?: string;
@@ -385,6 +398,13 @@ export type KnowledgeSearchResult = {
   trace: {
     profile_id: string;
     generation_id?: string | null;
+    space_version_id?: string | null;
+    manifest_hash?: string | null;
+    identity_status?: string;
+    index_fingerprint?: string | null;
+    embedding_model?: string | null;
+    embedding_dimensions?: number | null;
+    embedding_compatibility?: string;
     lexical_candidates: number;
     vector_candidates: number;
     fused_candidates: number;

@@ -10,6 +10,8 @@ from typing import Any, Literal
 
 import httpx
 
+from atlasflow.evaluation.budget import reserve_http_attempt
+from atlasflow.execution.context import after_http_attempt, before_http_attempt
 from atlasflow.observability import (
     ProviderCallMetric,
     ProviderCallStatus,
@@ -221,12 +223,20 @@ class OpenRouterClient:
         attempt_count = 0
         for attempt in range(self.max_retries + 1):
             attempt_count = attempt + 1
+            attempt_token = None
             try:
                 async with httpx.AsyncClient(
                     timeout=self.timeout_seconds, transport=self._transport
                 ) as client:
+                    await reserve_http_attempt("model", endpoint)
+                    attempt_token = await before_http_attempt(
+                        endpoint=endpoint,
+                        requested_model=str(payload.get("model") or "") or None,
+                        attempt_number=attempt_count,
+                    )
                     response = await client.post(url, headers=headers, json=payload)
             except httpx.RequestError as exc:
+                await after_http_attempt(attempt_token, outcome="unknown")
                 if attempt < self.max_retries:
                     await asyncio.sleep(0.25 * (2**attempt))
                     continue
@@ -242,6 +252,13 @@ class OpenRouterClient:
                 )
                 self._record_metric(metric)
                 raise ConnectionError(f"OpenRouter request failed: {type(exc).__name__}") from exc
+
+            await after_http_attempt(
+                attempt_token,
+                outcome="failed" if response.is_error else "succeeded",
+                http_status=response.status_code,
+                request_id=response.headers.get("x-request-id"),
+            )
 
             retryable = response.status_code in {408, 429} or response.status_code >= 500
             if retryable and attempt < self.max_retries:
@@ -321,6 +338,13 @@ class OpenRouterClient:
             status="succeeded",
             duration_ms=self._elapsed_ms(started_at),
             attempt_count=attempt_count,
+        )
+        await after_http_attempt(
+            attempt_token,
+            outcome="succeeded",
+            http_status=response.status_code,
+            request_id=response.headers.get("x-request-id"),
+            usage=data.get("usage") if isinstance(data.get("usage"), dict) else None,
         )
         return _OpenRouterResponse(data=data, metric=metric)
 

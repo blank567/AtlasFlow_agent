@@ -1,0 +1,86 @@
+{
+  "schema_version": "rag-references-v1",
+  "base_dataset_id": "llm-rag-v1",
+  "corpus_manifest_hash": "1c29611a67037ed8501d55959426ef84e4e7551b7f2d7a07164004844d451c19",
+  "dataset_version": "2.1",
+  "reference_version": "primary-source-2026-10-16-v1",
+  "cases": [
+    {
+      "case_id": "R01",
+      "query": "Transformer为什么不依赖循环网络和卷积？",
+      "answer": "Transformer用注意力机制直接建模序列位置之间的依赖，不需要用序列对齐的循环计算或卷积来传递这些信息。与RNN按时间步依次计算相比，这使训练更容易并行；自注意力还缩短了远距离位置之间的信息传递路径，有利于长程依赖建模。由于不使用循环或卷积，原论文另用位置编码向输入提供顺序信息。",
+      "facts": [
+        "Transformer以注意力机制建模输入和输出的全局依赖，不依赖序列对齐的循环网络或卷积来完成序列表示。",
+        "循环网络的逐步计算限制了训练样本内部的并行化；Transformer允许显著更多的训练并行。",
+        "自注意力直接关联序列中的不同位置，缩短远距离依赖的信息传递路径。"
+      ],
+      "supports": [
+        {
+          "source_id": "attention-is-all-you-need",
+          "content_hash": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+          "page_number": 1,
+          "section": "Abstract",
+          "anchor": "based solely on attention mechanisms, dispensing with recurrence and convolutions",
+          "fact_indices": [0]
+        },
+        {
+          "source_id": "attention-is-all-you-need",
+          "content_hash": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+          "page_number": 2,
+          "section": "1 Introduction",
+          "anchor": "This inherently sequential nature precludes parallelization within training examples",
+          "fact_indices": [1]
+        },
+        {
+          "source_id": "attention-is-all-you-need",
+          "content_hash": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+          "page_number": 2,
+          "section": "2 Background",
+          "anchor": "In the Transformer this is reduced to a constant number of operations",
+          "fact_indices": [2]
+        },
+        {
+          "source_id": "attention-is-all-you-need",
+          "content_hash": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+          "page_number": 6,
+          "section": "3.5 Positional Encoding; 4 Why Self-Attention",
+          "anchor": "a self-attention layer connects all positions with a constant number of sequentially",
+          "fact_indices": [2]
+        }
+      ],
+      "verification_method": "primary_source_reading",
+      "curated_by": "Codex",
+      "verified_on": "2026-10-16"
+    },
+    {
+      "case_id": "R04",
+      "query": "How should model size and training tokens scale under a compute-optimal budget?",
+      "answer": "Along the compute-optimal scaling frontier, model parameters and training tokens should grow in approximately equal proportions rather than scaling model size alone. Doubling the compute-optimal model size should be accompanied by roughly doubling its training tokens. At any fixed FLOP budget, choose the appropriate balanced allocation; the rule does not mean both can be doubled without increasing compute.",
+      "facts": [
+        "Compute-optimal scaling increases model size and the number of training tokens in approximately equal proportions, rather than increasing model size alone.",
+        "For every doubling of compute-optimal model size, the number of training tokens should also roughly double."
+      ],
+      "supports": [
+        {
+          "source_id": "chinchilla",
+          "content_hash": "3fd3632a8ef48171bd25282990221d49535d75356192f068b3b2ebe08f2aedd4",
+          "page_number": 1,
+          "section": "Abstract; 1 Introduction",
+          "anchor": "the model size and the number of training tokens should be scaled equally",
+          "fact_indices": [0]
+        },
+        {
+          "source_id": "chinchilla",
+          "content_hash": "3fd3632a8ef48171bd25282990221d49535d75356192f068b3b2ebe08f2aedd4",
+          "page_number": 1,
+          "section": "Abstract",
+          "anchor": "for every doubling of model size the number of training tokens should also be doubled",
+          "fact_indices": [1]
+        }
+      ],
+      "verification_method": "primary_source_reading",
+      "curated_by": "Codex",
+      "verified_on": "2026-10-16"
+    }
+  ]
+}

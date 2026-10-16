@@ -7,6 +7,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from atlasflow.knowledge.domain.index_specs import IndexBuildSpec
+
 CURRENT_PARSER_VERSION = "structured-parser-v3"
 CURRENT_CHUNKER_VERSION = "parent-child-v2"
 
@@ -91,6 +93,7 @@ class DocumentVersion(FrozenModel):
     source_updated_at: datetime | None = None
     parser_version: str = CURRENT_PARSER_VERSION
     chunker_version: str = CURRENT_CHUNKER_VERSION
+    build_request_hash: str | None = None
     rights: dict[str, Any] = Field(default_factory=dict)
     provenance: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utc_now)
@@ -144,6 +147,7 @@ class IngestionJob(FrozenModel):
     version_id: str
     space_build_id: str | None = None
     generation_id: str | None = None
+    build_request_hash: str | None = None
     status: JobStatus = JobStatus.QUEUED
     stage: JobStage = JobStage.QUEUED
     attempt: int = Field(default=0, ge=0)
@@ -161,6 +165,8 @@ class IndexGeneration(FrozenModel):
     status: Literal["building", "validating", "active", "retired"] = "building"
     embedding_profile: str
     retrieval_profile: str
+    identity_status: Literal["legacy_unknown", "declared", "verified"] = "legacy_unknown"
+    build_spec: IndexBuildSpec | None = None
     created_at: datetime = Field(default_factory=utc_now)
     activated_at: datetime | None = None
 
@@ -196,6 +202,7 @@ class SpaceBuild(FrozenModel):
     status: Literal["building", "ready", "failed", "published", "cancelled"] = "building"
     parser_version: str = CURRENT_PARSER_VERSION
     chunker_version: str = CURRENT_CHUNKER_VERSION
+    build_request_hash: str | None = None
     note: str = Field(default="", max_length=500)
     published_version_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
@@ -274,6 +281,13 @@ class RetrievalDecision(FrozenModel):
 class RetrievalTrace(FrozenModel):
     profile_id: str
     generation_id: str | None
+    space_version_id: str | None = None
+    manifest_hash: str | None = None
+    identity_status: str = "legacy_unknown"
+    index_fingerprint: str | None = None
+    embedding_model: str | None = None
+    embedding_dimensions: int | None = None
+    embedding_compatibility: str = "not_requested"
     lexical_candidates: int = 0
     vector_candidates: int = 0
     fused_candidates: int = 0

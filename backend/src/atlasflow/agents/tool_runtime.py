@@ -14,6 +14,9 @@ from urllib.parse import quote
 from pydantic import ValidationError
 
 from atlasflow.agents.contracts import RunPolicy
+from atlasflow.execution.context import CURRENT_EXECUTION, CURRENT_INVOCATION
+from atlasflow.execution.contracts import ExecutionControlError, decode_safe
+from atlasflow.execution.runtime import ExecutionToolLimit
 from atlasflow.observability import redact_sensitive_data, traced
 from atlasflow.providers.openrouter import OpenRouterClient
 from atlasflow.schemas import Evidence, RunEvent, RunEventType, ToolCallRecord
@@ -95,6 +98,7 @@ class ToolRuntime:
         capability_alternatives: Sequence[Sequence[str]] = (),
         user_query: str = "",
         requires_fresh_data: bool = False,
+        retrieval_snapshot: dict[str, Any] | None = None,
         task_id: str | None = None,
         plan_version: int | None = None,
     ) -> ToolStageResult:
@@ -210,11 +214,15 @@ class ToolRuntime:
         run_budget_blocked = False
         output_limit = 1600
         reasoning_effort = "minimal"
+        durable_context = CURRENT_EXECUTION.get()
         for _ in range(turn_limit + 2):
             choice: str | dict[str, Any] = "auto"
             missing = [cap for cap in required if cap not in succeeded]
             missing_groups = [group for group in groups if not set(group) & succeeded]
-            if self.budget.remaining(run_id, already_used=len(prior_calls) + len(stage.records), limit=policy.max_tool_calls_per_run) == 0:
+            remaining = self.budget.remaining(run_id, already_used=len(prior_calls) + len(stage.records), limit=policy.max_tool_calls_per_run)
+            replay_at_limit = (not stage.records and durable_context is not None
+                               and await durable_context.runtime.has_tool_replay(durable_context))
+            if remaining == 0 and not replay_at_limit:
                 if missing or missing_groups or not stage.records:
                     await self._emit(run_id, RunEventType.TOOL_BUDGET_EXHAUSTED, "整个 Run 的工具预算已耗尽", agent, task_id, plan_version)
                 run_budget_blocked = True
@@ -228,21 +236,49 @@ class ToolRuntime:
                     if len(candidates) == 1
                     else "required"
                 )
-            stage.model_calls += 1
+            decision_lease = None
             try:
-                response = await self.client.chat(
-                    model=self.model,
-                    messages=messages,
-                    temperature=0,
-                    max_tokens=output_limit,
-                    reasoning_effort=reasoning_effort,
-                    tools=request_definitions,
-                    tool_choice=choice,
-                    # Providers may support tools but not parallel_tool_calls.
-                    # Execute returned calls sequentially under local budgets;
-                    # do not exclude valid endpoints with an optional switch.
-                )
+                if durable_context is not None:
+                    decision_lease = await durable_context.runtime.begin_invocation(
+                        durable_context, kind="tool_decision", name=agent,
+                        inputs={"prompt": prompt, "tools": request_definitions, "choice": choice,
+                                "prior": previous_context, "output_limit": output_limit,
+                                "reasoning_effort": reasoning_effort})
+                if decision_lease is not None and decision_lease.replayed:
+                    response = decode_safe(decision_lease.replay)
+                else:
+                    if remaining == 0:
+                        if decision_lease is not None:
+                            await durable_context.runtime.fail(decision_lease)
+                        run_budget_blocked = True
+                        break
+                    if decision_lease is not None:
+                        await durable_context.runtime.dispatch(decision_lease)
+                    stage.model_calls += 1
+                    invocation_token = CURRENT_INVOCATION.set(
+                        decision_lease.invocation_id if decision_lease is not None else None)
+                    try:
+                        response = await self.client.chat(
+                            model=self.model, messages=messages, temperature=0,
+                            max_tokens=output_limit, reasoning_effort=reasoning_effort,
+                            tools=request_definitions, tool_choice=choice)
+                    finally:
+                        CURRENT_INVOCATION.reset(invocation_token)
+                    if decision_lease is not None:
+                        calls = response.get("tool_calls") or []
+                        # Only ordinary, non-transient executable intent may be
+                        # frozen. AMap place text/raw candidates are never cached.
+                        can_replay = response.get("_atlasflow_finish_reason") != "length" and all(
+                            not self._tool_policy(str(call.get("function", {}).get("name", ""))).transient_output
+                            for call in calls if isinstance(call, dict))
+                        saved = {"content": None, "tool_calls": calls if can_replay else [],
+                                 "_atlasflow_finish_reason": response.get("_atlasflow_finish_reason")}
+                        await durable_context.runtime.confirm(decision_lease, saved, replayable=can_replay)
             except Exception as exc:
+                if isinstance(exc, ExecutionControlError):
+                    raise
+                if decision_lease is not None:
+                    await durable_context.runtime.fail(decision_lease)
                 raise RequiredToolError(
                     f"工具决策请求失败：{redact_sensitive_data(str(exc))}", stage
                 ) from exc
@@ -342,7 +378,8 @@ class ToolRuntime:
                     arguments = parsed
                 except (TypeError, ValueError) as exc:
                     argument_error = str(exc)
-                context = ToolContext(run_id=run_id, agent_name=agent, user_query=user_query)
+                context = ToolContext(run_id=run_id, agent_name=agent, user_query=user_query,
+                                      retrieval_snapshot=retrieval_snapshot)
                 if name == "knowledge_search" and argument_error is None:
                     if policy.knowledge_mode == "selected":
                         arguments["space"] = policy.knowledge_space
@@ -383,11 +420,20 @@ class ToolRuntime:
                     )
                     repeated_failure = True
                     break
-                reserved = await self.budget.reserve(
-                    run_id,
-                    already_used=len(prior_calls) + len(stage.records),
-                    limit=policy.max_tool_calls_per_run,
-                )
+                durable_context = CURRENT_EXECUTION.get()
+                lease = None
+                if durable_context is not None:
+                    try:
+                        lease = await durable_context.runtime.begin_invocation(
+                            durable_context, kind="tool", name=name, inputs=arguments,
+                            consumes_tool_budget=True)
+                        reserved = True
+                    except ExecutionToolLimit:
+                        reserved = False
+                else:
+                    reserved = await self.budget.reserve(
+                        run_id, already_used=len(prior_calls) + len(stage.records),
+                        limit=policy.max_tool_calls_per_run)
                 if not reserved:
                     await self._emit(
                         run_id, RunEventType.TOOL_BUDGET_EXHAUSTED,
@@ -409,7 +455,13 @@ class ToolRuntime:
                 )
                 cached: tuple[ToolResult, str] | None = None
                 executed = False
-                if argument_error:
+                if lease is not None and lease.replayed:
+                    saved = decode_safe(lease.replay)
+                    result = ToolResult(success=saved["success"], data=saved["data"],
+                                        evidence=saved["evidence"], error=saved["error"],
+                                        retryable=saved["retryable"])
+                    cached = (result, saved["call_id"])
+                elif argument_error:
                     result = ToolResult(success=False, error=argument_error)
                 elif name not in {item["function"]["name"] for item in request_definitions}:
                     result = ToolResult(success=False, error="tool is not allowed for this agent")
@@ -431,13 +483,20 @@ class ToolRuntime:
                         else:
                             stage.model_calls += tool.model_calls_per_execution
                             executed = True
-                            result = await self.registry.execute(
-                                name, arguments, context
-                            )
+                            if lease is not None:
+                                await durable_context.runtime.dispatch(lease)
+                            invocation_token = CURRENT_INVOCATION.set(
+                                lease.invocation_id if lease is not None else None)
+                            try:
+                                result = await self.registry.execute(name, arguments, context)
+                            finally:
+                                CURRENT_INVOCATION.reset(invocation_token)
                             executions_by_tool[name] = executions_by_tool.get(name, 0) + 1
                             if cache_key and result.success:
                                 execution_cache[cache_key] = (result, call_id)
-                    except Exception as exc:  # noqa: BLE001 - surface tool failure to the model.
+                    except Exception as exc:
+                        if isinstance(exc, ExecutionControlError):
+                            raise
                         result = ToolResult(
                             success=False, error=str(redact_sensitive_data(str(exc)))
                         )
@@ -468,8 +527,18 @@ class ToolRuntime:
                     navigation_urls=self._tool_policy(name).navigation_urls(result),
                 )
                 stage.records.append(record)
-                if not cached:
+                if not cached or (lease is not None and lease.replayed):
                     stage.evidence.extend(safe_evidence)
+                if lease is not None and not lease.replayed:
+                    await durable_context.runtime.confirm(lease, {
+                        "success": result.success, "retryable": result.retryable,
+                        "error": result.error, "call_id": call_id,
+                        "data": ({"summary": record.summary,
+                                  "navigation_url": record.navigation_url,
+                                  "navigation_urls": record.navigation_urls}
+                                 if self._tool_policy(name).transient_output else result.data),
+                        "evidence": safe_evidence,
+                    })
                 if result.success:
                     succeeded.update(record.capabilities)
                     transient_succeeded |= self._tool_policy(name).transient_output

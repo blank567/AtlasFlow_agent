@@ -2,12 +2,15 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { ArrowSquareOut, MagnifyingGlass } from "@phosphor-icons/react";
-import { searchKnowledge } from "../lib/api";
-import { KnowledgeSearchResult, KnowledgeSearchTuning } from "../lib/types";
+import { listKnowledgeSpaceVersions, searchKnowledge } from "../lib/api";
+import { KnowledgeSearchResult, KnowledgeSearchTuning, KnowledgeSpaceVersion } from "../lib/types";
+import { RetrievalControls } from "./retrieval-controls";
+import { IndexIdentity } from "./index-identity";
 
 type LabSettings = KnowledgeSearchTuning & { result_limit: number };
 type SearchSnapshot = {
   space: string;
+  space_version_id?: string;
   query: string;
   settings: LabSettings;
   result: KnowledgeSearchResult;
@@ -56,6 +59,8 @@ export function RetrievalLab({ space }: { space: string }) {
   const [snapshot, setSnapshot] = useState<SearchSnapshot | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [versions, setVersions] = useState<KnowledgeSpaceVersion[]>([]);
+  const [versionId, setVersionId] = useState("");
   const searchId = useRef(0);
 
   useEffect(() => {
@@ -63,11 +68,15 @@ export function RetrievalLab({ space }: { space: string }) {
     setSnapshot(null);
     setError("");
     setLoading(false);
+    setVersionId(""); setVersions([]);
+    let disposed = false;
+    if (space) listKnowledgeSpaceVersions(space).then(value => { if (!disposed) setVersions(value); }).catch(() => { /* Search remains usable for current published content. */ });
+    return () => { disposed = true; };
   }, [space]);
 
   const validation = settingsError(settings);
   const stale = snapshot !== null && (
-    snapshot.query !== query.trim() || snapshot.space !== space ||
+    snapshot.query !== query.trim() || snapshot.space !== space || snapshot.space_version_id !== versionId ||
     JSON.stringify(snapshot.settings) !== JSON.stringify(settings)
   );
 
@@ -83,6 +92,7 @@ export function RetrievalLab({ space }: { space: string }) {
       const result = await searchKnowledge({
         query: submittedQuery,
         space,
+        space_version_id: versionId || null,
         result_limit: submittedSettings.result_limit,
         tuning: {
           lexical_weight: submittedSettings.lexical_weight,
@@ -96,7 +106,7 @@ export function RetrievalLab({ space }: { space: string }) {
         },
       });
       if (requestId === searchId.current) {
-        setSnapshot({ space, query: submittedQuery, settings: submittedSettings, result });
+        setSnapshot({ space, space_version_id: versionId, query: submittedQuery, settings: submittedSettings, result });
       }
     } catch (reason) {
       if (requestId === searchId.current) {
@@ -107,20 +117,12 @@ export function RetrievalLab({ space }: { space: string }) {
     }
   }
 
-  const lexicalShare = Math.round(settings.lexical_weight / (settings.lexical_weight + settings.vector_weight) * 100);
-  function changeLexicalShare(value: number) {
-    setSettings((previous) => ({
-      ...previous,
-      lexical_weight: Number((value / 50).toFixed(2)),
-      vector_weight: Number(((100 - value) / 50).toFixed(2)),
-    }));
-  }
-
   return <section className="ragLab" aria-label="检索实验台">
     <form className="ragQueryForm" onSubmit={(event) => void submit(event)}>
       <div className="ragQueryHeader">
         <div><h2>证据检索</h2><p>检索已发布资料，核验相关性与来源定位。</p></div>
       </div>
+      <label className="field"><span>检索版本</span><select value={versionId} onChange={event => { searchId.current += 1; setLoading(false); setVersionId(event.target.value); }}><option value="">当前已发布清单</option>{versions.map(version => <option key={version.id} value={version.id}>v{version.version_number} {version.note}</option>)}</select></label>
       <label htmlFor="rag-query">检索问题</label>
       <textarea id="rag-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="例如：PagedAttention的KVCache管理机制是什么？" rows={2} maxLength={4000} required aria-describedby="rag-query-meta" />
       <div className="ragQueryActions">
@@ -130,24 +132,7 @@ export function RetrievalLab({ space }: { space: string }) {
     </form>
 
     <div className="ragWorkbench">
-      <aside className="ragControls" aria-label="本次检索参数">
-        <div className="ragControlsHeader"><div><h3>检索参数</h3><p>单次查询配置</p></div><button type="button" onClick={() => setSettings(DEFAULT_SETTINGS)}>恢复默认</button></div>
-        <div className="ragParameterGrid">
-        <div className="ragControl"><label htmlFor="rag-result-limit">返回片段</label><p>输出证据数量上限。</p><input id="rag-result-limit" type="number" min={1} max={20} value={settings.result_limit} onChange={(event) => setSettings((previous) => ({ ...previous, result_limit: Number(event.target.value) }))} /></div>
-          <div className="ragControl"><label htmlFor="rag-candidate-limit">融合候选</label><p>单路Top-K及融合候选上限。</p><input id="rag-candidate-limit" type="number" min={1} max={200} value={settings.candidate_limit} onChange={(event) => setSettings((previous) => ({ ...previous, candidate_limit: Number(event.target.value) }))} /></div>
-          <div className="ragControl"><label htmlFor="rag-rerank-limit">重排候选</label><p>最多送入重排模型的片段数。</p><input id="rag-rerank-limit" type="number" min={1} max={100} value={settings.rerank_limit} disabled={!settings.rerank_enabled} onChange={(event) => setSettings((previous) => ({ ...previous, rerank_limit: Number(event.target.value) }))} /></div>
-          <div className="ragControl"><label htmlFor="rag-rrf-k">RRF常数</label><p>调节召回名次差异对融合评分的影响。</p><input id="rag-rrf-k" type="number" min={1} max={200} value={settings.rrf_k} onChange={(event) => setSettings((previous) => ({ ...previous, rrf_k: Number(event.target.value) }))} /></div>
-        <div className="ragWeightControl"><label htmlFor="rag-lexical-share">召回策略</label><p>关键词与语义召回的融合权重。</p><span id="rag-weight-hint" className="srOnly">向右增加关键词权重，向左增加语义权重。</span><input id="rag-lexical-share" type="range" min={0} max={100} step={5} value={lexicalShare} aria-label="关键词召回占比" aria-describedby="rag-weight-hint" aria-valuetext={`关键词${lexicalShare}%，语义${100 - lexicalShare}%`} title="向右增加关键词权重，向左增加语义权重" onChange={(event) => changeLexicalShare(Number(event.target.value))} /><div><span>关键词 {lexicalShare}%</span><span>语义 {100 - lexicalShare}%</span></div></div>
-        <label className="ragSwitch"><input type="checkbox" checked={settings.rerank_enabled} onChange={(event) => setSettings((previous) => ({ ...previous, rerank_enabled: event.target.checked }))} /><span><strong>启用重排</strong><small>重新评估候选片段的相关性。</small></span></label>
-        <div className="ragExpansionControl">
-          <label className="ragSwitch" htmlFor="rag-query-expansion"><input id="rag-query-expansion" type="checkbox" checked={settings.query_expansion_enabled} onChange={(event) => setSettings((previous) => ({ ...previous, query_expansion_enabled: event.target.checked }))} /><span><strong>中英查询扩展</strong><small>补充中英术语与缩写，保留原始问题。</small></span></label>
-          <div className="ragExpansionLimit"><label htmlFor="rag-query-expansion-limit">扩展查询上限</label><input id="rag-query-expansion-limit" type="number" min={1} max={4} value={settings.query_expansion_limit} disabled={!settings.query_expansion_enabled} aria-describedby="rag-expansion-limit-hint" onChange={(event) => setSettings((previous) => ({ ...previous, query_expansion_limit: Number(event.target.value) }))} /></div>
-          <p id="rag-expansion-limit-hint">额外查询数，不计原始问题。仅扩展召回，不改写重排问题。</p>
-        </div>
-        </div>
-        {validation && <p className="ragValidation" role="alert">{validation}</p>}
-        <p className="ragControlNote">参数仅在本次查询中生效。</p>
-      </aside>
+      <div><IndexIdentity space={space} versionId={versionId || undefined} /><RetrievalControls settings={settings} setSettings={setSettings} />{validation && <p className="ragValidation" role="alert">{validation}</p>}</div>
 
       <div className="ragResults" aria-live="polite">
         {error && <div className="inlineAlert errorAlert" role="alert"><strong>检索失败</strong><span>{error}</span></div>}
@@ -176,6 +161,7 @@ function SearchResults({ snapshot, stale }: { snapshot: SearchSnapshot; stale: b
 
   return <>
     <div className="ragResultsHeader"><div><h3>检索结果</h3><p>{snapshot.query}</p></div><span>{trace.duration_ms}ms</span></div>
+    <p className="evalHint">索引身份：{trace.identity_status === "verified" ? "已核验" : trace.identity_status === "declared" ? "待核验" : "历史身份未知"}；{trace.embedding_model ?? "模型未记录"}；{trace.embedding_dimensions ?? "维度未记录"}{trace.manifest_hash ? `；清单${trace.manifest_hash.slice(0, 12)}` : ""}</p>
     {stale && <div className="ragStaleNotice">查询条件已变更。当前显示上次结果，请重新运行检索。</div>}
     <div className="ragPipeline" aria-label="检索阶段统计">{stages.map((stage) => <div key={stage.name}><span>{stage.name}</span><strong>{stage.value}</strong><small>{stage.note}</small></div>)}</div>
     {expansionRecorded && <section className="ragQueryExpansion" aria-label="查询扩展">

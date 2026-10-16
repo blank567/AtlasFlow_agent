@@ -1,0 +1,43 @@
+{
+  "kind": "rag",
+  "protocol": "rag-retrieval-v2",
+  "dataset_id": "llm-rag-v2",
+  "mode": "live",
+  "case_ids": ["R01", "R02", "R03"],
+  "space": "llm-engineering-v1",
+  "cutoffs": [1, 3, 5],
+  "variants": [
+    {
+      "variant_id": "baseline",
+      "name": "关键词基线",
+      "retrieval_limit": 5,
+      "retrieval_tuning": {
+        "lexical_weight": 1,
+        "vector_weight": 0,
+        "query_expansion_enabled": false,
+        "rerank_enabled": false
+      }
+    },
+    {
+      "variant_id": "candidate",
+      "name": "关键词与重排",
+      "retrieval_limit": 5,
+      "retrieval_tuning": {
+        "lexical_weight": 1,
+        "vector_weight": 0,
+        "query_expansion_enabled": false,
+        "rerank_enabled": true
+      }
+    }
+  ],
+  "budget": {
+    "max_http_attempts": 60,
+    "max_elapsed_seconds": 1200,
+    "case_timeout_seconds": 90,
+    "concurrency": 2
+  },
+  "judge_enabled": false,
+  "confirm_judge": false,
+  "confirm_live": false,
+  "langsmith_sync": false
+}

@@ -13,6 +13,7 @@ from atlasflow.knowledge.domain import (
     RetrievalTrace,
     RetrievalTuning,
     SearchResult,
+    SearchSnapshot,
 )
 from atlasflow.knowledge.ports.repository import KnowledgeRepository
 from atlasflow.knowledge.retrieval.context_assembler import ContextAssembler
@@ -20,6 +21,7 @@ from atlasflow.knowledge.retrieval.query_pipeline import QueryPipeline
 from atlasflow.knowledge.retrieval.scoring import bm25, cosine, pool_query_scores
 from atlasflow.observability import traced
 from atlasflow.providers import EmbeddingProvider, RerankProvider
+from atlasflow.providers.embedding_registry import EmbeddingRegistry, validate_vectors
 
 
 class RetrievalService:
@@ -31,9 +33,11 @@ class RetrievalService:
         rerank_provider: RerankProvider,
         profile: RetrievalProfile | None = None,
         query_pipeline: QueryPipeline | None = None,
+        embedding_registry: EmbeddingRegistry | None = None,
     ) -> None:
         self.repository = repository
         self.embedding_provider = embedding_provider
+        self.embedding_registry = embedding_registry or EmbeddingRegistry(embedding_provider)
         self.rerank_provider = rerank_provider
         self.profile = profile or RetrievalProfile()
         self.assembler = ContextAssembler(repository)
@@ -49,6 +53,8 @@ class RetrievalService:
         result_limit: int | None = None,
         tuning: RetrievalTuning | None = None,
         principal: PrincipalContext | None = None,
+        space_version_id: str | None = None,
+        snapshot: SearchSnapshot | None = None,
     ) -> SearchResult:
         started = perf_counter()
         principal = principal or PrincipalContext()
@@ -85,11 +91,23 @@ class RetrievalService:
             raise KeyError(f"knowledge space not found: {space}")
         if principal.allowed_space_ids and selected_space.id not in principal.allowed_space_ids:
             raise PermissionError("knowledge space is not available to this principal")
-        generation = await self.repository.active_generation(selected_space.id)
-        chunks = await self.repository.list_searchable_chunks(selected_space.id, filters)
-        # Chunks are read together with published pointers by the repository.
-        # A whole-space release may happen after the earlier generation lookup.
-        generation_id = chunks[0].generation_id if chunks else (generation.id if generation else None)
+        if snapshot is not None:
+            snapshot = SearchSnapshot.model_validate(snapshot.model_dump())
+            if snapshot.space_id != selected_space.id:
+                raise PermissionError("pinned snapshot does not belong to the selected knowledge space")
+            if space_version_id and snapshot.space_version_id != space_version_id:
+                raise ValueError("space version and supplied snapshot disagree")
+        else:
+            snapshot = await self.repository.capture_search_snapshot(selected_space.id, space_version_id)
+        chunks = await self.repository.list_snapshot_chunks(snapshot, filters)
+        generation_id = snapshot.generation_id
+        trace_identity = {
+            "space_version_id": snapshot.space_version_id, "manifest_hash": snapshot.manifest_hash,
+            "identity_status": snapshot.identity_status,
+            "index_fingerprint": snapshot.build_spec.fingerprint if snapshot.build_spec else None,
+            "embedding_model": snapshot.build_spec.embedding.model if snapshot.build_spec else None,
+            "embedding_dimensions": snapshot.build_spec.embedding.observed_dimensions if snapshot.build_spec else None,
+        }
         if not chunks:
             return SearchResult(
                 query=query,
@@ -102,6 +120,7 @@ class RetrievalService:
                 applied_filters=filters,
                 trace=RetrievalTrace(
                     profile_id=profile.id,
+                    **trace_identity,
                     generation_id=generation_id,
                     rerank_requested=rerank_enabled,
                     query_expansion_requested=profile.query_expansion_enabled,
@@ -115,6 +134,19 @@ class RetrievalService:
             )
 
         degraded: list[str] = []
+        embedding_compatibility = "not_requested"
+        query_provider = None
+        if profile.vector_weight:
+            try:
+                if snapshot.identity_status != "verified" or snapshot.build_spec is None:
+                    raise ValueError("INDEX_LEGACY_IDENTITY_UNKNOWN: semantic retrieval needs a verified index identity")
+                query_provider = self.embedding_registry.resolve(snapshot.build_spec.embedding)
+                embedding_compatibility = "compatible"
+            except Exception as exc:
+                if profile.lexical_weight == 0:
+                    raise ValueError(f"VECTOR_INDEX_INCOMPATIBLE: {exc}") from exc
+                embedding_compatibility = "unavailable"
+                degraded.append(f"embedding_incompatible:{str(exc)[:250]}")
         queries = [query]
         matched_terms: list[str] = []
         expansion_method = "disabled" if not profile.query_expansion_enabled else "bilingual-terms-v1"
@@ -145,25 +177,31 @@ class RetrievalService:
             [await self._lexical(variant, chunks) for variant in queries]
             if profile.lexical_weight > 0 else [zero_scores]
         )
-        if profile.vector_weight == 0:
+        if profile.vector_weight == 0 or query_provider is None:
             vector_rows = [zero_scores]
         else:
             try:
                 vector_rows = (
-                    await self._vector_queries(queries, chunks)
-                    if len(queries) > 1 else [await self._vector(query, chunks)]
+                    await self._vector_queries(queries, chunks, provider=query_provider, spec=snapshot.build_spec.embedding)
+                    if len(queries) > 1 else [await self._vector(query, chunks, provider=query_provider, spec=snapshot.build_spec.embedding)]
                 )
-            except Exception as exc:  # noqa: BLE001 - vector retrieval has a specified fallback
+            except Exception as exc:
                 if len(queries) > 1:
                     # Providers rejecting the batch must not suppress the original
                     # vector lane. At most one original-only fallback is attempted.
                     degraded.append(f"vector_expansion_unavailable:{type(exc).__name__}")
                     try:
-                        vector_rows = [await self._vector(query, chunks)]
-                    except Exception as original_exc:  # noqa: BLE001 - keep lexical matches
+                        vector_rows = [await self._vector(query, chunks, provider=query_provider, spec=snapshot.build_spec.embedding)]
+                    except Exception as original_exc:
+                        if profile.lexical_weight == 0:
+                            raise ValueError(f"VECTOR_RETRIEVAL_UNAVAILABLE: {original_exc}") from original_exc
+                        embedding_compatibility = "query_failed"
                         vector_rows = [zero_scores]
                         degraded.append(f"vector_unavailable:{type(original_exc).__name__}")
                 else:
+                    if profile.lexical_weight == 0:
+                        raise ValueError(f"VECTOR_RETRIEVAL_UNAVAILABLE: {exc}") from exc
+                    embedding_compatibility = "query_failed"
                     vector_rows = [zero_scores]
                     degraded.append(f"vector_unavailable:{type(exc).__name__}")
         lexical_scores, lexical_rank = pool_query_scores(
@@ -230,6 +268,8 @@ class RetrievalService:
             hits=hits,
             applied_filters=filters,
             trace=RetrievalTrace(
+                **trace_identity,
+                embedding_compatibility=embedding_compatibility,
                 profile_id=profile.id,
                 generation_id=generation_id,
                 lexical_candidates=len(lexical_rank),
@@ -255,15 +295,21 @@ class RetrievalService:
         return bm25(query, chunks)
 
     @traced(name="knowledge.retrieve.vector")
-    async def _vector(self, query: str, chunks: list) -> dict[str, float]:
-        vectors = await self.embedding_provider.embed([query], input_type="search_query")
+    async def _vector(self, query: str, chunks: list, *, provider=None, spec=None) -> dict[str, float]:
+        vectors = await (provider or self.embedding_provider).embed([query], input_type=spec.query_input_type if spec else "search_query")
+        validate_vectors(vectors, 1, spec.observed_dimensions if spec else None)
+        if spec:
+            self.embedding_registry.validate_observed_model(provider or self.embedding_provider, spec)
         query_vector = vectors[0]
         return {item.id: cosine(query_vector, item.embedding or []) for item in chunks}
 
     @traced(name="knowledge.retrieve.vector.expanded_queries")
-    async def _vector_queries(self, queries: list[str], chunks: list) -> list[dict[str, float]]:
+    async def _vector_queries(self, queries: list[str], chunks: list, *, provider=None, spec=None) -> list[dict[str, float]]:
         """Batch all variants without repeating document embedding or crossing spaces."""
-        vectors = await self.embedding_provider.embed(queries, input_type="search_query")
+        vectors = await (provider or self.embedding_provider).embed(queries, input_type=spec.query_input_type if spec else "search_query")
+        validate_vectors(vectors, len(queries), spec.observed_dimensions if spec else None)
+        if spec:
+            self.embedding_registry.validate_observed_model(provider or self.embedding_provider, spec)
         if len(vectors) != len(queries):
             raise ValueError("query embedding count does not match query variants")
         dimensions: set[int] = set()

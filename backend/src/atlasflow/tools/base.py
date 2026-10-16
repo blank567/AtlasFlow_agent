@@ -21,6 +21,8 @@ class ToolContext(BaseModel):
     run_id: str
     agent_name: str
     user_query: str = ""
+    # Fixed by the application, never supplied by the model's tool arguments.
+    retrieval_snapshot: dict[str, Any] | None = None
     approved_risks: set[RiskLevel] = Field(default_factory=lambda: {RiskLevel.LOW})
 
 

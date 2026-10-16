@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -12,6 +13,7 @@ from atlasflow.config import Settings
 from atlasflow.knowledge.api.routes import router
 from atlasflow.knowledge.domain import (
     DocumentStatus,
+    DocumentVersion,
     KnowledgeChunk,
     KnowledgeDocument,
     KnowledgeFilter,
@@ -22,7 +24,9 @@ from atlasflow.knowledge.domain import (
 )
 from atlasflow.knowledge.domain.models import FilterValue, IndexGeneration
 from atlasflow.knowledge.infrastructure import InMemoryKnowledgeRepository
+from atlasflow.knowledge.ingestion import StructuralChunker
 from atlasflow.knowledge.ingestion.chunker import lexicalize
+from atlasflow.knowledge.ingestion.specs import capture_build_spec
 from atlasflow.knowledge.retrieval import RetrievalService
 from atlasflow.knowledge.retrieval.scoring import pool_query_scores, ranks
 from atlasflow.providers import RerankResult
@@ -56,12 +60,22 @@ def _service(*, profile: RetrievalProfile | None = None) -> RetrievalService:
     ) -> list[RerankResult]:
         return [RerankResult(index=index, score=0.9) for index in range(top_n)]
 
-    return RetrievalService(
+    service = RetrievalService(
         repository=repository,
         embedding_provider=SimpleNamespace(embed=AsyncMock(side_effect=embed)),
         rerank_provider=SimpleNamespace(rerank=AsyncMock(side_effect=rerank)),
         profile=profile,
     )
+    _verify_test_generation(service)
+    return service
+
+
+def _verify_test_generation(service: RetrievalService) -> None:
+    generation = service.repository.generations["generation"]
+    embedding = service.embedding_registry.describe().model_copy(update={"observed_dimensions": 2})
+    service.repository.generations[generation.id] = generation.model_copy(update={
+        "identity_status": "verified", "build_spec": capture_build_spec(embedding, StructuralChunker()),
+    })
 
 
 def _document(
@@ -88,6 +102,11 @@ def _document(
         embedding=[1.0, 0.0], metadata={"language": language},
     )
     repository.documents[document.id] = document
+    repository.versions[chunk.version_id] = DocumentVersion(
+        id=chunk.version_id, document_id=document.id, version_number=1,
+        content_hash=sha256(content.encode()).hexdigest(), blob_key=f"fixture/{item_id}",
+        mime_type="text/plain", byte_size=len(content.encode()), status="ready",
+    )
     repository.chunks[chunk.id] = chunk
     return chunk
 
@@ -282,7 +301,7 @@ async def test_malformed_expansion_embedding_falls_back_to_one_original_request(
         "注意力机制", space="test-space", tuning=RetrievalTuning(rerank_enabled=False),
     )
 
-    assert result.trace.degraded == ["vector_expansion_unavailable:ValueError"]
+    assert result.trace.degraded == ["vector_expansion_unavailable:EmbeddingCompatibilityError"]
     assert [hit.chunk.id for hit in result.hits] == ["target"]
     assert result.trace.lexical_candidates == result.trace.vector_candidates == 1
     assert result.hits[0].vector_score == pytest.approx(1.0)
@@ -352,6 +371,10 @@ async def test_expansion_uses_only_filtered_published_children_in_the_active_gen
     service.repository.chunks[stale.id] = stale.model_copy(update={"version_id": "old-version"})
     parent = _document(service, "parent", content)
     service.repository.chunks[parent.id] = parent.model_copy(update={"chunk_kind": "parent"})
+    # These deliberately nonsearchable fixture rows are not published documents.
+    for item_id in ("retired", "stale", "parent"):
+        document = service.repository.documents[f"document-{item_id}"]
+        service.repository.documents[document.id] = document.model_copy(update={"current_version_id": None})
     filters = KnowledgeFilter(language=FilterValue.model_validate({"in": ["en"]}))
 
     result = await service.search(
@@ -494,6 +517,7 @@ def _seed_bootstrap_space(service: RetrievalService) -> None:
     service.repository.spaces["space"] = KnowledgeSpace(
         id="space", slug="test-space", name="Test", active_generation_id=generation.id,
     )
+    _verify_test_generation(service)
 
 
 @pytest.mark.asyncio

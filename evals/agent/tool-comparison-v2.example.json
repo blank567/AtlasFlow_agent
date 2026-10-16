@@ -1,0 +1,35 @@
+{
+  "kind": "agent",
+  "protocol": "agent-task-v2",
+  "comparison_focus": "tools",
+  "dataset_id": "llm-agent-v2",
+  "mode": "replay",
+  "case_ids": ["A05", "A06", "A08"],
+  "space": "llm-engineering-v1",
+  "variants": [
+    {
+      "variant_id": "baseline",
+      "name": "知识检索组",
+      "policy": {"knowledge_mode": "selected", "knowledge_space": "llm-engineering-v1"},
+      "tool_allowlist": ["knowledge_search"]
+    },
+    {
+      "variant_id": "candidate",
+      "name": "知识与联网组",
+      "policy": {"knowledge_mode": "selected", "knowledge_space": "llm-engineering-v1"},
+      "tool_allowlist": ["knowledge_search", "web_search", "web_fetch"]
+    }
+  ],
+  "budget": {
+    "max_http_attempts": 60,
+    "max_elapsed_seconds": 1200,
+    "case_timeout_seconds": 600,
+    "concurrency": 1
+  },
+  "repetitions": 1,
+  "allow_degraded": false,
+  "judge_enabled": false,
+  "confirm_judge": false,
+  "confirm_live": false,
+  "langsmith_sync": false
+}

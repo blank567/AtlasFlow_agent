@@ -11,6 +11,7 @@ from atlasflow.knowledge.application.space_builds import SpaceBuildService
 from atlasflow.knowledge.domain import (
     DocumentStatus,
     DocumentVersion,
+    IndexBuildSpec,
     IndexGeneration,
     IngestionJob,
     JobStage,
@@ -22,16 +23,19 @@ from atlasflow.knowledge.domain import (
     PrincipalContext,
     RetrievalTuning,
     SearchResult,
+    SearchSnapshot,
     SpaceBuild,
     SpaceDocumentState,
     VersionStatus,
 )
 from atlasflow.knowledge.domain.models import CURRENT_CHUNKER_VERSION, CURRENT_PARSER_VERSION
 from atlasflow.knowledge.ingestion import ParserRegistry, StructuralChunker
+from atlasflow.knowledge.ingestion.specs import capture_build_spec
 from atlasflow.knowledge.ports import BlobStore, KnowledgeRepository
 from atlasflow.knowledge.retrieval import RetrievalService
 from atlasflow.observability import traced
 from atlasflow.providers import EmbeddingProvider
+from atlasflow.providers.embedding_registry import EmbeddingRegistry, validate_vectors
 
 
 class KnowledgePlatform:
@@ -47,10 +51,12 @@ class KnowledgePlatform:
         default_space: str,
         worker_enabled: bool = True,
         worker_poll_seconds: float = 0.5,
+        embedding_registry: EmbeddingRegistry | None = None,
     ) -> None:
         self.repository = repository
         self.blob_store = blob_store
         self.embedding_provider = embedding_provider
+        self.embedding_registry = embedding_registry or retrieval.embedding_registry
         self.retrieval = retrieval
         self.default_space = default_space
         self.worker_enabled = worker_enabled
@@ -60,6 +66,20 @@ class KnowledgePlatform:
         self.space_builds = SpaceBuildService(self)
         self._worker: asyncio.Task[None] | None = None
         self._closed = False
+
+    def current_build_spec(self) -> IndexBuildSpec:
+        return capture_build_spec(self.embedding_registry.describe(self.embedding_provider), self.chunker)
+
+    async def _ingestion_generation(self, space: KnowledgeSpace) -> tuple[IndexGeneration, IndexBuildSpec, str | None]:
+        spec = self.current_build_spec()
+        generation = await self.repository.bind_ingestion_generation(space.id, IndexGeneration(
+            space_id=space.id, embedding_profile=space.embedding_profile,
+            retrieval_profile=space.retrieval_profile, identity_status="declared", build_spec=spec,
+        ))
+        reason = None
+        if generation.build_spec is None or generation.build_spec.request_hash != spec.request_hash:
+            reason = "INDEX_SPEC_MISMATCH: current index identity is unknown or differs; rebuild the entire space"
+        return generation, spec, reason
 
     async def start(self) -> None:
         await self.repository.initialize()
@@ -278,6 +298,7 @@ class KnowledgePlatform:
     ) -> IngestionJob:
         selected_space = await self.get_space(space)
         await self._require_mutable_space(selected_space.id)
+        generation, build_spec, blocked = await self._ingestion_generation(selected_space)
         normalized_hash = sha256(content).hexdigest()
         source_id = source_id or str(uuid4())
         document = await self.repository.find_document(selected_space.id, source_id)
@@ -300,6 +321,7 @@ class KnowledgePlatform:
             and current.content_hash == normalized_hash
             and current.status == VersionStatus.READY
             and self._uses_current_pipeline(current)
+            and not blocked
         ):
             return await self.repository.create_job(
                 IngestionJob(
@@ -309,12 +331,13 @@ class KnowledgePlatform:
                     status=JobStatus.COMPLETED,
                     stage=JobStage.READY,
                     progress=1,
+                    generation_id=generation.id, build_request_hash=build_spec.request_hash,
                 )
             )
         pending = next(
             (
                 item for item in reversed(versions)
-                if item.content_hash == normalized_hash
+                if not blocked and item.content_hash == normalized_hash
                 and self._uses_current_pipeline(item)
                 and item.status in {VersionStatus.PENDING, VersionStatus.PROCESSING}
             ),
@@ -347,6 +370,8 @@ class KnowledgePlatform:
                 byte_size=len(content),
                 rights=rights or {},
                 provenance=provenance or {},
+                build_request_hash=build_spec.request_hash,
+                status=VersionStatus.FAILED if blocked else VersionStatus.PENDING,
             )
         )
         return await self.repository.create_job(
@@ -354,20 +379,28 @@ class KnowledgePlatform:
                 space_id=selected_space.id,
                 document_id=document.id,
                 version_id=version.id,
+                generation_id=generation.id, build_request_hash=build_spec.request_hash,
+                status=JobStatus.FAILED_TERMINAL if blocked else JobStatus.QUEUED,
+                error_code="IndexSpecMismatch" if blocked else None,
+                error_message=blocked,
             )
         )
 
-    @staticmethod
-    def _uses_current_pipeline(version: DocumentVersion) -> bool:
+    def _uses_current_pipeline(self, version: DocumentVersion) -> bool:
         return (
             version.parser_version == CURRENT_PARSER_VERSION
             and version.chunker_version == CURRENT_CHUNKER_VERSION
+            and version.build_request_hash == self.current_build_spec().request_hash
         )
 
     async def reindex_document(self, document_id: str) -> IngestionJob:
         """Queue a new index version from the published source without changing it in place."""
         document, versions = await self.get_document(document_id)
         await self._require_mutable_space(document.space_id)
+        space = await self.get_space(document.space_id)
+        generation, build_spec, blocked = await self._ingestion_generation(space)
+        if blocked:
+            raise ValueError(blocked)
         if document.status != DocumentStatus.ACTIVE:
             raise ValueError("archived documents cannot be reindexed")
         current = next(
@@ -407,6 +440,7 @@ class KnowledgePlatform:
                 source_updated_at=current.source_updated_at,
                 rights=current.rights,
                 provenance=current.provenance,
+                build_request_hash=build_spec.request_hash,
             )
         )
         return await self.repository.create_job(
@@ -414,6 +448,7 @@ class KnowledgePlatform:
                 space_id=document.space_id,
                 document_id=document.id,
                 version_id=version.id,
+                generation_id=generation.id, build_request_hash=build_spec.request_hash,
             )
         )
 
@@ -480,6 +515,17 @@ class KnowledgePlatform:
         space = await self.repository.get_space(job.space_id)
         if not version or not document or not space:
             raise RuntimeError("ingestion references missing knowledge records")
+        if not job.generation_id or not job.build_request_hash:
+            raise ValueError("INDEX_LEGACY_JOB_UNBOUND: cancel this legacy job and explicitly resubmit after migration")
+        generation = await self.repository.get_generation(job.generation_id)
+        current_spec = self.current_build_spec()
+        if (generation is None or generation.build_spec is None
+                or generation.build_spec.request_hash != job.build_request_hash
+                or version.build_request_hash != job.build_request_hash
+                or current_spec.request_hash != job.build_request_hash):
+            raise ValueError("INDEX_SPEC_MISMATCH: worker configuration differs from the queued index identity")
+        if not job.space_build_id and space.active_generation_id != generation.id:
+            raise ValueError("INDEX_SPEC_MISMATCH: queued target is no longer the active generation")
         job = await self._stage(job, JobStage.EXTRACTING, 0.1)
         content = await self.blob_store.get(version.blob_key)
         job = await self._stage(job, JobStage.PARSING, 0.25)
@@ -496,17 +542,6 @@ class KnowledgePlatform:
             generation = await self.repository.get_generation(build.generation_id)
             if generation is None or generation.space_id != space.id:
                 raise ValueError("space build generation is missing")
-        else:
-            generation = await self.repository.active_generation(space.id)
-        if generation is None:
-            generation = await self.repository.create_generation(
-                IndexGeneration(
-                    space_id=space.id,
-                    embedding_profile=space.embedding_profile,
-                    retrieval_profile=space.retrieval_profile,
-                )
-            )
-            generation = await self.repository.activate_generation(generation.id)
         job = await self._stage(job, JobStage.CHUNKING, 0.45)
         chunks = self.chunker.chunk(
             blocks,
@@ -514,7 +549,8 @@ class KnowledgePlatform:
             version_id=version.id,
             generation_id=generation.id,
             title=document.title,
-            metadata={**document.metadata, "canonical_uri": document.canonical_uri},
+            metadata={**document.metadata, "canonical_uri": document.canonical_uri,
+                      "source_id": document.source_id, "content_hash": version.content_hash},
         )
         children = [item for item in chunks if item.chunk_kind == "child"]
         if not children:
@@ -522,12 +558,16 @@ class KnowledgePlatform:
         job = await self._stage(job, JobStage.EMBEDDING, 0.65)
         vectors: list[list[float]] = []
         for start in range(0, len(children), 32):
-            vectors.extend(
-                await self.embedding_provider.embed(
+            batch = await self.embedding_provider.embed(
                     [item.content for item in children[start : start + 32]],
-                    input_type="search_document",
-                )
+                    input_type=generation.build_spec.embedding.document_input_type,
             )
+            dimensions = validate_vectors(batch, len(children[start : start + 32]),
+                generation.build_spec.embedding.observed_dimensions)
+            generation = await self.repository.confirm_generation_spec(
+                generation.id, job.build_request_hash, dimensions,
+                actual_model=self.embedding_registry.observed_model(self.embedding_provider))
+            vectors.extend(batch)
         if len(vectors) != len(children):
             raise RuntimeError("embedding provider returned an unexpected vector count")
         vector_index = {
@@ -538,34 +578,11 @@ class KnowledgePlatform:
             for item in chunks
         ]
         job = await self._stage(job, JobStage.INDEXING, 0.82)
+        if self.current_build_spec().request_hash != job.build_request_hash:
+            raise ValueError("INDEX_SPEC_MISMATCH: worker configuration changed before index commit")
         await self.repository.replace_chunks(version.id, chunks)
         job = await self._stage(job, JobStage.VALIDATING, 0.95)
-        now = datetime.now(UTC)
-        await self.repository.update_version(
-            version.model_copy(
-                update={"status": VersionStatus.READY, "indexed_at": now}
-            )
-        )
-        if not job.space_build_id:
-            await self.repository.update_document(
-                document.model_copy(
-                    update={
-                        "current_version_id": version.id,
-                        "status": DocumentStatus.ACTIVE,
-                        "updated_at": now,
-                    }
-                )
-            )
-        return await self.repository.update_job(
-            job.model_copy(
-                update={
-                    "status": JobStatus.COMPLETED,
-                    "stage": JobStage.READY,
-                    "progress": 1,
-                    "updated_at": now,
-                }
-            )
-        )
+        return await self.repository.complete_ingestion_job(job.id)
 
     async def _stage(
         self, job: IngestionJob, stage: JobStage, progress: float
@@ -582,6 +599,11 @@ class KnowledgePlatform:
 
     async def retry_job(self, job_id: str) -> IngestionJob:
         job = await self.get_job(job_id)
+        generation = await self.repository.get_generation(job.generation_id) if job.generation_id else None
+        if (not job.build_request_hash or generation is None or generation.build_spec is None
+                or generation.build_spec.request_hash != job.build_request_hash
+                or self.current_build_spec().request_hash != job.build_request_hash):
+            raise ValueError("INDEX_SPEC_MISMATCH: cancel this job and migrate/resubmit with an explicit index binding")
         if job.space_build_id:
             await self._require_open_build_job(job)
         else:
@@ -620,6 +642,17 @@ class KnowledgePlatform:
             raise KeyError(f"knowledge job not found: {job_id}")
         return job
 
+    async def cancel_job(self, job_id: str) -> IngestionJob:
+        return await self.repository.cancel_job(job_id)
+
+    async def capture_search_snapshot(self, space: str | None = None,
+                                      space_version_id: str | None = None) -> SearchSnapshot:
+        selected = await self.get_space(space or self.default_space)
+        return await self.repository.capture_search_snapshot(selected.id, space_version_id)
+
+    def describe_query_pipeline(self) -> dict:
+        return self.retrieval.query_pipeline.describe()
+
     async def list_jobs(self, space: str | None = None) -> list[IngestionJob]:
         space_id = (await self.get_space(space)).id if space else None
         return await self.repository.list_jobs(space_id)
@@ -652,6 +685,8 @@ class KnowledgePlatform:
         result_limit: int = 5,
         tuning: RetrievalTuning | None = None,
         principal: PrincipalContext | None = None,
+        space_version_id: str | None = None,
+        snapshot: SearchSnapshot | None = None,
     ) -> SearchResult:
         return await self.retrieval.search(
             query,
@@ -660,6 +695,8 @@ class KnowledgePlatform:
             result_limit=result_limit,
             tuning=tuning,
             principal=principal,
+            space_version_id=space_version_id,
+            snapshot=snapshot,
         )
 
     async def stats(self) -> dict[str, int]:

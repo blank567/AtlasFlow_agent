@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
+from pathlib import Path
+from typing import Any
 
 from atlasflow.agents.gateway import ModelGateway, OpenRouterModelGateway
 from atlasflow.agents.tool_runtime import ToolRuntime
 from atlasflow.agents.workflow import ResearchWorkflow
 from atlasflow.config import Settings
+from atlasflow.evaluation.common.service import V2EvaluationService
+from atlasflow.evaluation.runner import EvaluationService
+from atlasflow.evaluation_bindings import build_evaluation
+from atlasflow.evaluation_bindings_v2 import build_evaluation_v2
+from atlasflow.execution import ExecutionRuntime, create_postgres_execution
+from atlasflow.execution.contracts import digest
 from atlasflow.knowledge.application import KnowledgePlatform
 from atlasflow.knowledge.domain import RetrievalProfile
 from atlasflow.knowledge.infrastructure import (
@@ -42,6 +51,9 @@ class Container:
     registry: ToolRegistry
     store: SQLiteRunStore
     run_service: RunService
+    execution: ExecutionRuntime | None = None
+    evaluation: EvaluationService | None = None
+    evaluation_v2: V2EvaluationService | None = None
 
 
 @dataclass(slots=True)
@@ -54,6 +66,7 @@ class ProviderBundle:
 
 def build_container(settings: Settings, providers: ProviderBundle | None = None) -> Container:
     configure_langsmith(settings)
+    injected = providers is not None
     providers = providers or build_openrouter_providers(settings)
     if settings.knowledge_backend.lower() == "memory":
         knowledge_repository = InMemoryKnowledgeRepository()
@@ -94,7 +107,13 @@ def build_container(settings: Settings, providers: ProviderBundle | None = None)
     registry = build_tool_registry(settings, web_search=providers.web_search_tool)
     registry.register(KnowledgeSearchTool(knowledge))
 
-    store = SQLiteRunStore(settings.database_path)
+    workflow_options = _workflow_options(settings)
+    execution = None if injected and settings.knowledge_backend == "memory" else (
+        create_postgres_execution(settings.execution_database_url or settings.knowledge_database_url,
+            profile_hash=_execution_profile(settings, knowledge, workflow_options))
+    )
+    store = SQLiteRunStore(settings.database_path, recover_interrupted=execution is None,
+                           defer_open=execution is not None)
 
     tool_runtime = None
     if isinstance(providers.model, OpenRouterModelGateway):
@@ -108,25 +127,57 @@ def build_container(settings: Settings, providers: ProviderBundle | None = None)
         model=providers.model,
         event_sink=store.append_event,
         tool_runtime=tool_runtime,
-        max_concurrency=settings.max_research_concurrency,
-        max_initial_tasks=settings.max_research_tasks,
-        max_research_attempts=settings.max_research_attempts,
-        quorum_ratio=settings.research_quorum_ratio,
-        max_supplement_rounds=settings.max_supplement_rounds,
-        max_supplement_tasks=settings.max_supplement_tasks,
-        max_tasks_per_plan=settings.max_tasks_per_plan,
-        max_replans=settings.max_replans,
-        max_revisions=settings.max_report_revisions,
-        quality_threshold=settings.quality_threshold,
+        execution=execution,
+        **workflow_options,
         trace_segment_sink=store.upsert_trace_segment,
     )
+    async def capture_run_snapshot(policy):
+        space = policy.knowledge_space if policy.knowledge_mode == "selected" else None
+        return (await knowledge.capture_search_snapshot(space)).model_dump(mode="json")
+
+    run_service = RunService(store, workflow, execution=execution,
+                            snapshot_factory=capture_run_snapshot if not injected else None)
+    evaluation = build_evaluation(settings, knowledge, registry, providers, workflow_options, store.get)
     return Container(
         settings=settings,
         knowledge=knowledge,
         registry=registry,
         store=store,
-        run_service=RunService(store, workflow),
+        run_service=run_service,
+        execution=execution,
+        evaluation=evaluation,
+        evaluation_v2=build_evaluation_v2(settings, knowledge, registry, providers, workflow_options, evaluation),
     )
+
+
+def _workflow_options(settings: Settings) -> dict[str, Any]:
+    return {
+        "max_concurrency": settings.max_research_concurrency,
+        "max_initial_tasks": settings.max_research_tasks,
+        "max_research_attempts": settings.max_research_attempts,
+        "quorum_ratio": settings.research_quorum_ratio,
+        "max_supplement_rounds": settings.max_supplement_rounds,
+        "max_supplement_tasks": settings.max_supplement_tasks,
+        "max_tasks_per_plan": settings.max_tasks_per_plan,
+        "max_replans": settings.max_replans,
+        "max_revisions": settings.max_report_revisions,
+        "quality_threshold": settings.quality_threshold,
+    }
+
+
+def _execution_profile(settings, knowledge, workflow_options) -> str:
+    package = Path(__file__).parent
+    code = {str(path.relative_to(package)): sha256(path.read_bytes()).hexdigest()
+            for path in sorted(package.rglob("*.py"))}
+    models = {name: getattr(settings, name) for name in (
+        "llm_provider", "llm_model", "rerank_provider", "rerank_model", "search_provider", "search_model")}
+    services = {name: sha256(getattr(settings, name).encode()).hexdigest()
+                for name in ("llm_base_url", "embedding_base_url", "rerank_base_url", "search_base_url")}
+    return digest({"code": code, "models": models, "services": services,
+                   "request_limits": {name: getattr(settings, name) for name in
+                       ("max_tool_retries", "tool_timeout_seconds", "provider_timeout_seconds")},
+                   "workflow": workflow_options, "query_pipeline": knowledge.describe_query_pipeline(),
+                   "retrieval": knowledge.retrieval.profile.model_dump(mode="json")})
 
 
 def build_openrouter_providers(settings: Settings) -> ProviderBundle:

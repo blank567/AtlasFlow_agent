@@ -16,6 +16,7 @@ from urllib.parse import parse_qsl, urljoin, urlsplit, urlunsplit
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from atlasflow.evaluation.budget import reserve_http_attempt
 from atlasflow.schemas import Evidence
 from atlasflow.tools.base import BaseTool, Capability, ToolContext, ToolResult
 
@@ -189,6 +190,7 @@ class WebFetchTool(BaseTool):
             # Pin the checked IP; original Host and SNI retain virtual hosting and
             # certificate verification without a second hostname DNS lookup.
             pinned = url.copy_with(host=addresses[0])
+            await reserve_http_attempt("web_fetch", "GET")
             async with (
                 httpx.AsyncClient(
                     transport=self._transport,

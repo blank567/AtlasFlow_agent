@@ -12,6 +12,7 @@ import { ApprovalPanel } from "./approval-panel";
 import { ConfirmDialog } from "./confirm-dialog";
 import { EventTimeline } from "./event-timeline";
 import { ReportView } from "./report-view";
+import { RecoveryPanel } from "./recovery-panel";
 import { EmptyState, LoadingBlock, MetricCard, Panel, StatusBadge } from "./ui";
 
 const AgentFlow = dynamic(() => import("./agent-flow").then((module) => module.AgentFlow), { ssr: false, loading: () => <LoadingBlock label="加载Agent拓扑" /> });
@@ -28,6 +29,7 @@ export function RunDetail({ runId }: { runId: string }) {
   const [copied, setCopied] = useState(false);
   const diagnostics = useRef<HTMLDetailsElement>(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const actionPending = useRef(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<"cancel" | "rerun" | null>(null);
   const visualRun = useMemo(() => run ? deriveRunFromEvents(run, events) : null, [events, run]);
@@ -37,6 +39,8 @@ export function RunDetail({ runId }: { runId: string }) {
     setTab(null);
     setDiagnosticsOpen(null);
     setCopied(false);
+    setConfirmAction(null);
+    actionPending.current = false; setActionBusy(false);
   }, [runId]);
 
   useEffect(() => {
@@ -61,17 +65,19 @@ export function RunDetail({ runId }: { runId: string }) {
   }
 
   async function handleCancel() {
-    if (!run) return;
+    if (!run || actionPending.current || TERMINAL_STATUSES.has(run.status)) return;
+    actionPending.current = true;
     setConfirmAction(null);
     setActionBusy(true); setActionError(null);
-    try { setRun(await cancelRun(run.id)); await refresh(); } catch (reason) { setActionError(reason instanceof Error ? reason.message : "取消失败"); } finally { setActionBusy(false); }
+    try { setRun(await cancelRun(run.id)); await refresh(); } catch (reason) { setActionError(reason instanceof Error ? reason.message : "取消失败"); } finally { actionPending.current = false; setActionBusy(false); }
   }
 
   async function handleRerun() {
-    if (!run) return;
+    if (!run || actionPending.current) return;
+    actionPending.current = true;
     setConfirmAction(null);
     setActionBusy(true); setActionError(null);
-    try { const created = await rerun(run.id); router.push(`/runs/${created.id}`); } catch (reason) { setActionError(reason instanceof Error ? reason.message : "重新运行失败"); setActionBusy(false); }
+    try { const created = await rerun(run.id); router.push(`/runs/${created.id}`); } catch (reason) { setActionError(reason instanceof Error ? reason.message : "重新运行失败"); setActionBusy(false); } finally { actionPending.current = false; }
   }
 
   if (!run && !error) return <main className="pageContent"><LoadingBlock label="加载运行快照" /></main>;
@@ -84,10 +90,13 @@ export function RunDetail({ runId }: { runId: string }) {
   const duration = isTerminal ? run.metrics.duration_ms : now !== null && Number.isFinite(startedAt) ? Math.max(0, now - startedAt) : undefined;
   const failedToolCalls = run.tool_calls.filter((call) => !call.success).length;
   const providerCalls = run.trace_segments.flatMap((segment) => segment.provider_calls);
+  const ledger = run.recovery?.provider_usage;
+  const ledgerUsage = ledger && Object.keys(ledger).length ? ledger : undefined;
+  const modelCallCount = Math.max(providerCalls.length, run.metrics.model_calls ?? 0, ledgerUsage?.model_calls ?? 0);
   const tokenValues = providerCalls.map((call) => call.usage?.total_tokens).filter((value): value is number => typeof value === "number");
-  const totalTokens = tokenValues.length ? tokenValues.reduce((sum, value) => sum + value, 0) : undefined;
+  const totalTokens = ledgerUsage ? typeof ledgerUsage.known_tokens === "number" ? ledgerUsage.known_tokens : undefined : tokenValues.length ? tokenValues.reduce((sum, value) => sum + value, 0) : undefined;
   const costValues = providerCalls.map((call) => call.usage?.cost).filter((value): value is number => typeof value === "number");
-  const totalCost = costValues.length ? costValues.reduce((sum, value) => sum + value, 0) : undefined;
+  const totalCost = ledgerUsage ? typeof ledgerUsage.known_cost === "number" ? ledgerUsage.known_cost : undefined : costValues.length ? costValues.reduce((sum, value) => sum + value, 0) : undefined;
   const latestProviderCall = providerCalls.at(-1);
 
   return (
@@ -99,6 +108,7 @@ export function RunDetail({ runId }: { runId: string }) {
       </header>
       {(error || actionError) && <div className="inlineAlert errorAlert"><strong>请求未完成</strong><span>{actionError ?? error}</span></div>}
       {run.status === "waiting_approval" && <ApprovalPanel run={run} onResolved={(value) => { setRun(value); void refresh(); }} />}
+      <RecoveryPanel key={run.id} run={run} onResumed={(value) => { setRun(value); void refresh(); }} />
 
       <div className="runSummary">
         <MetricCard label="任务进度" value={`${run.metrics.successful_tasks} / ${run.metrics.total_tasks}`} note={isTerminal ? `${run.metrics.failed_tasks}个失败任务` : `当前节点${agentLabel}`} />
@@ -150,7 +160,8 @@ export function RunDetail({ runId }: { runId: string }) {
           })}</div>}
         </Panel>
         <Panel title="调用统计">
-          <dl className="counterList"><div><dt>计划版本数</dt><dd>{run.metrics.plan_versions}</dd></div><div><dt>补充轮次</dt><dd>{run.metrics.supplement_rounds}</dd></div><div><dt>重规划次数</dt><dd>{run.metrics.replan_count}</dd></div><div><dt>稿件修订次数</dt><dd>{run.metrics.revision_count}</dd></div><div><dt>失败任务</dt><dd>{run.metrics.failed_tasks}</dd></div><div><dt>工具调用</dt><dd>{run.metrics.tool_calls ?? run.tool_calls.length}</dd></div><div><dt>模型调用</dt><dd>{providerCalls.length || run.metrics.model_calls}</dd></div><div><dt>Token总数</dt><dd>{totalTokens !== undefined ? totalTokens.toLocaleString() : "未记录"}</dd></div><div><dt>Provider成本</dt><dd title="Provider返回的原始数值；未假定币种">{totalCost !== undefined ? `${totalCost.toFixed(6)}（原始值）` : "未记录"}</dd></div><div><dt>最新RequestID</dt><dd title={latestProviderCall?.request_id}>{latestProviderCall?.request_id ? compactId(latestProviderCall.request_id) : "未记录"}</dd></div><div><dt>实际模型</dt><dd title={latestProviderCall?.model}>{latestProviderCall?.model ?? "未记录"}</dd></div></dl>
+          <dl className="counterList"><div><dt>计划版本数</dt><dd>{run.metrics.plan_versions}</dd></div><div><dt>补充轮次</dt><dd>{run.metrics.supplement_rounds}</dd></div><div><dt>重规划次数</dt><dd>{run.metrics.replan_count}</dd></div><div><dt>稿件修订次数</dt><dd>{run.metrics.revision_count}</dd></div><div><dt>失败任务</dt><dd>{run.metrics.failed_tasks}</dd></div><div><dt>工具调用</dt><dd>{run.metrics.tool_calls ?? run.tool_calls.length}</dd></div><div><dt>模型调用</dt><dd>{modelCallCount}</dd></div><div><dt>{ledgerUsage ? "已知Token" : "Token总数"}</dt><dd>{totalTokens !== undefined ? totalTokens.toLocaleString() : "未记录"}</dd></div><div><dt>Provider成本</dt><dd title="仅累计已知的Provider原始数值；未假定币种">{totalCost !== undefined ? `${totalCost.toFixed(6)}（原始值）` : "未记录"}</dd></div><div><dt>最新RequestID</dt><dd title={latestProviderCall?.request_id}>{latestProviderCall?.request_id ? compactId(latestProviderCall.request_id) : "未记录"}</dd></div><div><dt>实际模型</dt><dd title={latestProviderCall?.model}>{latestProviderCall?.model ?? "未记录"}</dd></div></dl>
+          {ledgerUsage && <p className="panelHint">调用账本：{ledgerUsage.http_attempts ?? "未记录"}次HTTP尝试；Token覆盖率{typeof ledgerUsage.token_usage_coverage === "number" ? `${Math.round(ledgerUsage.token_usage_coverage * 100)}%` : "未记录"}，费用覆盖率{typeof ledgerUsage.cost_usage_coverage === "number" ? `${Math.round(ledgerUsage.cost_usage_coverage * 100)}%` : "未记录"}。</p>}
         </Panel>
       </div>
         </div>

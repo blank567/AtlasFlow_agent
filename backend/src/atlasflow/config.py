@@ -1,7 +1,8 @@
 from functools import lru_cache
 from pathlib import Path
+import re
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -24,6 +25,8 @@ class Settings(BaseSettings):
 
     llm_provider: str = "openrouter"
     llm_model: str = ""
+    # Additional trusted choices served to the UI; the primary model is always included.
+    llm_model_options: list[str] = Field(default_factory=list, max_length=30)
     llm_api_key: str = Field(default="", repr=False)
     llm_base_url: str = ""
 
@@ -51,6 +54,19 @@ class Settings(BaseSettings):
     langsmith_project: str = "atlasflow-dev"
 
     database_path: str = str(DEFAULT_DATABASE_PATH)
+    execution_database_url: str = Field(default="", repr=False)
+    evaluation_storage_root: str = str(PROJECT_ROOT / "data" / "evaluations")
+    evaluation_max_http_attempts: int = Field(default=60, ge=1, le=5000)
+    evaluation_max_seconds: int = Field(default=1200, ge=1, le=7200)
+    evaluation_case_timeout_seconds: int = Field(default=90, ge=1, le=1200)
+    evaluation_concurrency: int = Field(default=2, ge=1, le=4)
+    evaluation_judge_enabled: bool = False
+    evaluation_judge_model: str = ""
+    evaluation_judge_api_key: str = Field(default="", repr=False)
+    evaluation_judge_base_url: str = ""
+    evaluation_judge_max_tokens: int = Field(default=4096, ge=256, le=16384)
+    evaluation_judge_max_reason_chars: int = Field(default=160, ge=40, le=600)
+    evaluation_langsmith_sync: bool = True
     redis_url: str = "redis://localhost:6379/0"
 
     knowledge_backend: str = "postgres"
@@ -81,6 +97,27 @@ class Settings(BaseSettings):
     tool_timeout_seconds: float = 120.0
     provider_timeout_seconds: float = 90.0
     rag_top_k: int = 5
+
+    @field_validator("llm_model_options")
+    @classmethod
+    def trusted_chat_model_options(cls, values: list[str]) -> list[str]:
+        cleaned = [value.strip() for value in values]
+        if any(not re.fullmatch(r"~?[A-Za-z0-9][A-Za-z0-9_.:/-]{0,198}", value)
+               or "://" in value for value in cleaned):
+            raise ValueError("LLM_MODEL_OPTIONS must contain model identifiers, not URLs")
+        return list(dict.fromkeys(cleaned))
+
+
+def resolve_evaluation_judge_model(settings: Settings) -> str:
+    """An explicit Judge override wins; a blank override follows the primary LLM."""
+    return settings.evaluation_judge_model.strip() or settings.llm_model.strip()
+
+
+def configured_chat_models(settings: Settings, primary_model: str | None = None) -> list[str]:
+    """Expose configured chat identifiers only, never credentials or provider URLs."""
+    candidates = [primary_model if primary_model is not None else settings.llm_model,
+                  *settings.llm_model_options]
+    return list(dict.fromkeys(value.strip() for value in candidates if value.strip()))
 
 
 @lru_cache

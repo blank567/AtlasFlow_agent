@@ -5,8 +5,8 @@ import inspect
 import logging
 import os
 import re
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, datetime
@@ -23,6 +23,7 @@ from atlasflow.config import Settings
 logger = logging.getLogger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])
+_LOCAL_ONLY: ContextVar[bool] = ContextVar("atlasflow_local_observability", default=False)
 TraceStatus = Literal[
     "disabled",
     "not_configured",
@@ -478,6 +479,27 @@ async def check_langsmith_connection() -> ObservabilityMeta:
     return get_observability_meta()
 
 
+@contextmanager
+def capture_provider_calls() -> Iterator[list[ProviderCallMetric]]:
+    """Collect local metadata without creating traces or enabling content uploads."""
+    calls: list[ProviderCallMetric] = []
+    token = _PROVIDER_CALLS.set(calls)
+    try:
+        yield calls
+    finally:
+        _PROVIDER_CALLS.reset(token)
+
+
+@contextmanager
+def local_observability_only() -> Iterator[None]:
+    """Keep workflow segments local even when production tracing is enabled."""
+    token = _LOCAL_ONLY.set(True)
+    try:
+        yield
+    finally:
+        _LOCAL_ONLY.reset(token)
+
+
 def record_provider_call(metric: ProviderCallMetric) -> None:
     """Attach a provider metric to the active segment and current LangSmith span."""
 
@@ -550,7 +572,7 @@ async def trace_segment(
     trace_setup_error: BaseException | None = None
 
     with _RUNTIME_LOCK:
-        enabled = _RUNTIME.enabled
+        enabled = _RUNTIME.enabled and not _LOCAL_ONLY.get()
         configured = _RUNTIME.configured
         client = _RUNTIME.client
         project = _RUNTIME.project

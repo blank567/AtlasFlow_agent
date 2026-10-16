@@ -24,7 +24,7 @@ export function listCapabilities(): Promise<CapabilityDescription[]> {
   return request<CapabilityDescription[]>("/capabilities");
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     headers: {
@@ -119,6 +119,8 @@ export function normalizeRun(value: unknown): RunRecord {
     auto_approve: typeof raw.auto_approve === "boolean" ? raw.auto_approve : undefined,
     policy: object(raw.policy) as RunPolicy,
     source_run_id: typeof raw.source_run_id === "string" ? raw.source_run_id : undefined,
+    recovery: raw.recovery ? raw.recovery as RunRecord["recovery"] : undefined,
+    retrieval_snapshot: raw.retrieval_snapshot ? object(raw.retrieval_snapshot) : undefined,
     created_at: typeof raw.created_at === "string" ? raw.created_at : undefined,
     updated_at: typeof raw.updated_at === "string" ? raw.updated_at : undefined,
     started_at: typeof raw.started_at === "string" ? raw.started_at : undefined,
@@ -188,6 +190,12 @@ export async function resolveApproval(runId: string, action: "approve" | "edit" 
 
 export async function cancelRun(runId: string) {
   return normalizeRun(await request<unknown>(`/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }));
+}
+
+export async function resumeRun(runId: string, payload: { request_id: string; expected_checkpoint_id: string; acknowledged_unknown_call_ids: string[] }) {
+  return normalizeRun(await request<unknown>(`/runs/${encodeURIComponent(runId)}/resume`, {
+    method: "POST", body: JSON.stringify(payload),
+  }));
 }
 
 export async function rerun(runId: string) {
@@ -299,6 +307,20 @@ export function archiveKnowledgeDocument(documentId: string) {
   return request<KnowledgeDocument>(`/knowledge/documents/${encodeURIComponent(documentId)}/archive`, { method: "POST" });
 }
 
-export function searchKnowledge(payload: { query: string; space: string; result_limit: number; tuning: KnowledgeSearchTuning }) {
+export function searchKnowledge(payload: { query: string; space: string; space_version_id?: string | null; result_limit: number; tuning: KnowledgeSearchTuning }) {
   return request<KnowledgeSearchResult>("/knowledge/search/debug", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function getKnowledgeSnapshot(space: string, versionId?: string) {
+  const query = versionId ? `?space_version_id=${encodeURIComponent(versionId)}` : "";
+  return request<KnowledgeSnapshot>(`/knowledge/spaces/${encodeURIComponent(space)}/snapshot${query}`);
+}
+
+export type KnowledgeSnapshot = {
+  generation_id: string | null; identity_status: "legacy_unknown" | "declared" | "verified"; manifest_hash: string;
+  build_spec: { parser_version: string; chunker_version: string; child_tokens: number; parent_tokens: number; embedding: { model: string; observed_dimensions: number | null } } | null;
+};
+
+export function cancelKnowledgeJob(id: string) {
+  return request<KnowledgeJob>(`/knowledge/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
 }

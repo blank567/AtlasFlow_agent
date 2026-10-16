@@ -49,6 +49,16 @@ async def list_space_versions(space: str, request: Request):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/spaces/{space}/snapshot")
+async def capture_search_snapshot(space: str, request: Request, space_version_id: str | None = None):
+    try:
+        return await platform(request).capture_search_snapshot(space, space_version_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/spaces/{space}/versions", status_code=status.HTTP_201_CREATED)
 async def create_space_version(space: str, payload: SpaceVersionNoteRequest, request: Request):
     try:
@@ -245,6 +255,16 @@ async def retry_job(job_id: str, request: Request):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@router.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str, request: Request):
+    try:
+        return await platform(request).cancel_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/search")
 @router.post("/search/debug")
 async def search(payload: KnowledgeSearchRequest, request: Request):
@@ -256,6 +276,7 @@ async def search(payload: KnowledgeSearchRequest, request: Request):
             result_limit=payload.result_limit,
             tuning=payload.tuning,
             principal=PrincipalContext(),
+            space_version_id=payload.space_version_id,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

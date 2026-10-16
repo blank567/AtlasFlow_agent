@@ -26,6 +26,8 @@ const EVENT_TYPES = [
   "run_degraded",
   "run_failed",
   "run_cancelled",
+  "run_interrupted",
+  "run_resumed",
   "trace_segment_started",
   "trace_segment_completed",
   "trace_segment_updated",

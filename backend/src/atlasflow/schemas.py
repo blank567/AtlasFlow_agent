@@ -20,6 +20,7 @@ from atlasflow.agents.contracts import (
     RouteRecord,
     RunPolicy,
 )
+from atlasflow.execution.contracts import RecoveryInfo
 from atlasflow.observability import TraceSegment
 
 
@@ -31,6 +32,7 @@ class RunStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     WAITING_APPROVAL = "waiting_approval"
+    INTERRUPTED = "interrupted"
     COMPLETED = "completed"
     COMPLETED_WITH_WARNINGS = "completed_with_warnings"
     FAILED = "failed"
@@ -76,6 +78,8 @@ class RunEventType(StrEnum):
     RUN_DEGRADED = "run_degraded"
     RUN_FAILED = "run_failed"
     RUN_CANCELLED = "run_cancelled"
+    RUN_INTERRUPTED = "run_interrupted"
+    RUN_RESUMED = "run_resumed"
 
 
 class Evidence(BaseModel):
@@ -156,6 +160,8 @@ class DeleteRunRequest(BaseModel):
 class ApprovalRequest(BaseModel):
     action: ApprovalAction
     edited_plan: ResearchPlan | None = None
+    request_id: str | None = Field(default=None, min_length=1, max_length=128)
+    expected_checkpoint_id: str | None = Field(default=None, min_length=1, max_length=256)
 
     @model_validator(mode="after")
     def validate_edited_plan(self) -> ApprovalRequest:
@@ -186,6 +192,8 @@ class RunRecord(BaseModel):
     query: str
     auto_approve: bool = True
     policy: RunPolicy = Field(default_factory=RunPolicy)
+    retrieval_snapshot: dict[str, Any] | None = None
+    recovery: RecoveryInfo = Field(default_factory=RecoveryInfo)
     status: RunStatus = RunStatus.PENDING
     plan: ResearchPlan | None = None
     plans: list[ResearchPlan] = Field(default_factory=list)

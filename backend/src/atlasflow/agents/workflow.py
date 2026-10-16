@@ -9,6 +9,8 @@ from time import perf_counter
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
@@ -41,6 +43,8 @@ from atlasflow.agents.tool_runtime import (
     ToolRuntime,
     ToolStageResult,
 )
+from atlasflow.execution.contracts import ExecutionControlError
+from atlasflow.execution.runtime import DurableToolBudget, ExecutionRuntime
 from atlasflow.observability import TraceSegmentSink, redact_sensitive_data, trace_segment
 from atlasflow.schemas import (
     ApprovalAction,
@@ -70,6 +74,7 @@ _CHECKPOINT_TYPES = [
         "CritiqueDecision",
         "CritiqueRoute",
         "DraftVersion",
+        "ExecutionMetrics",
         "ExecutionMetrics",
         "PlanLineage",
         "QualityDecision",
@@ -107,6 +112,7 @@ def _merge_warnings(current: list[str], incoming: list[str]) -> list[str]:
 class AgentState(TypedDict, total=False):
     run_id: str
     query: str
+    retrieval_snapshot: dict[str, Any] | None
     auto_approve: bool
     policy: RunPolicy
     started_at: datetime
@@ -170,7 +176,8 @@ class ResearchWorkflow:
         *,
         model: ModelGateway,
         event_sink: EventSink,
-        checkpointer: MemorySaver | None = None,
+        checkpointer: BaseCheckpointSaver | None = None,
+        execution: ExecutionRuntime | None = None,
         max_concurrency: int = 3,
         recursion_limit: int = DEFAULT_RECURSION_LIMIT,
         max_initial_tasks: int = MAX_INITIAL_TASKS,
@@ -224,7 +231,10 @@ class ResearchWorkflow:
         self.trace_segment_sink = trace_segment_sink
         self.studio_mode = studio_mode
         self.tool_runtime = tool_runtime
-        self.checkpointer = checkpointer or (
+        self.execution = execution
+        if execution is not None and tool_runtime is not None:
+            tool_runtime.budget = DurableToolBudget(execution)
+        self.checkpointer = checkpointer or (execution.checkpointer if execution else None) or (
             None
             if studio_mode
             else MemorySaver(serde=JsonPlusSerializer(allowed_msgpack_modules=_CHECKPOINT_TYPES))
@@ -239,17 +249,10 @@ class ResearchWorkflow:
         graph = StateGraph(AgentState, input_schema=StudioInput if self.studio_mode else None)
         if self.studio_mode:
             graph.add_node("studio_entry", self._studio_entry)
-        graph.add_node("supervisor", self._supervisor)
-        graph.add_node("planner", self._planner)
-        graph.add_node("approval", self._approval)
-        graph.add_node("schedule_wave", self._schedule_wave)
-        graph.add_node("researcher", self._researcher)
-        graph.add_node("wave_join", self._wave_join)
-        graph.add_node("research_gate", self._research_gate)
-        graph.add_node("critic", self._critic)
-        graph.add_node("synthesizer", self._synthesizer)
-        graph.add_node("quality_gate", self._quality_gate)
-        graph.add_node("finalizer", self._finalizer)
+        for name in ("supervisor", "planner", "approval", "schedule_wave", "researcher",
+                     "wave_join", "research_gate", "critic", "synthesizer", "quality_gate",
+                     "finalizer"):
+            graph.add_node(name, self._durable_node(name, getattr(self, f"_{name}")))
 
         if self.studio_mode:
             graph.add_edge(START, "studio_entry")
@@ -304,6 +307,14 @@ class ResearchWorkflow:
         graph.add_edge("finalizer", END)
         return graph.compile(checkpointer=self.checkpointer)
 
+    def _durable_node(self, name: str, function):
+        if self.execution is None:
+            return function
+
+        async def execute(state: AgentState, config: RunnableConfig):
+            return await self.execution.journal_node(name, function, state, config)
+        return execute
+
     def _config(self, run_id: str) -> dict[str, Any]:
         return {
             "configurable": {"thread_id": run_id},
@@ -318,6 +329,7 @@ class ResearchWorkflow:
         query: str,
         auto_approve: bool = True,
         policy: RunPolicy | None = None,
+        retrieval_snapshot: dict[str, Any] | None = None,
     ) -> WorkflowExecution:
         resolved_policy = policy or RunPolicy()
         self._validate_policy_budget(resolved_policy)
@@ -326,6 +338,7 @@ class ResearchWorkflow:
             query=query,
             auto_approve=auto_approve,
             policy=resolved_policy,
+            retrieval_snapshot=retrieval_snapshot,
         )
         return await self._invoke(initial, run_id=run_id)
 
@@ -349,11 +362,13 @@ class ResearchWorkflow:
 
     @staticmethod
     def _initial_state(
-        *, run_id: str, query: str, auto_approve: bool, policy: RunPolicy
+        *, run_id: str, query: str, auto_approve: bool, policy: RunPolicy,
+        retrieval_snapshot: dict[str, Any] | None = None,
     ) -> AgentState:
         return {
             "run_id": run_id,
-            "query": query,
+            "query": str(redact_sensitive_data(query)),
+            "retrieval_snapshot": retrieval_snapshot,
             "auto_approve": auto_approve,
             "policy": policy,
             "started_at": datetime.now(UTC),
@@ -419,6 +434,7 @@ class ResearchWorkflow:
         run_id: str,
         action: ApprovalAction | str,
         edited_plan: ResearchPlan | Mapping[str, Any] | None = None,
+        recovery_resume: bool = False,
     ) -> WorkflowExecution:
         action_value = action.value if isinstance(action, ApprovalAction) else str(action)
         if action_value not in {item.value for item in ApprovalAction}:
@@ -444,11 +460,14 @@ class ResearchWorkflow:
         return await self._invoke(
             Command(resume={"action": action_value, "edited_plan": serialized}),
             run_id=run_id,
+            segment_kind_override="crash_resume" if recovery_resume else None,
         )
 
-    async def _invoke(self, graph_input: Any, *, run_id: str) -> WorkflowExecution:
+    async def _invoke(self, graph_input: Any, *, run_id: str,
+                      segment_kind_override: str | None = None) -> WorkflowExecution:
         config = self._config(run_id)
-        segment_kind = "approval_resume" if isinstance(graph_input, Command) else "initial"
+        segment_kind = segment_kind_override or ("approval_resume" if isinstance(graph_input, Command) else
+                        "crash_resume" if graph_input is None else "initial")
         async with trace_segment(
             atlasflow_run_id=run_id,
             name=f"atlasflow.workflow.{segment_kind}",
@@ -481,6 +500,9 @@ class ResearchWorkflow:
             )
             return WorkflowExecution(state=state, paused=paused, final=final)
 
+    async def continue_run(self, *, run_id: str) -> WorkflowExecution:
+        return await self._invoke(None, run_id=run_id)
+
     async def _emit(
         self,
         state: Mapping[str, Any],
@@ -498,7 +520,8 @@ class ResearchWorkflow:
         **data: Any,
     ) -> None:
         run_id = str(state["run_id"])
-        await self.event_sink(
+        sink = self.execution.emit if self.execution is not None else self.event_sink
+        await sink(
             run_id,
             RunEvent(
                 run_id=run_id,
@@ -550,6 +573,7 @@ class ResearchWorkflow:
                 capability_alternatives=alternatives,
                 user_query=question,
                 requires_fresh_data=bool(task and task.requires_fresh_data),
+                retrieval_snapshot=state.get("retrieval_snapshot"),
                 task_id=task_id,
                 plan_version=plan_version,
             )
@@ -897,7 +921,9 @@ class ResearchWorkflow:
                 "model_calls": decision_calls + tool_stage.model_calls,
                 "warnings": tool_stage.warnings,
             }
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
+            if isinstance(exc, ExecutionControlError):
+                raise
             if isinstance(exc, RequiredToolError) and exc.stage is not None:
                 tool_stage = exc.stage
             update = await self._fatal_update(
@@ -1193,7 +1219,9 @@ class ResearchWorkflow:
                             "evidence": tool_evidence,
                             "model_calls": calls + tool_model_calls,
                         }
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:
+                        if isinstance(exc, ExecutionControlError):
+                            raise
                         if isinstance(exc, RequiredToolError) and exc.stage is not None:
                             tool_records.extend(exc.stage.records)
                             tool_evidence.extend(exc.stage.evidence)
@@ -1484,7 +1512,9 @@ class ResearchWorkflow:
             )
             update["route_history"] = [route]
             return update
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
+            if isinstance(exc, ExecutionControlError):
+                raise
             if isinstance(exc, RequiredToolError) and exc.stage is not None:
                 tool_stage = exc.stage
             update = await self._fatal_update(
@@ -1611,7 +1641,9 @@ class ResearchWorkflow:
                 "model_calls": decision_calls + tool_stage.model_calls,
                 "warnings": tool_stage.warnings,
             }
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
+            if isinstance(exc, ExecutionControlError):
+                raise
             if isinstance(exc, RequiredToolError) and exc.stage is not None:
                 tool_stage = exc.stage
             update = await self._fatal_update(
@@ -1770,7 +1802,9 @@ class ResearchWorkflow:
             )
             update["route_history"] = [route]
             return update
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
+            if isinstance(exc, ExecutionControlError):
+                raise
             if isinstance(exc, RequiredToolError) and exc.stage is not None:
                 tool_stage = exc.stage
             update = await self._fatal_update(

@@ -17,6 +17,7 @@ from urllib.parse import urlencode
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from atlasflow.evaluation.budget import reserve_http_attempt
 from atlasflow.schemas import Evidence
 from atlasflow.tools.base import BaseTool, Capability, RiskLevel, ToolContext, ToolResult
 
@@ -486,6 +487,7 @@ class AmapRouteTool(BaseTool):
         data: Any = None
         for attempt in range(3):
             await self._limiter.wait()
+            await reserve_http_attempt("map", path)
             response = await client.get(path, params=params)
             if response.status_code == 429 and attempt < 2:
                 await asyncio.sleep(1 + attempt)

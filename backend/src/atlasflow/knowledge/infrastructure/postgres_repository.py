@@ -26,14 +26,17 @@ from atlasflow.knowledge.domain import (
     DocumentVersion,
     IndexGeneration,
     IngestionJob,
+    JobStage,
     JobStatus,
     KnowledgeChunk,
     KnowledgeDocument,
     KnowledgeFilter,
     KnowledgeSpace,
     KnowledgeSpaceVersion,
+    SearchSnapshot,
     SpaceBuild,
     SpaceDocumentState,
+    VersionStatus,
 )
 from atlasflow.knowledge.domain.build_validation import (
     BUSY_JOB_STATUSES,
@@ -44,7 +47,9 @@ from atlasflow.knowledge.domain.build_validation import (
     validate_build_sources,
     validate_build_targets,
 )
+from atlasflow.knowledge.domain.snapshots import check_snapshot_generation, make_snapshot
 from atlasflow.knowledge.infrastructure.memory_repository import _matches
+from atlasflow.providers.embedding_registry import validate_vectors
 
 T = TypeVar("T")
 metadata = MetaData()
@@ -758,6 +763,106 @@ class PostgresKnowledgeRepository:
             else None
         )
 
+    async def bind_ingestion_generation(self, space_id: str, candidate: IndexGeneration) -> IndexGeneration:
+        async with self.engine.begin() as connection:
+            space = await self._lock_space(connection, space_id)
+            ensure_no_build(space)
+            if space.active_generation_id:
+                current = await self._get_with_connection(connection, generations,
+                    space.active_generation_id, IndexGeneration)
+                if current is None:
+                    raise ValueError("active index generation is missing")
+                return current
+            if candidate.space_id != space_id or candidate.build_spec is None:
+                raise ValueError("invalid initial index generation")
+            now = datetime.now(UTC)
+            active = candidate.model_copy(update={"status": "active", "activated_at": now})
+            await self._insert_with_connection(connection, generations, active,
+                space_id=space_id, status=active.status)
+            changed = space.model_copy(update={
+                "active_generation_id": active.id, "active_version_id": None, "updated_at": now,
+            })
+            await connection.execute(update(spaces).where(spaces.c.id == space_id).values(
+                payload=changed.model_dump(mode="json"), active_generation_id=active.id))
+            return active
+
+    async def confirm_generation_spec(self, generation_id: str, request_hash: str, dimensions: int, actual_model: str | None = None) -> IndexGeneration:
+        async with self.engine.begin() as connection:
+            initial = await self._get_with_connection(connection, generations, generation_id, IndexGeneration)
+            if initial is None:
+                raise KeyError(generation_id)
+            await self._lock_space(connection, initial.space_id)
+            generation = await self._get_with_connection(connection, generations,
+                generation_id, IndexGeneration, lock=True)
+            spec = generation.build_spec
+            if spec is None or spec.request_hash != request_hash or generation.status == "retired":
+                raise ValueError("INDEX_SPEC_MISMATCH: generation request identity changed")
+            if (spec.embedding.observed_dimensions not in {None, dimensions}
+                    or spec.embedding.requested_dimensions not in {None, dimensions}):
+                raise ValueError("EMBEDDING_DIMENSION_MISMATCH: generation dimension is already sealed")
+            if spec.embedding.actual_model and actual_model and spec.embedding.actual_model != actual_model:
+                raise ValueError("EMBEDDING_ACTUAL_MODEL_MISMATCH: generation model is already sealed")
+            resolved = spec.model_copy(update={
+                "embedding": spec.embedding.model_copy(update={"observed_dimensions": dimensions,
+                    "actual_model": actual_model if generation.identity_status == "declared" else spec.embedding.actual_model}),
+            })
+            confirmed = generation.model_copy(update={"identity_status": "verified", "build_spec": resolved})
+            await connection.execute(update(generations).where(generations.c.id == generation_id).values(
+                payload=confirmed.model_dump(mode="json")))
+            return confirmed
+
+    async def capture_search_snapshot(self, space_id: str, version_id: str | None = None) -> SearchSnapshot:
+        async with self.engine.connect() as connection:
+            await connection.execution_options(isolation_level="REPEATABLE READ")
+            async with connection.begin():
+                space = await self._get_with_connection(connection, spaces, space_id, KnowledgeSpace)
+                if space is None:
+                    raise KeyError(space_id)
+                version = (await self._get_with_connection(connection, space_versions,
+                    version_id, KnowledgeSpaceVersion)) if version_id else None
+                if version_id and version is None:
+                    raise KeyError("knowledge space version not found")
+                generation_id = version.generation_id if version else space.active_generation_id
+                generation = (await self._get_with_connection(connection, generations,
+                    generation_id, IndexGeneration)) if generation_id else None
+                rows = (await connection.execute(select(documents.c.payload).where(
+                    documents.c.space_id == space_id))).all()
+                return make_snapshot(space,
+                    [KnowledgeDocument.model_validate(row.payload) for row in rows], generation, version)
+
+    async def list_snapshot_chunks(self, snapshot: SearchSnapshot, filters: KnowledgeFilter | None = None) -> list[KnowledgeChunk]:
+        async with self.engine.connect() as connection:
+            await connection.execution_options(isolation_level="REPEATABLE READ")
+            async with connection.begin():
+                generation = (await self._get_with_connection(connection, generations,
+                    snapshot.generation_id, IndexGeneration)) if snapshot.generation_id else None
+                check_snapshot_generation(snapshot, generation)
+                selected = {doc_id: state.version_id for doc_id, state in snapshot.documents.items()
+                            if state.status == "active" and state.version_id is not None}
+                if not selected:
+                    return []
+                version_rows = (await connection.execute(select(versions.c.payload).where(
+                    versions.c.id.in_(list(selected.values()))))).all()
+                found = {item.id: item for item in (
+                    DocumentVersion.model_validate(row.payload) for row in version_rows)}
+                if any(version_id not in found or found[version_id].document_id != doc_id
+                       or found[version_id].status != "ready" for doc_id, version_id in selected.items()):
+                    raise ValueError("SEARCH_SNAPSHOT_DATA_MISSING: pinned document version was removed")
+                rows = (await connection.execute(select(chunks.c.payload, chunks.c.embedding)
+                    .select_from(chunks.join(documents, chunks.c.document_id == documents.c.id))
+                    .where(documents.c.space_id == snapshot.space_id,
+                        chunks.c.version_id.in_(list(selected.values())),
+                        chunks.c.generation_id == snapshot.generation_id,
+                        chunks.c.chunk_kind == "child"))).all()
+                values = [_chunk_from_row(row) for row in rows]
+                covered = {(item.document_id, item.version_id) for item in values}
+                if not set(selected.items()).issubset(covered):
+                    raise ValueError("SEARCH_SNAPSHOT_DATA_MISSING: pinned child index was removed")
+                if snapshot.identity_status == "verified":
+                    validate_vectors([item.embedding or [] for item in values], len(values),
+                                     snapshot.build_spec.embedding.observed_dimensions)
+                return [item for item in values if _matches(item, filters)]
+
     async def activate_generation(self, generation_id: str) -> IndexGeneration:
         selected = await self.get_generation(generation_id)
         if not selected:
@@ -780,6 +885,19 @@ class PostgresKnowledgeRepository:
         self, version_id: str, values: list[KnowledgeChunk]
     ) -> None:
         async with self.engine.begin() as connection:
+            version = await self._get_with_connection(connection, versions, version_id, DocumentVersion)
+            if version and version.build_request_hash:
+                document = await self._get_with_connection(connection, documents, version.document_id, KnowledgeDocument)
+                await self._lock_space(connection, document.space_id)
+                for generation_id in {chunk.generation_id for chunk in values}:
+                    generation = await self._get_with_connection(connection, generations, generation_id, IndexGeneration)
+                    if (generation is None or generation.build_spec is None
+                            or generation.build_spec.request_hash != version.build_request_hash):
+                        raise ValueError("INDEX_SPEC_MISMATCH: refusing to mix index identities")
+                    children = [chunk.embedding or [] for chunk in values
+                                if chunk.generation_id == generation_id and chunk.chunk_kind == "child"]
+                    if children:
+                        validate_vectors(children, len(children), generation.build_spec.embedding.observed_dimensions)
             await connection.execute(
                 delete(chunks).where(chunks.c.version_id == version_id)
             )
@@ -871,6 +989,13 @@ class PostgresKnowledgeRepository:
             ensure_job_allowed(space, value)
             if value.space_build_id:
                 raise ValueError("space build jobs must be created in the build transaction")
+            if value.generation_id and value.build_request_hash and value.status != JobStatus.FAILED_TERMINAL:
+                generation = await self._get_with_connection(connection, generations,
+                    value.generation_id, IndexGeneration)
+                if (space.active_generation_id != value.generation_id or generation is None
+                        or generation.build_spec is None
+                        or generation.build_spec.request_hash != value.build_request_hash):
+                    raise ValueError("INDEX_SPEC_MISMATCH: space changed while ingestion was queued")
             await self._insert_with_connection(
                 connection, jobs, value, space_id=value.space_id,
                 document_id=value.document_id, status=value.status.value,
@@ -883,10 +1008,12 @@ class PostgresKnowledgeRepository:
             latest = await self._get_with_connection(connection, jobs, value.id, IngestionJob, lock=True)
             if latest is None:
                 raise KeyError(f"knowledge job not found: {value.id}")
-            if (value.space_id, value.document_id, value.version_id, value.space_build_id, value.generation_id) != (
-                latest.space_id, latest.document_id, latest.version_id, latest.space_build_id, latest.generation_id
+            if (value.space_id, value.document_id, value.version_id, value.space_build_id, value.generation_id, value.build_request_hash) != (
+                latest.space_id, latest.document_id, latest.version_id, latest.space_build_id, latest.generation_id, latest.build_request_hash
             ):
                 raise ValueError("ingestion job identity cannot change")
+            if latest.status == JobStatus.CANCELLED and value.status != JobStatus.CANCELLED:
+                raise ValueError("cancelled ingestion job cannot resume")
             ensure_job_allowed(space, value)
             if latest.status in {JobStatus.COMPLETED, JobStatus.CANCELLED} and value.status != latest.status:
                 raise ValueError("terminal ingestion job cannot be restarted")
@@ -897,6 +1024,90 @@ class PostgresKnowledgeRepository:
 
     async def get_job(self, job_id: str) -> IngestionJob | None:
         return await self._get(jobs, job_id, IngestionJob)
+
+    async def cancel_job(self, job_id: str) -> IngestionJob:
+        async with self.engine.begin() as connection:
+            initial = await self._get_with_connection(connection, jobs, job_id, IngestionJob)
+            if initial is None:
+                raise KeyError(job_id)
+            await self._lock_space(connection, initial.space_id)
+            job = await self._get_with_connection(connection, jobs, job_id, IngestionJob, lock=True)
+            if job.space_build_id:
+                raise ValueError("cancel the whole space build instead of one build job")
+            if job.status == JobStatus.CANCELLED:
+                return job
+            if job.status not in {JobStatus.QUEUED, JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL}:
+                raise ValueError("only queued or failed independent ingestion jobs can be cancelled")
+            cancelled = job.model_copy(update={
+                "status": JobStatus.CANCELLED, "retryable": False, "updated_at": datetime.now(UTC),
+            })
+            await connection.execute(update(jobs).where(jobs.c.id == job_id).values(
+                status=cancelled.status.value, payload=cancelled.model_dump(mode="json")))
+            return cancelled
+
+    async def repair_legacy_running_job(self, job_id: str) -> IngestionJob:
+        async with self.engine.begin() as connection:
+            initial = await self._get_with_connection(connection, jobs, job_id, IngestionJob)
+            if initial is None:
+                raise KeyError(job_id)
+            await self._lock_space(connection, initial.space_id)
+            job = await self._get_with_connection(connection, jobs, job_id, IngestionJob, lock=True)
+            if job.status != JobStatus.RUNNING or (job.generation_id and job.build_request_hash):
+                raise ValueError("only an unbound legacy running job can be repaired")
+            repaired = job.model_copy(update={
+                "status": JobStatus.FAILED_TERMINAL, "retryable": False,
+                "error_code": "LegacyJobUnbound",
+                "error_message": "Old workers were explicitly declared stopped; cancel and resubmit this unbound legacy job",
+                "updated_at": datetime.now(UTC),
+            })
+            await connection.execute(update(jobs).where(jobs.c.id == job_id).values(
+                status=repaired.status.value, payload=repaired.model_dump(mode="json")))
+            return repaired
+
+    async def complete_ingestion_job(self, job_id: str) -> IngestionJob:
+        async with self.engine.begin() as connection:
+            initial = await self._get_with_connection(connection, jobs, job_id, IngestionJob)
+            if initial is None:
+                raise KeyError(job_id)
+            space = await self._lock_space(connection, initial.space_id)
+            job = await self._get_with_connection(connection, jobs, job_id, IngestionJob, lock=True)
+            if job.status == JobStatus.COMPLETED:
+                return job
+            ensure_job_allowed(space, job)
+            generation = await self._get_with_connection(connection, generations, job.generation_id, IndexGeneration)
+            version = await self._get_with_connection(connection, versions, job.version_id, DocumentVersion, lock=True)
+            document = await self._get_with_connection(connection, documents, job.document_id, KnowledgeDocument, lock=True)
+            if (job.status != JobStatus.RUNNING or generation is None
+                    or generation.identity_status != "verified" or generation.build_spec is None
+                    or generation.build_spec.request_hash != job.build_request_hash
+                    or version.build_request_hash != job.build_request_hash
+                    or (not job.space_build_id and space.active_generation_id != generation.id)):
+                raise ValueError("INDEX_SPEC_MISMATCH: ingestion cannot commit to its bound generation")
+            rows = (await connection.execute(select(chunks.c.embedding).where(
+                chunks.c.version_id == version.id, chunks.c.generation_id == generation.id,
+                chunks.c.chunk_kind == "child"))).all()
+            vectors = [[float(value) for value in row.embedding] if row.embedding is not None else []
+                       for row in rows]
+            validate_vectors(vectors, len(vectors), generation.build_spec.embedding.observed_dimensions)
+            now = datetime.now(UTC)
+            ready = version.model_copy(update={"status": VersionStatus.READY, "indexed_at": now})
+            await connection.execute(update(versions).where(versions.c.id == version.id).values(
+                payload=ready.model_dump(mode="json")))
+            if not job.space_build_id:
+                current = document.model_copy(update={
+                    "current_version_id": version.id, "status": DocumentStatus.ACTIVE, "updated_at": now,
+                })
+                await connection.execute(update(documents).where(documents.c.id == document.id).values(
+                    current_version_id=version.id, status=current.status.value,
+                    payload=current.model_dump(mode="json")))
+                await self._clear_active_space_version(connection, space.id)
+            completed = IngestionJob.model_validate({**job.model_dump(),
+                "status": JobStatus.COMPLETED, "stage": JobStage.READY, "progress": 1,
+                "error_code": None, "error_message": None, "retryable": False, "updated_at": now,
+            })
+            await connection.execute(update(jobs).where(jobs.c.id == job_id).values(
+                status=completed.status.value, payload=completed.model_dump(mode="json")))
+            return completed
 
     async def list_jobs(self, space_id: str | None = None) -> list[IngestionJob]:
         condition = jobs.c.space_id == space_id if space_id else None

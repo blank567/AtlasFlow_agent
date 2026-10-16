@@ -12,16 +12,18 @@ from uuid import uuid4
 
 import pytest
 from atlasflow.knowledge.application import KnowledgePlatform
-from atlasflow.knowledge.domain import KnowledgeDocument, RetrievalTuning
+from atlasflow.knowledge.application.legacy_repair import repair_legacy_jobs
+from atlasflow.knowledge.domain import IndexGeneration, KnowledgeDocument, RetrievalTuning
 from atlasflow.knowledge.infrastructure import MemoryBlobStore
 from atlasflow.knowledge.infrastructure.postgres_repository import (
     PostgresKnowledgeRepository,
     chunks,
+    jobs,
     metadata,
 )
 from atlasflow.knowledge.retrieval import RetrievalService
 from atlasflow.providers import RerankResult
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 
@@ -65,6 +67,10 @@ async def test_postgres_staging_failure_atomic_release_rollback_and_cancel() -> 
             job = await platform.submit(space="pg-space", title=mime, mime_type=mime, content=content)
             assert (await platform.process_job(job.id)).status == "completed"
         base = await platform.create_space_version("pg-space", "Original PostgreSQL space")
+        pinned = await platform.capture_search_snapshot("pg-space", base.id)
+        assert pinned.identity_status == "verified"
+        assert pinned.build_spec.embedding.observed_dimensions == 2
+        assert pinned.documents
 
         async def check(snapshot):
             result = await platform.search("evidence", space="pg-space", result_limit=5,
@@ -103,6 +109,11 @@ async def test_postgres_staging_failure_atomic_release_rollback_and_cancel() -> 
         assert first.id == second.id
         assert len(await platform.list_space_versions("pg-space")) == 2
         await check(first)
+        historical = await platform.search("evidence", space="pg-space", snapshot=pinned,
+            tuning=RetrievalTuning(vector_weight=0, rerank_enabled=False))
+        assert historical.trace.generation_id == base.generation_id
+        assert historical.trace.manifest_hash == pinned.manifest_hash
+        assert (await platform.get_space("pg-space")).active_version_id == first.id
         await platform.activate_space_version("pg-space", base.id)
         await check(base)
         assert (await platform.publish_space_build("pg-space", build.id)).id == first.id
@@ -145,6 +156,26 @@ async def test_postgres_staging_failure_atomic_release_rollback_and_cancel() -> 
             document.id: document for document in await platform.list_documents("pg-space")
         } == before_documents
         assert await index_rows() == before_index
+        # Historical read bindings survive snapshot soft deletion, and do not
+        # consult active pointers or the deleted manifest row again.
+        readonly = await platform.search("evidence", space="pg-space", snapshot=pinned,
+            tuning=RetrievalTuning(vector_weight=0, rerank_enabled=False))
+        assert readonly.trace.generation_id == base.generation_id
+
+        # Concurrent first-result confirmation can seal a dimension only once.
+        declared = await repository.create_generation(IndexGeneration(
+            space_id=base.space_id, embedding_profile="test", retrieval_profile="test",
+            identity_status="declared", build_spec=platform.current_build_spec(),
+        ))
+        sealed = await asyncio.gather(
+            repository.confirm_generation_spec(declared.id, declared.build_spec.request_hash, 2),
+            repository.confirm_generation_spec(declared.id, declared.build_spec.request_hash, 3),
+            return_exceptions=True,
+        )
+        assert sum(isinstance(value, ValueError) for value in sealed) == 1
+        confirmed = await repository.get_generation(declared.id)
+        assert confirmed.identity_status == "verified"
+        assert confirmed.build_spec.embedding.observed_dimensions in {2, 3}
         assert await repository.count_chunks() == len(before_index)
         await check(base)
 
@@ -199,6 +230,47 @@ async def test_postgres_staging_failure_atomic_release_rollback_and_cancel() -> 
         assert active is not None and active.deleted_at is None
         await check(active)
         assert await index_rows() == before_index
+        pending = await platform.submit(space="pg-space", title="Retained legacy pending source",
+            content=b"retained legacy raw bytes", mime_type="text/plain")
+        source_version = await repository.get_version(pending.version_id)
+        running = await repository.claim_job(pending.id)
+        with pytest.raises(ValueError, match="queued or failed"):
+            await platform.cancel_job(running.id)
+        legacy = running.model_copy(update={"generation_id": None, "build_request_hash": None})
+        # Simulate pre-upgrade JSON only in this UUID-scoped disposable schema.
+        async with repository.engine.begin() as connection:
+            await connection.execute(update(jobs).where(jobs.c.id == legacy.id).values(
+                payload=legacy.model_dump(mode="json")))
+        preview = await repair_legacy_jobs(repository, "pg-space")
+        assert preview["dry_run"] and len(preview["jobs"]) == 1
+        assert (await repository.get_job(legacy.id)).status == "running"
+        await repair_legacy_jobs(repository, "pg-space", confirm_no_workers=True)
+        assert (await platform.cancel_job(legacy.id)).status == "cancelled"
+        assert await repository.get_version(source_version.id) == source_version
+        assert await platform.blob_store.get(source_version.blob_key) == b"retained legacy raw bytes"
+        assert await index_rows() == before_index
+        original = next(document for document in await platform.list_documents("pg-space")
+                        if document.current_version_id is not None and document.status == "active")
+        queued = await platform.submit(space="pg-space", title=original.title,
+            source_id=original.source_id, content=b"changed evidence for atomic commit", mime_type="text/plain")
+        original_clear = repository._clear_active_space_version
+
+        async def fail_after_document_update(connection, space_id):
+            raise RuntimeError("fault after version and document writes but before job completion")
+
+        repository._clear_active_space_version = fail_after_document_update
+        try:
+            failed = await platform.process_job(queued.id)
+            assert failed.status == "failed_terminal"
+            # The transaction rolled back both earlier writes; the published
+            # version remains READY, not the failed replacement's pointer.
+            assert (await repository.get_document(original.id)).current_version_id == original.current_version_id
+            assert (await repository.get_version(original.current_version_id)).status == "ready"
+        finally:
+            repository._clear_active_space_version = original_clear
+        await platform.retry_job(queued.id)
+        assert (await platform.process_job(queued.id)).status == "completed"
+        assert (await repository.get_document(original.id)).current_version_id == queued.version_id
     finally:
         await platform.close()
         async with original_engine.begin() as connection:

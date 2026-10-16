@@ -23,6 +23,7 @@ from atlasflow.agents.contracts import (
     validate_task_capabilities,
 )
 from atlasflow.agents.report_skill import academic_report_instructions
+from atlasflow.execution.journal import durable_model_stage
 from atlasflow.observability import traced
 from atlasflow.providers.openrouter import OpenRouterClient, ProviderRequestError
 
@@ -302,6 +303,7 @@ class OpenRouterModelGateway:
         self.client = client
         self.model = model
 
+    @durable_model_stage("create_plan")
     @traced(name="model.openrouter.plan", run_type="llm")
     async def create_plan(
         self,
@@ -412,6 +414,7 @@ class OpenRouterModelGateway:
             validator=validate,
         )
 
+    @durable_model_stage("analyze_task")
     @traced(name="model.openrouter.research", run_type="llm")
     async def analyze_task(
         self,
@@ -524,6 +527,7 @@ class OpenRouterModelGateway:
             update={"duration_ms": max(0, round((perf_counter() - started_at) * 1000))}
         )
 
+    @durable_model_stage("review_research")
     @traced(name="model.openrouter.research-review", run_type="llm")
     async def review_research(
         self,
@@ -703,6 +707,7 @@ class OpenRouterModelGateway:
             validator=validate,
         )
 
+    @durable_model_stage("synthesize_report")
     @traced(name="model.openrouter.synthesize", run_type="llm")
     async def synthesize_report(
         self,
@@ -747,6 +752,7 @@ class OpenRouterModelGateway:
             based_on_task_ids=task_ids(results),
         )
 
+    @durable_model_stage("evaluate_report")
     @traced(name="model.openrouter.quality", run_type="llm")
     async def evaluate_report(
         self,
@@ -858,6 +864,7 @@ class OpenRouterModelGateway:
             reasoning_effort="minimal",
         )
 
+    @durable_model_stage("revise_report")
     @traced(name="model.openrouter.revise", run_type="llm")
     async def revise_report(
         self,

@@ -8,6 +8,7 @@ const STATUS_LABELS: Record<string, string> = {
   pending: "等待中",
   running: "运行中",
   waiting_approval: "等待审批",
+  interrupted: "执行中断",
   completed: "已完成",
   completed_with_warnings: "完成但有警告",
   failed: "失败",

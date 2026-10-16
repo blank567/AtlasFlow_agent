@@ -1,0 +1,38 @@
+dialog.evaluationDetailDialog {
+  position: fixed;
+  width: min(1220px, calc(100vw - 48px));
+  max-width: none;
+  max-height: calc(100dvh - 48px);
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 22%);
+}
+dialog.evaluationDetailDialog[open] { display: flex; flex-direction: column; }
+.evaluationDetailDialog::backdrop { background: rgb(12 24 30 / 42%); }
+.evaluationDetailHeader {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 20px;
+  flex: 0 0 auto; padding: 20px 24px; border-bottom: 1px solid var(--line);
+}
+.evaluationDetailHeader h2 { margin: 0; font-size: 18px; font-weight: 640; }
+.evaluationDetailHeader p { margin: 5px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.evaluationDetailHeader button { flex: 0 0 auto; }
+.evaluationV2.evaluationDetailContent { display: block; overflow-y: auto; overscroll-behavior: contain; min-height: 0; padding: 24px; }
+.evaluationDetailContent .experimentCaseDetail { margin: 0; border-top: 0; padding-top: 0; }
+.evaluationDetailContent .experimentStages { flex-wrap: wrap; gap: 12px 22px; }
+.evaluationDetailContent :is(.experimentCaseDetail, .experimentGold, .experimentRankings, .experimentMetricEvidence article) { min-width: 0; overflow-wrap: anywhere; }
+.evaluationDetailContent .experimentMetricEvidence { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.evaluationDetailContent :is(.evalTableScroll, pre) { max-width: 100%; overflow-x: auto; }
+.evaluationDetailDialog :focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+@media (max-width: 700px) {
+  dialog.evaluationDetailDialog { width: calc(100vw - 24px); max-height: calc(100dvh - 24px); border-radius: 10px; }
+  .evaluationDetailHeader { padding: 17px; gap: 12px; }
+  .evaluationDetailHeader h2 { font-size: 16px; }
+  .evaluationDetailHeader .secondaryButton { min-width: auto; padding-inline: 12px; }
+  .evaluationV2.evaluationDetailContent { padding: 17px; }
+  .evaluationDetailContent .experimentMetricEvidence { grid-template-columns: 1fr; }
+}

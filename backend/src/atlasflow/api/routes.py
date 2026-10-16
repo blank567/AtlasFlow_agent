@@ -14,6 +14,11 @@ from fastapi.responses import Response, StreamingResponse
 from atlasflow import __version__
 from atlasflow.agents.contracts import RunPolicy
 from atlasflow.bootstrap import Container
+from atlasflow.execution.contracts import (
+    ExecutionControlError,
+    PersistenceUnavailable,
+    ResumeRunRequest,
+)
 from atlasflow.observability import (
     ObservabilityMeta,
     check_langsmith_connection,
@@ -100,11 +105,11 @@ async def ingest_document(
 @router.post("/runs", response_model=RunRecord, status_code=status.HTTP_202_ACCEPTED)
 async def create_run(payload: CreateRunRequest, request: Request) -> RunRecord:
     await _validate_knowledge_space(request, payload.policy)
-    return await container_from(request).run_service.create(
-        payload.query,
-        auto_approve=payload.auto_approve,
-        policy=payload.policy,
-    )
+    try:
+        return await container_from(request).run_service.create(
+            payload.query, auto_approve=payload.auto_approve, policy=payload.policy)
+    except ExecutionControlError as exc:
+        raise _execution_error(exc) from exc
 
 
 @router.get("/runs", response_model=RunListResponse)
@@ -182,9 +187,31 @@ async def check_langsmith() -> LangSmithSettingsStatus:
 @router.get("/runs/{run_id}", response_model=RunRecord)
 async def get_run(run_id: str, request: Request) -> RunRecord:
     try:
-        return await container_from(request).store.get(run_id)
+        container = container_from(request)
+        run = await container.store.get(run_id)
+        if container.run_service.execution is not None:
+            run = run.model_copy(update={"recovery": await container.run_service.inspect_recovery(run_id)})
+        return run
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Run not found") from exc
+    except ExecutionControlError as exc:
+        raise _execution_error(exc) from exc
+
+
+def _execution_error(exc: ExecutionControlError) -> HTTPException:
+    return HTTPException(status_code=503 if isinstance(exc, PersistenceUnavailable) else 409,
+                         detail=str(exc))
+
+
+@router.post("/runs/{run_id}/resume", response_model=RunRecord,
+             status_code=status.HTTP_202_ACCEPTED)
+async def resume_run(run_id: str, payload: ResumeRunRequest, request: Request) -> RunRecord:
+    try:
+        return await container_from(request).run_service.resume(run_id, payload)
+    except RunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Run not found") from exc
+    except ExecutionControlError as exc:
+        raise _execution_error(exc) from exc
 
 
 @router.post(
@@ -215,6 +242,8 @@ async def rerun(
         )
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Run not found") from exc
+    except ExecutionControlError as exc:
+        raise _execution_error(exc) from exc
 
 
 @router.post(
@@ -222,13 +251,16 @@ async def rerun(
     response_model=RunRecord,
     status_code=status.HTTP_202_ACCEPTED,
 )
-async def cancel_run(run_id: str, request: Request) -> RunRecord:
+async def cancel_run(run_id: str, request: Request,
+                     request_id: str | None = Query(default=None, min_length=1, max_length=128)) -> RunRecord:
     try:
-        return await container_from(request).run_service.cancel(run_id)
+        return await container_from(request).run_service.cancel(run_id, request_id=request_id)
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Run not found") from exc
     except InvalidRunStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ExecutionControlError as exc:
+        raise _execution_error(exc) from exc
 
 
 @router.delete("/runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -247,6 +279,8 @@ async def delete_run(
         raise HTTPException(status_code=404, detail="Run not found") from exc
     except InvalidRunStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ExecutionControlError as exc:
+        raise _execution_error(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -264,6 +298,8 @@ async def resolve_run_approval(
         raise HTTPException(status_code=404, detail="Run not found") from exc
     except InvalidRunStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ExecutionControlError as exc:
+        raise _execution_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

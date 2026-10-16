@@ -79,6 +79,11 @@ def validate_build_targets(
         raise ValueError("space build generation does not belong to the target space")
     if generation.status not in {"building", "validating"}:
         raise ValueError("space build requires an unpublished index generation")
+    if build.build_request_hash:
+        if generation.build_spec is None or generation.build_spec.request_hash != build.build_request_hash:
+            raise ValueError("space build identity differs from its generation")
+        if publishing and generation.identity_status != "verified":
+            raise ValueError("space build generation identity is not verified")
     active = {
         document_id: state.version_id for document_id, state in build.documents.items()
         if state.status == DocumentStatus.ACTIVE
@@ -106,6 +111,8 @@ def validate_build_targets(
             build.parser_version, build.chunker_version
         ):
             raise ValueError("space build document pipelines are inconsistent")
+        if build.build_request_hash and version.build_request_hash != build.build_request_hash:
+            raise ValueError("space build document identity is inconsistent")
         expected = VersionStatus.READY if publishing else VersionStatus.PENDING
         if version.status != expected:
             raise ValueError(f"space build document version must be {expected.value}")
@@ -116,6 +123,8 @@ def validate_build_targets(
             or job.generation_id != generation.id
         ):
             raise ValueError("space build job belongs to a different build or generation")
+        if build.build_request_hash and job.build_request_hash != build.build_request_hash:
+            raise ValueError("space build job identity is inconsistent")
         expected_job = JobStatus.COMPLETED if publishing else JobStatus.QUEUED
         if job.status != expected_job:
             raise ValueError(f"space build requires all jobs to be {expected_job.value}")

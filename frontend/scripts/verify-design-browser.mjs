@@ -80,6 +80,7 @@ function fixture(request) {
   if (route === "/runs") return { body: { items: runs, total: runs.length, page: 1, page_size: 10, pages: 1 } };
   if (route.startsWith("/runs/")) return { body: runs.find((item) => item.id === route.split("/")[2]) ?? runBase };
   if (route === "/knowledge/spaces") return { body: [space] };
+  if (route.endsWith("/snapshot")) return { body: { schema_version: "search-snapshot-v1", space_id: space.id, space_slug: space.slug, space_version_id: space.active_version_id, generation_id: space.active_generation_id, identity_status: "verified", manifest_hash: "f".repeat(64), documents: Object.fromEntries(documents.map(doc => [doc.id, { version_id: doc.current_version_id, status: doc.status }])), build_spec: { parser_version: "structured-parser-v3", chunker_version: "parent-child-v2", child_tokens: 350, parent_tokens: 1200, embedding: { model: "qa-fixture-embedding", observed_dimensions: 16 } } } };
   if (route.endsWith("/documents")) return { body: documents };
   if (route.endsWith("/versions")) return { body: versions };
   if (route.endsWith("/builds")) return { body: [] };

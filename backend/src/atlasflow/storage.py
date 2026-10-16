@@ -29,15 +29,31 @@ class SQLiteRunStore:
     multi-process writer support.
     """
 
-    def __init__(self, database_path: str | Path) -> None:
+    def __init__(self, database_path: str | Path, *, recover_interrupted: bool = True,
+                 defer_open: bool = False) -> None:
         raw_path = str(database_path)
         self.database_path = raw_path
-        if raw_path != ":memory:":
-            path = Path(raw_path).expanduser().resolve()
+        self._recover_on_open = recover_interrupted
+        self.__connection: sqlite3.Connection | None = None
+        self._lock = asyncio.Lock()
+        if not defer_open:
+            self._open_sync()
+
+    @property
+    def _connection(self) -> sqlite3.Connection:
+        if self.__connection is None:
+            raise RuntimeError("SQLite Run store has not been opened")
+        return self.__connection
+
+    def _open_sync(self) -> None:
+        if self.__connection is not None:
+            return
+        if self.database_path != ":memory:":
+            path = Path(self.database_path).expanduser().resolve()
             path.parent.mkdir(parents=True, exist_ok=True)
             self.database_path = str(path)
 
-        self._connection = sqlite3.connect(
+        self.__connection = sqlite3.connect(
             self.database_path,
             check_same_thread=False,
         )
@@ -46,9 +62,28 @@ class SQLiteRunStore:
         self._connection.execute("PRAGMA busy_timeout = 5000")
         if self.database_path != ":memory:":
             self._connection.execute("PRAGMA journal_mode = WAL")
-        self._lock = asyncio.Lock()
         self._initialize_schema()
-        self._recover_interrupted_runs()
+        if self._recover_on_open:
+            self._recover_interrupted_runs()
+
+    async def open(self) -> None:
+        async with self._lock:
+            self._open_sync()
+
+    async def apply_outbox(self, payload: dict[str, Any], patch: dict[str, Any]) -> None:
+        """Receipt/event and projection patch commit together, once per event UUID."""
+        event = RunEvent.model_validate(payload)
+        async with self._lock:
+            with self._connection:
+                duplicate = self._connection.execute(
+                    "SELECT 1 FROM run_events WHERE event_id = ?", (event.event_id,)).fetchone()
+                if duplicate is not None:
+                    return
+                record = self._get_sync(event.run_id)
+                updated = self._validated_update(record, **patch)
+                self._insert_event_sync(event.model_copy(update={
+                    "sequence": self._next_sequence_sync(event.run_id)}))
+                self._update_projection_sync(updated)
 
     def _initialize_schema(self) -> None:
         with self._connection:
@@ -410,7 +445,9 @@ class SQLiteRunStore:
 
     async def close(self) -> None:
         async with self._lock:
-            self._connection.close()
+            if self.__connection is not None:
+                self.__connection.close()
+                self.__connection = None
 
     @property
     def size_bytes(self) -> int:

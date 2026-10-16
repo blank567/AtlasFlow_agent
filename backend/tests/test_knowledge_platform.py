@@ -321,7 +321,8 @@ async def test_space_versions_restore_every_document_and_hide_later_additions() 
 
     next_generation = await platform.repository.create_generation(
         IndexGeneration(
-            space_id=first.space_id, embedding_profile="new", retrieval_profile="new"
+            space_id=first.space_id, embedding_profile="new", retrieval_profile="new",
+            identity_status="declared", build_spec=platform.current_build_spec(),
         )
     )
     await platform.repository.activate_generation(next_generation.id)

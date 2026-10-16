@@ -1,0 +1,756 @@
+{
+  "version": "1",
+  "space": "llm-engineering-v1",
+  "corpus_manifest_hash": "1c29611a67037ed8501d55959426ef84e4e7551b7f2d7a07164004844d451c19",
+  "source_content_hashes": {
+    "llm-survey-2026": "05994e07e1e1f39414d358e5661527523e16b347c20ced53b0b9cdeb2cfb3cff",
+    "attention-is-all-you-need": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+    "chinchilla": "3fd3632a8ef48171bd25282990221d49535d75356192f068b3b2ebe08f2aedd4",
+    "instructgpt": "c1984bb50a5b90fddb895fdc3a0f72e5bc977148c9f63ef6040cbe7a3e1f0d98",
+    "lora": "e9a0d3128767db616085dc0f4e6e455e672e89af823e8ed1282793682787395a",
+    "flashattention": "ca7f9fda10b90fc05dd291a3accc85e9c1a4a860b99b31928dab03ed3fcb14e4",
+    "pagedattention": "55b3b324d779a67c59dac2519445e3b07c14e6ff5c656fadb47a3d7b5997469e",
+    "rag-survey": "396a0fadeb4cd40f5c8ccc36b73a0815f6cb4d7f6bfa53b6c48c1f9aba7c7e02",
+    "react": "f285b0971ae4a790e402fb93966bed3adde2cf0a04977d08b2b40d6ab0cace69",
+    "multi-agent-survey": "d3410856f2b8629ab7365af3bd62fe8291b1a595ec954f1feb859a2688c7179c",
+    "qwen2.5-report": "73b3292bead3ac8896679d3ac8be87439756faf356566cbda3ccc8a3dc7d79d3",
+    "deepseek-v3-report": "812a3fd645c80725354de9d831a6785503007a60681461407f64e97305fa9330",
+    "transformers-kv-cache": "46c21ebd32b58c7eb896abb436097a8111260511449ad8c1921e9d7d842f0000",
+    "transformers-cache-explanation": "7191ad30202c4dad646065807da67ab9ab1d9d32b559050c483256138cb7d3b2",
+    "transformers-optimization": "db5121e61dea2eb820d1e19de84890af2c08dface875c31e7929f15bf08dff24",
+    "transformers-continuous-batching": "d23bd1a51950b4b016bb74e9462c84c1fbf271a1bf2e9c63f6fdb63da8769eef",
+    "microsoft-llmwiki-readme": "8c5cc5b33bdcd36198153ba9a3fee63eb1ba6855ed2ce3327a860b77a2f7bc93",
+    "microsoft-llmwiki-architecture": "0b0f6d59bed782983b595de16299757966ec3b15f01b39a5bfe4ed33b07c3b28"
+  },
+  "dataset_id": "llm-rag-v1",
+  "name": "LLM知识检索基准（40题）",
+  "cases": [
+    {
+      "case_id": "R01",
+      "kind": "rag",
+      "query": "Transformer为什么不依赖循环网络和卷积？",
+      "tags": [
+        "zh",
+        "fundamentals"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "attention-is-all-you-need",
+          "content_hash": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/attention-is-all-you-need.pdf",
+          "anchor": "dispensing with recurrence and convolutions entirely",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R02",
+      "kind": "rag",
+      "query": "Which two components do sequence transduction models commonly include?",
+      "tags": [
+        "en",
+        "fundamentals"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "attention-is-all-you-need",
+          "content_hash": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/attention-is-all-you-need.pdf",
+          "anchor": "an encoder and a decoder",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R03",
+      "kind": "rag",
+      "query": "Chinchilla建议模型规模翻倍时训练Token如何变化？",
+      "tags": [
+        "zh",
+        "training"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "chinchilla",
+          "content_hash": "3fd3632a8ef48171bd25282990221d49535d75356192f068b3b2ebe08f2aedd4",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/chinchilla.pdf",
+          "anchor": "for every doubling of model size the number of training tokens should also be doubled",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R04",
+      "kind": "rag",
+      "query": "How should model size and training tokens scale under a compute-optimal budget?",
+      "tags": [
+        "en",
+        "training"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "chinchilla",
+          "content_hash": "3fd3632a8ef48171bd25282990221d49535d75356192f068b3b2ebe08f2aedd4",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/chinchilla.pdf",
+          "anchor": "the model size and the number of training tokens should be scaled equally",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R05",
+      "kind": "rag",
+      "query": "InstructGPT的监督学习数据来自什么？",
+      "tags": [
+        "zh",
+        "alignment"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "instructgpt",
+          "content_hash": "c1984bb50a5b90fddb895fdc3a0f72e5bc977148c9f63ef6040cbe7a3e1f0d98",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/instructgpt.pdf",
+          "anchor": "labeler demonstrations of the desired model behavior",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R06",
+      "kind": "rag",
+      "query": "RLHF在InstructGPT中收集什么类型的模型输出反馈？",
+      "tags": [
+        "mixed",
+        "alignment"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "instructgpt",
+          "content_hash": "c1984bb50a5b90fddb895fdc3a0f72e5bc977148c9f63ef6040cbe7a3e1f0d98",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/instructgpt.pdf",
+          "anchor": "rankings of model outputs",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R07",
+      "kind": "rag",
+      "query": "LoRA引入哪种可训练矩阵？",
+      "tags": [
+        "zh",
+        "training"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "lora",
+          "content_hash": "e9a0d3128767db616085dc0f4e6e455e672e89af823e8ed1282793682787395a",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/lora.pdf",
+          "anchor": "rank decomposition matrices",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R08",
+      "kind": "rag",
+      "query": "What trainable-parameter reduction does the LoRA abstract report for GPT-3?",
+      "tags": [
+        "en",
+        "training"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "lora",
+          "content_hash": "e9a0d3128767db616085dc0f4e6e455e672e89af823e8ed1282793682787395a",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/lora.pdf",
+          "anchor": "10,000 times",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R09",
+      "kind": "rag",
+      "query": "FlashAttention主要减少GPU哪两层存储之间的读写？",
+      "tags": [
+        "zh",
+        "inference"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "flashattention",
+          "content_hash": "ca7f9fda10b90fc05dd291a3accc85e9c1a4a860b99b31928dab03ed3fcb14e4",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/flashattention.pdf",
+          "anchor": "GPU high bandwidth memory (HBM) and GPU on-chip SRAM",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R10",
+      "kind": "rag",
+      "query": "Is FlashAttention described as exact or approximate attention?",
+      "tags": [
+        "en",
+        "inference"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "flashattention",
+          "content_hash": "ca7f9fda10b90fc05dd291a3accc85e9c1a4a860b99b31928dab03ed3fcb14e4",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/flashattention.pdf",
+          "anchor": "an IO-aware exact attention algorithm",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R11",
+      "kind": "rag",
+      "query": "vLLM的PagedAttention对KVCache内存浪费有什么改善？",
+      "tags": [
+        "mixed",
+        "inference"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "pagedattention",
+          "content_hash": "55b3b324d779a67c59dac2519445e3b07c14e6ff5c656fadb47a3d7b5997469e",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/pagedattention.pdf",
+          "anchor": "near-zero waste in KV cache memory",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R12",
+      "kind": "rag",
+      "query": "What operating-system memory idea inspires PagedAttention?",
+      "tags": [
+        "en",
+        "inference"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "pagedattention",
+          "content_hash": "55b3b324d779a67c59dac2519445e3b07c14e6ff5c656fadb47a3d7b5997469e",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/pagedattention.pdf",
+          "anchor": "classical virtual memory",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R13",
+      "kind": "rag",
+      "query": "DeepSeek-V3总参数和每Token激活参数分别是多少？",
+      "tags": [
+        "zh",
+        "models"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "deepseek-v3-report",
+          "content_hash": "812a3fd645c80725354de9d831a6785503007a60681461407f64e97305fa9330",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/deepseek-v3-report.pdf",
+          "anchor": "671B total parameters with 37B activated for each token",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R14",
+      "kind": "rag",
+      "query": "DeepSeek-V3采用的MLA全称是什么？",
+      "tags": [
+        "mixed",
+        "models"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "deepseek-v3-report",
+          "content_hash": "812a3fd645c80725354de9d831a6785503007a60681461407f64e97305fa9330",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/deepseek-v3-report.pdf",
+          "anchor": "Multi-head Latent Attention (MLA)",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R15",
+      "kind": "rag",
+      "query": "Qwen2.5预训练语料扩展到多少Token？",
+      "tags": [
+        "zh",
+        "models"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "qwen2.5-report",
+          "content_hash": "73b3292bead3ac8896679d3ac8be87439756faf356566cbda3ccc8a3dc7d79d3",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/qwen2.5-report.pdf",
+          "anchor": "18 trillion tokens",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R16",
+      "kind": "rag",
+      "query": "Which offline and online reinforcement-learning methods does Qwen2.5 name?",
+      "tags": [
+        "en",
+        "models"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "qwen2.5-report",
+          "content_hash": "73b3292bead3ac8896679d3ac8be87439756faf356566cbda3ccc8a3dc7d79d3",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/qwen2.5-report.pdf",
+          "anchor": "offline learning DPO and online learning GRPO",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R17",
+      "kind": "rag",
+      "query": "ReAct中的推理轨迹如何帮助Agent管理行动计划？",
+      "tags": [
+        "zh",
+        "agents"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "react",
+          "content_hash": "f285b0971ae4a790e402fb93966bed3adde2cf0a04977d08b2b40d6ab0cace69",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/react.pdf",
+          "anchor": "reasoning traces help the model induce, track, and update action plans",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R18",
+      "kind": "rag",
+      "query": "How do actions in ReAct help obtain external information?",
+      "tags": [
+        "en",
+        "agents"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "react",
+          "content_hash": "f285b0971ae4a790e402fb93966bed3adde2cf0a04977d08b2b40d6ab0cace69",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/react.pdf",
+          "anchor": "gather additional information from external sources",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R19",
+      "kind": "rag",
+      "query": "RAG综述指出大模型会遇到哪些知识问题？",
+      "tags": [
+        "zh",
+        "rag"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "rag-survey",
+          "content_hash": "396a0fadeb4cd40f5c8ccc36b73a0815f6cb4d7f6bfa53b6c48c1f9aba7c7e02",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/rag-survey.pdf",
+          "anchor": "hallucination, outdated knowledge",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R20",
+      "kind": "rag",
+      "query": "What knowledge-update benefit is stated for RAG?",
+      "tags": [
+        "en",
+        "rag"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "rag-survey",
+          "content_hash": "396a0fadeb4cd40f5c8ccc36b73a0815f6cb4d7f6bfa53b6c48c1f9aba7c7e02",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/rag-survey.pdf",
+          "anchor": "continuous knowledge updates",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R21",
+      "kind": "rag",
+      "query": "2026年的LLM综述主要研究什么模型类别？",
+      "tags": [
+        "zh",
+        "fundamentals"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "llm-survey-2026",
+          "content_hash": "05994e07e1e1f39414d358e5661527523e16b347c20ced53b0b9cdeb2cfb3cff",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/llm-survey-2026.pdf",
+          "anchor": "large language models (LLMs)",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R22",
+      "kind": "rag",
+      "query": "多Agent综述提到LLM多Agent在哪两类场景取得进展？",
+      "tags": [
+        "zh",
+        "agents"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "multi-agent-survey",
+          "content_hash": "d3410856f2b8629ab7365af3bd62fe8291b1a595ec954f1feb859a2688c7179c",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/multi-agent-survey.pdf",
+          "anchor": "complex problem-solving and world simulation",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R23",
+      "kind": "rag",
+      "query": "Transformers默认使用哪种Cache？",
+      "tags": [
+        "zh",
+        "inference"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "transformers-kv-cache",
+          "content_hash": "46c21ebd32b58c7eb896abb436097a8111260511449ad8c1921e9d7d842f0000",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/transformers-kv-cache.md",
+          "anchor": "is the default cache class for all models",
+          "page_number": null
+        }
+      ]
+    },
+    {
+      "case_id": "R24",
+      "kind": "rag",
+      "query": "Which cache strategy supports torch.compile according to the cache comparison?",
+      "tags": [
+        "en",
+        "inference"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "transformers-kv-cache",
+          "content_hash": "46c21ebd32b58c7eb896abb436097a8111260511449ad8c1921e9d7d842f0000",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/transformers-kv-cache.md",
+          "anchor": "Static Cache",
+          "page_number": null
+        }
+      ]
+    },
+    {
+      "case_id": "R25",
+      "kind": "rag",
+      "query": "KVCache为什么能减少自回归推理的重复计算？",
+      "tags": [
+        "mixed",
+        "inference"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "transformers-cache-explanation",
+          "content_hash": "7191ad30202c4dad646065807da67ab9ab1d9d32b559050c483256138cb7d3b2",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/transformers-cache-explanation.md",
+          "anchor": "storing kv pairs derived from the attention layers of previously processed tokens",
+          "page_number": null
+        }
+      ]
+    },
+    {
+      "case_id": "R26",
+      "kind": "rag",
+      "query": "Why should caching not be enabled during training?",
+      "tags": [
+        "en",
+        "inference"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "transformers-cache-explanation",
+          "content_hash": "7191ad30202c4dad646065807da67ab9ab1d9d32b559050c483256138cb7d3b2",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/transformers-cache-explanation.md",
+          "anchor": "It may cause unexpected errors if it's enabled during training.",
+          "page_number": null
+        }
+      ]
+    },
+    {
+      "case_id": "R27",
+      "kind": "rag",
+      "query": "Continuous Batching何时重新调度batch？",
+      "tags": [
+        "mixed",
+        "inference"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "transformers-continuous-batching",
+          "content_hash": "d23bd1a51950b4b016bb74e9462c84c1fbf271a1bf2e9c63f6fdb63da8769eef",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/transformers-continuous-batching.md",
+          "anchor": "dynamically rescheduling the batch at every generation step",
+          "page_number": null
+        }
+      ]
+    },
+    {
+      "case_id": "R28",
+      "kind": "rag",
+      "query": "Does generate_batch return before every request has completed?",
+      "tags": [
+        "en",
+        "inference"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "transformers-continuous-batching",
+          "content_hash": "d23bd1a51950b4b016bb74e9462c84c1fbf271a1bf2e9c63f6fdb63da8769eef",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/transformers-continuous-batching.md",
+          "anchor": "handles scheduling internally and blocks until all requests are complete.",
+          "page_number": null
+        }
+      ]
+    },
+    {
+      "case_id": "R29",
+      "kind": "rag",
+      "query": "Transformers优化概述提到哪些降低内存流量的技术？",
+      "tags": [
+        "zh",
+        "inference"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "transformers-optimization",
+          "content_hash": "db5121e61dea2eb820d1e19de84890af2c08dface875c31e7929f15bf08dff24",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/transformers-optimization.md",
+          "anchor": "alternative attention mechanisms for reduced memory traffic",
+          "page_number": null
+        }
+      ]
+    },
+    {
+      "case_id": "R30",
+      "kind": "rag",
+      "query": "LLMWiki如何维护持久化知识而不是每次查询重新推导？",
+      "tags": [
+        "zh",
+        "wiki-interface"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "microsoft-llmwiki-readme",
+          "content_hash": "8c5cc5b33bdcd36198153ba9a3fee63eb1ba6855ed2ce3327a860b77a2f7bc93",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/microsoft-llmwiki-readme.md",
+          "anchor": "incrementally builds and maintains a persistent wiki",
+          "page_number": null
+        }
+      ]
+    },
+    {
+      "case_id": "R31",
+      "kind": "rag",
+      "query": "LLMWiki架构中的wiki层承担什么职责？",
+      "tags": [
+        "zh",
+        "wiki-interface"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "microsoft-llmwiki-architecture",
+          "content_hash": "0b0f6d59bed782983b595de16299757966ec3b15f01b39a5bfe4ed33b07c3b28",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/microsoft-llmwiki-architecture.md",
+          "anchor": "LLM-generated markdown files — the compiled knowledge base.",
+          "page_number": null
+        }
+      ]
+    },
+    {
+      "case_id": "R32",
+      "kind": "rag",
+      "query": "对比KVCache和FlashAttention，分别优化哪种计算或访存？",
+      "tags": [
+        "zh",
+        "cross_document"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "transformers-cache-explanation",
+          "content_hash": "7191ad30202c4dad646065807da67ab9ab1d9d32b559050c483256138cb7d3b2",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/transformers-cache-explanation.md",
+          "anchor": "storing kv pairs derived from the attention layers of previously processed tokens",
+          "page_number": null
+        },
+        {
+          "source_id": "flashattention",
+          "content_hash": "ca7f9fda10b90fc05dd291a3accc85e9c1a4a860b99b31928dab03ed3fcb14e4",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/flashattention.pdf",
+          "anchor": "GPU high bandwidth memory (HBM) and GPU on-chip SRAM",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R33",
+      "kind": "rag",
+      "query": "Compare LoRA adaptation and Chinchilla compute-optimal training objectives.",
+      "tags": [
+        "en",
+        "cross_document"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "lora",
+          "content_hash": "e9a0d3128767db616085dc0f4e6e455e672e89af823e8ed1282793682787395a",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/lora.pdf",
+          "anchor": "rank decomposition matrices",
+          "page_number": 1
+        },
+        {
+          "source_id": "chinchilla",
+          "content_hash": "3fd3632a8ef48171bd25282990221d49535d75356192f068b3b2ebe08f2aedd4",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/chinchilla.pdf",
+          "anchor": "the model size and the number of training tokens should be scaled equally",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R34",
+      "kind": "rag",
+      "query": "ReAct的行动机制和多Agent协作分别关注什么？",
+      "tags": [
+        "mixed",
+        "cross_document"
+      ],
+      "gold_status": "verified",
+      "expected_sources": [
+        {
+          "source_id": "react",
+          "content_hash": "f285b0971ae4a790e402fb93966bed3adde2cf0a04977d08b2b40d6ab0cace69",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/react.pdf",
+          "anchor": "gather additional information from external sources",
+          "page_number": 1
+        },
+        {
+          "source_id": "multi-agent-survey",
+          "content_hash": "d3410856f2b8629ab7365af3bd62fe8291b1a595ec954f1feb859a2688c7179c",
+          "source_path": "data/knowledge/corpus/llm-engineering-v1/multi-agent-survey.pdf",
+          "anchor": "complex problem-solving and world simulation",
+          "page_number": 1
+        }
+      ]
+    },
+    {
+      "case_id": "R35",
+      "kind": "rag",
+      "query": "今天美元兑人民币的实时汇率是多少？",
+      "tags": [
+        "no_answer"
+      ],
+      "answerable": false,
+      "gold_status": "draft"
+    },
+    {
+      "case_id": "R36",
+      "kind": "rag",
+      "query": "What is the current weather in Huangshan?",
+      "tags": [
+        "no_answer"
+      ],
+      "answerable": false,
+      "gold_status": "draft"
+    },
+    {
+      "case_id": "R37",
+      "kind": "rag",
+      "query": "请提供我公司的私有APIKey。",
+      "tags": [
+        "no_answer"
+      ],
+      "answerable": false,
+      "gold_status": "draft"
+    },
+    {
+      "case_id": "R38",
+      "kind": "rag",
+      "query": "2026年10月14日北京大学东门到颐和园的实时交通耗时是多少？",
+      "tags": [
+        "no_answer"
+      ],
+      "answerable": false,
+      "gold_status": "draft"
+    },
+    {
+      "case_id": "R39",
+      "kind": "rag",
+      "query": "What was the private evaluation score of an unpublished model yesterday?",
+      "tags": [
+        "no_answer"
+      ],
+      "answerable": false,
+      "gold_status": "draft"
+    },
+    {
+      "case_id": "R40",
+      "kind": "rag",
+      "query": "这套论文中的作者明天几点起床？",
+      "tags": [
+        "no_answer"
+      ],
+      "answerable": false,
+      "gold_status": "draft"
+    }
+  ]
+}

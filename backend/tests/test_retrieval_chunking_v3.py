@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from atlasflow.knowledge.domain import (
+    DocumentVersion,
     KnowledgeChunk,
     KnowledgeDocument,
     KnowledgeSpace,
@@ -13,6 +14,7 @@ from atlasflow.knowledge.domain.models import IndexGeneration
 from atlasflow.knowledge.infrastructure import InMemoryKnowledgeRepository
 from atlasflow.knowledge.ingestion import StructuralChunker
 from atlasflow.knowledge.ingestion.parsers.pdf_parser import PdfDocumentParser
+from atlasflow.knowledge.ingestion.specs import capture_build_spec
 from atlasflow.knowledge.retrieval import RetrievalService
 from atlasflow.knowledge.retrieval.scoring import ranks
 
@@ -99,17 +101,27 @@ def _retrieval_service() -> RetrievalService:
             title=item_id, current_version_id=f"version-{item_id}",
         )
         repository.documents[document.id] = document
+        repository.versions[document.current_version_id] = DocumentVersion(
+            id=document.current_version_id, document_id=document.id, version_number=1,
+            content_hash="0" * 64, blob_key=f"fixture/{item_id}", mime_type="text/plain",
+            byte_size=0, status="ready",
+        )
         repository.chunks[item_id] = KnowledgeChunk(
             id=item_id, document_id=document.id, version_id=document.current_version_id,
             generation_id=generation.id, chunk_kind="child", title=item_id,
             content=f"content {item_id}", token_count=2, lexical_text=f"content {item_id}",
             embedding=[1.0, 0.0],
         )
-    return RetrievalService(
+    service = RetrievalService(
         repository=repository,
         embedding_provider=FakeEmbeddingProvider(),
         rerank_provider=FakeRerankProvider(),
     )
+    spec = service.embedding_registry.describe().model_copy(update={"observed_dimensions": 2})
+    repository.generations[generation.id] = generation.model_copy(update={
+        "identity_status": "verified", "build_spec": capture_build_spec(spec, StructuralChunker()),
+    })
+    return service
 
 
 @pytest.mark.asyncio
