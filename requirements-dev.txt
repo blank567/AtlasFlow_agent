@@ -1,0 +1,3 @@
+# Run from the repository root: python -m pip install -r requirements-dev.txt
+# Includes the application, pytest, pytest-asyncio and Ruff from pyproject.toml.
+-e .[dev]

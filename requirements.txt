@@ -1,0 +1,4 @@
+# Run from the repository root: python -m pip install -r requirements.txt
+# Python >= 3.11. Runtime dependencies and version ranges are defined in pyproject.toml.
+# Install the local package so its atlasflow CLI and backend modules are available.
+-e .
