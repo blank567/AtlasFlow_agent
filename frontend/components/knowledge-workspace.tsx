@@ -54,7 +54,7 @@ export function KnowledgeWorkspace({ view = "overview", initialSpace = "" }: { v
     if (selectedRef.current !== selected || pendingRef.current?.slug === selected) return;
     const requestId = ++requestRef.current;
     pendingRef.current = { slug: selected, id: requestId };
-    const isCurrent = () => selectedRef.current === selected && requestRef.current === requestId;
+    const isCurrent = () => requestRef.current === requestId;
     try {
       const nextSpaces = await listKnowledgeSpaces();
       if (!isCurrent()) return;
@@ -62,8 +62,10 @@ export function KnowledgeWorkspace({ view = "overview", initialSpace = "" }: { v
       const slug = nextSpaces.some((space) => space.slug === selected) ? selected : nextSpaces[0]?.slug || "";
       if (slug !== selected) {
         selectedRef.current = slug;
+        // Continue with the selected space in this request. Returning here made
+        // the selection effect fetch the space list a second time on first load.
+        pendingRef.current = { slug, id: requestId };
         setSelected(slug);
-        return;
       }
       if (slug) {
         const [nextDocuments, nextJobs, nextBuilds] = await Promise.all([

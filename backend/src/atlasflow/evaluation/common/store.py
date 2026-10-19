@@ -120,6 +120,28 @@ class V2EvaluationStore:
             rows = self._connection().execute(sql, params).fetchall()
         return [json.loads(row[0]) for row in rows]
 
+    async def list_summaries(self, kind: str | None = None, limit: int = 100):
+        """Return the fields needed for the history list, without result payloads."""
+        fields = (
+            "experiment_id", "kind", "protocol", "plan", "dataset_hash", "status",
+            "created_at", "ended_at", "summary", "budget_ledger", "stop_reason", "sync_status",
+        )
+        columns = ", ".join(f"json_extract(payload, '$.{field}')" for field in fields)
+        sql = f"SELECT {columns} FROM evaluation_v2_experiments WHERE json_extract(payload, '$.deleted_at') IS NULL"
+        params: list = []
+        if kind:
+            sql += " AND kind=?"
+            params.append(kind)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, min(limit, 1000)))
+        async with self._lock:
+            rows = self._connection().execute(sql, params).fetchall()
+        json_fields = {"plan", "summary", "budget_ledger"}
+        return [
+            {field: json.loads(value) if field in json_fields and value is not None else value for field, value in zip(fields, row)}
+            for row in rows
+        ]
+
     async def register_input(self, value: dict):
         encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False)
         async with self._lock:

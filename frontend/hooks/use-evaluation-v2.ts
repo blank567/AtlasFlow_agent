@@ -1,21 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { EvaluationArtifact, EvaluationDataset, EvaluationExperiment, EvaluationInput, EvaluationKind, EvaluationPlan, EvaluationPreflight, EvaluationResult, EvaluationSettings, evaluationApi, isActiveExperiment } from "../lib/evaluations-v2";
+import { EvaluationArtifact, EvaluationDataset, EvaluationExperiment, EvaluationExperimentSummary, EvaluationInput, EvaluationKind, EvaluationPlan, EvaluationPreflight, EvaluationResult, EvaluationSettings, evaluationApi, experimentSummary, isActiveExperiment } from "../lib/evaluations-v2";
 
 export function useEvaluationCatalog(kind: EvaluationKind) {
   const api = useMemo(() => evaluationApi(kind), [kind]);
   const [datasets, setDatasets] = useState<EvaluationDataset[]>([]), [settings, setSettings] = useState<EvaluationSettings | null>(null);
   const [inputs, setInputs] = useState<EvaluationInput[]>([]), [error, setError] = useState("");
-  useEffect(() => { let disposed = false; Promise.all([api.datasets(), api.settings(), kind === "agent" ? api.inputs() : Promise.resolve([])]).then(([data, configuration, frozen]) => {
+  const request = useRef<Promise<[EvaluationDataset[], EvaluationSettings, EvaluationInput[]]> | null>(null);
+  useEffect(() => { let disposed = false; const load = request.current ?? (request.current = Promise.all([api.datasets(), api.settings(), kind === "agent" ? api.inputs() : Promise.resolve([])])); load.then(([data, configuration, frozen]) => {
     if (!disposed) { setDatasets(data); setSettings(configuration); setInputs(frozen); }
-  }).catch(reason => { if (!disposed) setError(reason instanceof Error ? reason.message : "实验目录读取失败"); }); return () => { disposed = true; }; }, [api, kind]);
+  }).catch(reason => { request.current = null; if (!disposed) setError(reason instanceof Error ? reason.message : "实验目录读取失败"); }); return () => { disposed = true; }; }, [api, kind]);
   return { datasets, settings, inputs, setInputs, error };
 }
 
 export function useEvaluationSession(kind: EvaluationKind, plan: EvaluationPlan) {
   const api = useMemo(() => evaluationApi(kind), [kind]);
-  const [experiments, setExperiments] = useState<EvaluationExperiment[]>([]), [selected, setSelected] = useState<EvaluationExperiment | null>(null);
+  const [experiments, setExperiments] = useState<EvaluationExperimentSummary[]>([]), [selected, setSelected] = useState<EvaluationExperiment | null>(null);
   const [selectedCase, setSelectedCase] = useState<EvaluationResult | null>(null), [artifact, setArtifact] = useState<EvaluationArtifact | null>(null);
   const [artifactLoading, setArtifactLoading] = useState(false), [artifactError, setArtifactError] = useState("");
   const [preflight, setPreflight] = useState<{ hash: string; value: EvaluationPreflight } | null>(null);
@@ -25,15 +26,16 @@ export function useEvaluationSession(kind: EvaluationKind, plan: EvaluationPlan)
   const planHash = JSON.stringify(plan), currentPlanHash = useRef(planHash); currentPlanHash.current = planHash;
   const pending = useRef(false), selectionSequence = useRef(0), artifactSequence = useRef(0);
   const deletedIds = useRef(new Set<string>()), selectedRef = useRef(selected); selectedRef.current = selected;
+  const listRequest = useRef<Promise<EvaluationExperimentSummary[]> | null>(null);
   const checked = preflight?.hash === planHash ? preflight.value : null;
-  useEffect(() => { let disposed = false; api.list().then(value => { if (!disposed) setExperiments(value.filter(item => !deletedIds.current.has(item.experiment_id))); }).catch(reason => { if (!disposed) setError(reason.message); }); return () => { disposed = true; }; }, [api]);
+  useEffect(() => { let disposed = false; const load = listRequest.current ?? (listRequest.current = api.list()); load.then(value => { if (!disposed) setExperiments(value.filter(item => !deletedIds.current.has(item.experiment_id))); }).catch(reason => { listRequest.current = null; if (!disposed) setError(reason.message); }); return () => { disposed = true; }; }, [api]);
   useEffect(() => { if (confirmation?.action === "run" && confirmation.identity !== planHash) setConfirmation(null); }, [planHash, confirmation]);
   useEffect(() => { if (confirmation?.action === "cancel" && (confirmation.identity !== selected?.experiment_id || !isActiveExperiment(selected?.status))) setConfirmation(null); }, [selected?.experiment_id, selected?.status, confirmation]);
   useEffect(() => { if (confirmation?.action === "delete" && !experiments.some(item => item.experiment_id === confirmation.identity && !isActiveExperiment(item.status))) setConfirmation(null); }, [experiments, confirmation]);
   useEffect(() => {
     if (!selected || !isActiveExperiment(selected.status)) return;
     let disposed = false, fetching = false; const id = selected.experiment_id;
-    const timer = window.setInterval(() => { if (fetching) return; fetching = true; api.get(id).then(value => { if (!disposed && !deletedIds.current.has(id)) { setSelected(value); setExperiments(previous => previous.map(item => item.experiment_id === id ? value : item)); } }).catch(reason => { if (!disposed && !deletedIds.current.has(id)) setError(reason.message); }).finally(() => { fetching = false; }); }, 2000);
+    const timer = window.setInterval(() => { if (fetching) return; fetching = true; api.get(id).then(value => { if (!disposed && !deletedIds.current.has(id)) { setSelected(value); setExperiments(previous => previous.map(item => item.experiment_id === id ? experimentSummary(value) : item)); } }).catch(reason => { if (!disposed && !deletedIds.current.has(id)) setError(reason.message); }).finally(() => { fetching = false; }); }, 2000);
     return () => { disposed = true; window.clearInterval(timer); };
   }, [api, selected?.experiment_id, selected?.status]);
   async function check() {
@@ -64,7 +66,7 @@ export function useEvaluationSession(kind: EvaluationKind, plan: EvaluationPlan)
       }
       const value = action.action === "run" ? await api.start({ ...plan, input_refs: plan.mode === "replay" ? { ...plan.input_refs, ...checked?.resolved_input_refs } : plan.input_refs }) : await api.cancel(action.identity);
       selectionSequence.current++; artifactSequence.current++; setSelected(value); setSelectedCase(null); setArtifact(null); setArtifactError("");
-      setExperiments(previous => [value, ...previous.filter(item => item.experiment_id !== value.experiment_id)]);
+      setExperiments(previous => [experimentSummary(value), ...previous.filter(item => item.experiment_id !== value.experiment_id)]);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "实验操作未完成"); }
     finally { pending.current = false; setBusy(false); setDeletingId(null); }
   }

@@ -88,7 +88,7 @@ def create_v2_router(kind: Literal["rag", "agent"], runtime=None) -> APIRouter:
 
     @router.get("/experiments")
     async def experiments(request: Request):
-        return await service(request).store.list(kind)
+        return await service(request).store.list_summaries(kind)
 
     @router.get("/experiments/{experiment_id}")
     async def experiment(experiment_id: str, request: Request):

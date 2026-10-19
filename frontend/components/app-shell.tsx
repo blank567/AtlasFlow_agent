@@ -11,7 +11,7 @@ const NAV_ITEMS = [
   { href: "/runs", label: "运行记录", icon: ClockCounterClockwise },
   { href: "/analytics", label: "统计分析", icon: ChartLineUp },
   { href: "/knowledge", label: "知识库", icon: Database },
-  { href: "/evaluations", label: "评测实验", icon: Flask },
+  { href: "/evaluations/rag", label: "评测实验", icon: Flask },
   { href: "/settings", label: "系统设置", icon: GearSix },
 ];
 

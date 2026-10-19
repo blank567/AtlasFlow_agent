@@ -30,6 +30,7 @@ export type EvaluationResult = { case_id: string; variant_id: string; trial: num
 export type MetricAggregate = { mean: number | null; evaluated: number; planned: number; status_counts?: Record<string, number>; unit?: string; direction?: string; scoring_unit?: string };
 export type EvaluationSummary = { planned?: number; completed?: number; failed?: number; timed_out?: number; budget_stopped?: number; not_run?: number; grader_failed?: number; degraded?: number; variants?: Record<string, { planned: number; completed: number; failed: number; timed_out?: number; metrics: Record<string, MetricAggregate>; [key: string]: unknown }>; [key: string]: unknown };
 export type EvaluationExperiment = { experiment_id: string; kind: EvaluationKind; protocol: EvaluationProtocol; plan: EvaluationPlan; dataset_hash: string; context: JsonRecord; status: string; created_at: string; ended_at?: string | null; results: EvaluationResult[]; summary: EvaluationSummary; budget_ledger: JsonRecord; stop_reason?: string | null; sync_status: string };
+export type EvaluationExperimentSummary = Omit<EvaluationExperiment, "context" | "results">;
 export type EvaluationPreflight = { ready: boolean; errors: string[]; warnings: string[]; dataset_hash: string; context: JsonRecord; expected_cells: number; budget: EvaluationBudget; resolved_input_refs: Record<string, string>; available_inputs?: EvaluationInput[] };
 export type EvaluationArtifact = { input_id: string; kind: EvaluationKind; protocol: string; case_id: string; variant_id: string; trial: number; content: JsonRecord; events: JsonRecord[]; metadata?: JsonRecord; source_id_map?: Record<string, string>; source_hash_map?: Record<string, string>; [key: string]: unknown };
 export type EvaluationComparison = { baseline_id: string; candidate_id: string; scope: string; pairs: Array<{ case_id: string; variant_id: string; trial: number; baseline_status: string; candidate_status: string; metrics: Record<string, { baseline: number | boolean | null; candidate: number | boolean | null; delta: number | null; status: string }> }>; baseline: EvaluationSummary; candidate: EvaluationSummary; limitations: string[] };
@@ -42,7 +43,7 @@ export const evaluationApi = (kind: EvaluationKind) => ({
   settings: () => request<EvaluationSettings>(`${base(kind)}/settings`),
   inputs: () => request<EvaluationInput[]>(`${base(kind)}/inputs`),
   registerInput: (value: JsonRecord) => request<EvaluationInput>(`${base(kind)}/inputs`, { method: "POST", body: JSON.stringify(value) }),
-  list: () => request<EvaluationExperiment[]>(`${base(kind)}/experiments`),
+  list: () => request<EvaluationExperimentSummary[]>(`${base(kind)}/experiments`),
   get: (id: string) => request<EvaluationExperiment>(`${base(kind)}/experiments/${encodeURIComponent(id)}`),
   preflight: (plan: EvaluationPlan) => request<EvaluationPreflight>(`${base(kind)}/preflight`, { method: "POST", body: JSON.stringify(plan) }),
   start: (plan: EvaluationPlan) => request<EvaluationExperiment>(`${base(kind)}/experiments`, { method: "POST", body: JSON.stringify(plan) }),
@@ -55,6 +56,10 @@ export const evaluationApi = (kind: EvaluationKind) => ({
 });
 
 export const isActiveExperiment = (status?: string) => status === "planned" || status === "running";
+export const experimentSummary = (value: EvaluationExperiment): EvaluationExperimentSummary => {
+  const { context: _context, results: _results, ...summary } = value;
+  return summary;
+};
 export const cellKey = (result: { case_id: string; variant_id: string; trial?: number }) => `${result.case_id}:${result.variant_id}:${result.trial ?? 1}`;
 export const record = (value: unknown): JsonRecord => value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
 export const items = (value: unknown): JsonRecord[] => Array.isArray(value) ? value.map(record) : [];

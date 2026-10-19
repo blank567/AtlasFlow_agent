@@ -72,6 +72,21 @@ def test_delete_hides_every_record_endpoint_and_preserves_evidence(tmp_path, kin
         assert client.portal.call(runtime.store.get_input, "evidence") == evidence
 
 
+def test_experiment_history_returns_summary_without_result_payload(tmp_path):
+    app, runtime = application(tmp_path / "history.sqlite3")
+    with TestClient(app) as client:
+        record = {**saved(), "protocol": "rag-retrieval-v2", "plan": {"mode": "live", "case_ids": ["R1"]},
+                  "context": {"large": "not for the history list"}, "summary": {"planned": 1},
+                  "budget_ledger": {"http_attempts": 1}, "sync_status": "not_requested"}
+        client.portal.call(runtime.store.save, record)
+        response = client.get("/api/v1/evaluations/rag/experiments")
+        assert response.status_code == 200
+        history = response.json()[0]
+        assert history["experiment_id"] == record["experiment_id"]
+        assert history["plan"] == record["plan"] and history["summary"] == record["summary"]
+        assert "results" not in history and "context" not in history
+
+
 @pytest.mark.parametrize("kind", ["rag", "agent"])
 @pytest.mark.parametrize("status", ["planned", "running"])
 def test_active_experiments_cannot_be_deleted(tmp_path, kind, status):
