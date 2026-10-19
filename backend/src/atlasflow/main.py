@@ -10,6 +10,7 @@ from atlasflow import __version__
 from atlasflow.api.routes import router
 from atlasflow.bootstrap import Container, build_container
 from atlasflow.config import Settings, get_settings
+from atlasflow.conversations.api import router as conversation_router
 from atlasflow.evaluation.api import router as evaluation_router
 from atlasflow.evaluation.common.api import create_v2_router
 from atlasflow.evaluation.legacy.api import router as legacy_evaluation_router
@@ -29,14 +30,20 @@ def create_app(*, settings: Settings | None = None, container: Container | None 
                 await resolved_container.execution.start()
                 await resolved_container.knowledge.repository.initialize()
             await resolved_container.store.open()
+            if resolved_container.conversations is not None:
+                await resolved_container.conversations.store.initialize()
             await resolved_container.knowledge.start()
             await resolved_container.run_service.reconcile_startup()
+            if resolved_container.conversations is not None:
+                await resolved_container.conversations.reconcile_startup()
             if resolved_container.evaluation is not None:
                 await resolved_container.evaluation.initialize(recover_interrupted=False)
             if resolved_container.evaluation_v2 is not None:
                 await resolved_container.evaluation_v2.initialize(recover_interrupted=True)
             yield
         finally:
+            if resolved_container.conversations is not None:
+                await resolved_container.conversations.close()
             if resolved_container.evaluation_v2 is not None:
                 await resolved_container.evaluation_v2.close()
             if resolved_container.evaluation is not None:
@@ -64,6 +71,7 @@ def create_app(*, settings: Settings | None = None, container: Container | None 
     )
     app.state.container = resolved_container
     app.include_router(router)
+    app.include_router(conversation_router)
     app.include_router(knowledge_router)
     app.include_router(create_v2_router("rag"))
     app.include_router(create_v2_router("agent"))

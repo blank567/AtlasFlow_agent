@@ -4,20 +4,20 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { formatDate } from "../lib/format";
-import { buildReportHtml, downloadReport, reportFilename, reportHeadingIds, REPORT_DOCUMENT_STYLES, safeReportUrl } from "../lib/report-document";
+import { buildReportHtml, downloadReport, reportFilename, reportHeadingIds, reportWithLimitations, REPORT_DOCUMENT_STYLES, safeReportUrl } from "../lib/report-document";
 import { RunRecord } from "../lib/types";
 import { EmptyState } from "./ui";
 
 type Section = { id: string; title: string; depth: number };
 
-export function ReportView({ run }: { run: RunRecord }) {
+export function ReportView({ run, compact = false }: { run: RunRecord; compact?: boolean }) {
   const paper = useRef<HTMLElement>(null);
   const outlineDetails = useRef<HTMLDetailsElement>(null);
   const [sections, setSections] = useState<Section[]>([]);
   const [activeSection, setActiveSection] = useState("");
   const [notice, setNotice] = useState("");
   const [exportError, setExportError] = useState("");
-  const report = run.report ?? "";
+  const report = reportWithLimitations(run.report ?? "", run.status === "completed_with_warnings" ? run.warnings : []);
 
   useEffect(() => {
     const desktop = window.matchMedia("(min-width: 1181px)");
@@ -43,7 +43,7 @@ export function ReportView({ run }: { run: RunRecord }) {
   if (!report.trim()) return <EmptyState title="报告尚未生成" description="成稿后支持阅读、导出与打印。" />;
 
   const completed = run.status === "completed" || run.status === "completed_with_warnings";
-  const stateLabel = run.status === "completed" ? "已通过验收" : "未通过最终验收";
+  const stateLabel = run.status === "completed" ? "已完成" : run.status === "completed_with_warnings" ? "已完成·附局限说明" : "尚未完成验收";
   const filename = reportFilename(run.query, run.id);
   const date = run.completed_at ?? run.updated_at ?? run.created_at;
   const readingMinutes = Math.max(1, Math.ceil(report.length / 500));
@@ -74,8 +74,8 @@ export function ReportView({ run }: { run: RunRecord }) {
     <p className="reportDownloadHint">HTML保留排版并支持离线阅读，Markdown可编辑。请选择E盘保存。</p>
     <div className="reportActionStatus" role="status">{notice}</div>
     {exportError && <p className="reportExportError" role="alert">{exportError}</p>}
-    <div className={`reportReader ${sections.length ? "" : "reportReaderNoOutline"}`}>
-      {sections.length > 0 && <aside className="reportOutline">
+    <div className={`reportReader ${sections.length && !compact ? "" : "reportReaderNoOutline"}`}>
+      {sections.length > 0 && !compact && <aside className="reportOutline">
         <details ref={outlineDetails} open><summary>报告目录 <span>{sections.length}</span></summary>
           <nav aria-label="报告目录">{sections.map((section) => <a key={section.id} href={`#${section.id}`} className={section.id === activeSection ? "active" : undefined} aria-current={section.id === activeSection ? "location" : undefined} style={{ paddingLeft: `${12 + (section.depth - baseDepth) * 12}px` }} onClick={() => setActiveSection(section.id)}>{section.title}</a>)}</nav>
         </details>
@@ -86,7 +86,6 @@ export function ReportView({ run }: { run: RunRecord }) {
           <h1>{run.query}</h1>
           <div className="reportPaperMeta"><span>{stateLabel}</span>{date && <time dateTime={date}>{run.completed_at ? "完成于" : "记录更新于"} {formatDate(date)}</time>}</div>
           {!completed && <p className="reportPaperNotice">当前版本尚未完成最终验收。HTML与打印保留此状态，Markdown导出报告原文。</p>}
-          {run.status === "completed_with_warnings" && <p className="reportPaperNotice">本次研究未通过最终验收；以下是保留的草稿，请结合局限与参考文献阅读。{run.warnings.length > 0 && run.warnings.join("；")}</p>}
         </header>
         <div className="reportProse"><ReactMarkdown remarkPlugins={[remarkGfm, reportHeadingIds]} skipHtml urlTransform={(url) => safeReportUrl(url) ?? ""} components={{
           a: ({ href, children }) => href ? <a href={href} target={href.startsWith("#") ? undefined : "_blank"} rel={href.startsWith("#") ? undefined : "noopener noreferrer"}>{children}</a> : <span>{children}</span>,

@@ -208,7 +208,10 @@ def build_evaluation_v2(settings, knowledge, registry, providers, workflow_optio
         policy = RunPolicy.model_validate(identity["policy"])
         snapshot = _snapshot(context) if policy.knowledge_mode != "off" else None
         model = (providers.model if identity["model"] == model_name else
-                 OpenRouterModelGateway(model_client, identity["model"]))
+                 OpenRouterModelGateway(model_client, identity["model"],
+                     quality_threshold=settings.quality_threshold,
+                     accept_partial_results=settings.research_accept_partial_results,
+                     relaxed_review=settings.quality_relaxed_review))
         memory = InMemoryRunStore()
         eval_registry = EvaluationToolRegistry(registry, timeout_seconds=registry.timeout_seconds,
                                               max_retries=registry.max_retries)

@@ -20,6 +20,10 @@ export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000
 
 type JsonObject = Record<string, unknown>;
 
+export class RequestError extends Error {
+  constructor(message: string, public readonly status: number) { super(message); this.name = "RequestError"; }
+}
+
 export function listCapabilities(): Promise<CapabilityDescription[]> {
   return request<CapabilityDescription[]>("/capabilities");
 }
@@ -41,7 +45,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       detail = await response.text();
     }
-    throw new Error(detail || `请求失败（${response.status}）`);
+    throw new RequestError(detail || `请求失败（${response.status}）`, response.status);
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
@@ -119,6 +123,9 @@ export function normalizeRun(value: unknown): RunRecord {
     auto_approve: typeof raw.auto_approve === "boolean" ? raw.auto_approve : undefined,
     policy: object(raw.policy) as RunPolicy,
     source_run_id: typeof raw.source_run_id === "string" ? raw.source_run_id : undefined,
+    conversation_id: typeof raw.conversation_id === "string" ? raw.conversation_id : undefined,
+    conversation_turn_id: typeof raw.conversation_turn_id === "string" ? raw.conversation_turn_id : undefined,
+    execution_mode: raw.execution_mode === "report_revision" ? "report_revision" : "research",
     recovery: raw.recovery ? raw.recovery as RunRecord["recovery"] : undefined,
     retrieval_snapshot: raw.retrieval_snapshot ? object(raw.retrieval_snapshot) : undefined,
     created_at: typeof raw.created_at === "string" ? raw.created_at : undefined,

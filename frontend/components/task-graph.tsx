@@ -35,7 +35,9 @@ export function TaskGraph({ run, events }: { run: RunRecord; events: RunEvent[] 
       const failed = run.errors.some((item) => item.task_id === task.task_id && item.plan_version === task.plan_version);
       const liveEvent = [...events].reverse().find((event) => event.task_id === task.task_id && event.plan_version === task.plan_version);
       const liveConfidence = typeof liveEvent?.data.confidence === "number" ? liveEvent.data.confidence : undefined;
-      const state = result || liveEvent?.status === "succeeded" ? "completed" : failed || liveEvent?.status === "failed" ? "failed" : liveEvent?.status === "running" || liveEvent?.status === "scheduled" ? "running" : "waiting";
+      const accepted = result?.execution_accepted ?? liveEvent?.data.execution_accepted;
+      const partial = (result?.outcome === "partial" || liveEvent?.status === "partial") && accepted !== true;
+      const state = partial ? "partial" : result || liveEvent?.status === "succeeded" ? "completed" : liveEvent?.status === "running" || liveEvent?.status === "scheduled" || liveEvent?.status === "retrying" ? "running" : failed || liveEvent?.status === "failed" ? "failed" : "waiting";
       return {
         id: task.task_id,
         position: { x: xLevel * 280, y: row * 150 },
@@ -85,13 +87,23 @@ function TaskDrawer({ task, run, events, onClose }: { task?: ResearchTask; run: 
   const liveResult = asObject(completedEvent?.data.result);
   const liveConfidence = typeof liveResult.confidence === "number" ? liveResult.confidence : completedEvent?.data.confidence;
   const summary = result?.summary ?? (typeof liveResult.summary === "string" ? liveResult.summary : undefined);
+  const isPartial = result?.outcome === "partial" || completedEvent?.status === "partial";
+  const accepted = result?.execution_accepted ?? liveResult.execution_accepted ?? completedEvent?.data.execution_accepted;
+  const coverage = result?.criteria_coverage ?? (typeof liveResult.criteria_coverage === "number" ? liveResult.criteria_coverage : undefined);
+  const assessments = result?.assessments ?? (Array.isArray(liveResult.assessments) ? liveResult.assessments.flatMap((item) => {
+    const entry = asObject(item);
+    return typeof entry.criterion_index === "number" && typeof entry.status === "string" && typeof entry.reason === "string"
+      ? [{ criterion_index: entry.criterion_index, status: entry.status, reason: entry.reason }] : [];
+  }) : []);
+  const findings = result?.findings ?? (Array.isArray(liveResult.findings) ? liveResult.findings.filter((item): item is string => typeof item === "string") : []);
+  const limitations = result?.limitations ?? (Array.isArray(liveResult.limitations) ? liveResult.limitations.filter((item): item is string => typeof item === "string") : []);
   const liveError = typeof completedEvent?.data.error === "string" ? completedEvent.data.error : undefined;
   return <DetailDrawer title={`${task.task_id} · ${task.title}`} subtitle={`Plan版本v${task.plan_version}`} onClose={onClose}>
-    <div className="drawerStats"><div><span>状态</span><strong>{result || completedEvent?.status === "succeeded" ? "完成" : error || completedEvent?.status === "failed" ? "失败" : lastEvent?.status ?? "等待"}</strong></div><div><span>置信度</span><strong>{typeof result?.confidence === "number" ? `${Math.round(result.confidence * 100)}%` : typeof liveConfidence === "number" ? `${Math.round(liveConfidence * 100)}%` : "未记录"}</strong></div><div><span>耗时</span><strong>{formatDuration(result?.duration_ms ?? completedEvent?.duration_ms ?? [...taskEvents].reverse().find((event) => event.duration_ms !== undefined)?.duration_ms)}</strong></div></div>
+    <div className="drawerStats"><div><span>状态</span><strong>{isPartial ? accepted === true ? "完成·部分采纳" : "部分完成" : result || completedEvent?.status === "succeeded" ? "完成" : error || completedEvent?.status === "failed" ? "失败" : lastEvent?.status ?? "等待"}</strong></div><div title="展示验收将结论可靠性与标准覆盖分开：有依据的部分结果保留模型自评分，不设置保底分，也不等同于正确率；旧记录保留原评分"><span>置信度</span><strong>{typeof result?.confidence === "number" ? `${Math.round(result.confidence * 100)}%` : typeof liveConfidence === "number" ? `${Math.round(liveConfidence * 100)}%` : "未记录"}</strong></div><div><span>耗时</span><strong>{formatDuration(result?.duration_ms ?? completedEvent?.duration_ms ?? [...taskEvents].reverse().find((event) => event.duration_ms !== undefined)?.duration_ms)}</strong></div></div>
     <DrawerSection title="任务输入"><dl className="drawerDefinition"><div><dt>研究目标</dt><dd>{task.objective}</dd></div><div><dt>依赖</dt><dd>{task.dependencies.length ? task.dependencies.join(", ") : "无"}</dd></div><div><dt>优先级</dt><dd>{task.priority}</dd></div></dl></DrawerSection>
-    <DrawerSection title="成功标准"><ul className="criteriaList">{task.success_criteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></DrawerSection>
+    <DrawerSection title="逐项验收">{typeof coverage === "number" && <p>标准覆盖{Math.round(coverage * 100)}% · 部分满足按半项计入，不等同于正确率</p>}<ul className="criteriaList taskAcceptanceList">{task.success_criteria.map((criterion, index) => { const assessment = assessments.find((item) => item.criterion_index === index + 1); return <li key={criterion} data-status={assessment?.status ?? "pending"}>{criterion}{assessment && <small>{assessment.status === "met" ? "已满足" : assessment.status === "partial" ? "部分满足" : "未满足"} · {assessment.reason}</small>}</li>; })}</ul>{!!task.repairs_task_ids?.length && <p>局部修复：{task.repairs_task_ids.join("、")}；仅保留原标准并通过验收后才视为缺口关闭。</p>}</DrawerSection>
     <DrawerSection title="工具能力要求"><p>{task.required_capabilities?.length ? `必需能力：${task.required_capabilities.join(" · ")}` : "未指定必需能力"}</p>{task.capability_alternatives?.map((group, index) => <p key={index}>可选能力（至少一种）：{group.join(" / ")}</p>)}<p className="drawerMuted">{task.requires_fresh_data ? "要求获取最新数据，并在审查阶段核验时效与目标覆盖。" : "未指定数据时效要求。"}</p></DrawerSection>
-    <DrawerSection title="研究结果">{summary ? <p>{summary}</p> : <p className="drawerMuted">尚未记录研究结果。</p>}{error && <p className="drawerError">{error.code} · {error.message}</p>}{!error && liveError && <p className="drawerError">{liveError}</p>}</DrawerSection>
+    <DrawerSection title="研究结果">{summary ? <p>{summary}</p> : <p className="drawerMuted">尚未记录研究结果。</p>}{!!findings.length && <ul className="criteriaList taskAcceptanceList">{findings.map((finding, index) => <li key={index}>{finding}</li>)}</ul>}{!!limitations.length && <div className="drawerMuted"><p>结果边界</p><ul className="criteriaList">{limitations.map((limitation, index) => <li key={index}>{limitation}</li>)}</ul></div>}{error && <p className="drawerError">{error.code} · {error.message}</p>}{!error && liveError && <p className="drawerError">{liveError}</p>}</DrawerSection>
     <DrawerSection title="实时事件"><ol className="drawerEvents">{taskEvents.map((event) => <li key={event.event_id}><span>#{event.sequence}</span>{event.message}</li>)}</ol></DrawerSection>
   </DetailDrawer>;
 }

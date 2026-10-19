@@ -7,7 +7,8 @@ import codecs
 import ipaddress
 import re
 import socket
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from typing import Any, ClassVar
@@ -129,32 +130,57 @@ class WebFetchTool(BaseTool):
     name = "web_fetch"
     description = (
         "直接读取公开 HTML 或纯文本网页，返回真实正文摘录、最终 URL 与抓取时间。"
+        "这是按需深读工具，不是搜索后的必经步骤；仅在需核对具体细节、原话、矛盾或指定正文时使用。"
+        "搜索证据充分的一般介绍无需调用；可选读取失败时保留搜索结果，不声称已读原文。"
         "优先读取已搜索到的具体内容页；不执行 JavaScript，不支持 PDF 或登录页面。"
         "同一 URL 的不可重试失败应改用其他来源，不要仅修改 focus 重试。"
+        "同站点连续临时失败两次后，本Run内停止请求；请搜索其他可信来源。"
     )
     arguments_model = WebFetchArguments
     capabilities = (Capability("web_fetch", "深读公开网页并核验有来源的具体事实", True),)
     allowed_agents = ("researcher", "critic", "quality_gate")
     cache_identical_calls = True
+    transient_failure_limit = 2
     max_bytes: ClassVar[int] = 1_000_000
     max_redirects: ClassVar[int] = 3
+    max_ip_attempts: ClassVar[int] = 2
 
     def __init__(
         self,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
         resolver: Resolver | None = None,
+        connect_timeout_seconds: float = 8.0,
+        read_timeout_seconds: float = 20.0,
+        total_timeout_seconds: float = 35.0,
     ) -> None:
         self._transport = transport
         self._resolver = resolver or self._resolve
+        self.connect_timeout_seconds = connect_timeout_seconds
+        self.read_timeout_seconds = read_timeout_seconds
+        self.total_timeout_seconds = total_timeout_seconds
 
     async def run(self, arguments: WebFetchArguments, context: ToolContext) -> ToolResult:
         try:
-            async with asyncio.timeout(30):
+            async with asyncio.timeout(self.total_timeout_seconds):
                 return await self._fetch(arguments)
-        except (TimeoutError, httpx.TimeoutException):
-            return ToolResult(
-                success=False, error="WEB_FETCH_TIMEOUT: 网页请求超时", retryable=True
+        except httpx.ConnectTimeout:
+            return self._timeout(
+                "CONNECT", f"连接源站或TLS握手超时（单地址上限{self.connect_timeout_seconds:g}秒）"
+            )
+        except httpx.ReadTimeout:
+            return self._timeout(
+                "READ", f"等待响应头或正文超时（网络读取上限{self.read_timeout_seconds:g}秒）"
+            )
+        except httpx.WriteTimeout:
+            return self._timeout("WRITE", "发送网页请求超时")
+        except httpx.PoolTimeout:
+            return self._timeout("POOL", "等待可用网络连接超时")
+        except httpx.TimeoutException:
+            return self._timeout("NETWORK", "网络操作超时")
+        except TimeoutError:
+            return self._timeout(
+                "TOTAL", f"网页处理超过整体上限{self.total_timeout_seconds:g}秒（包含DNS、连接与跳转）"
             )
         except socket.gaierror:
             return ToolResult(success=False, error="WEB_FETCH_DNS: 域名解析失败", retryable=True)
@@ -164,6 +190,14 @@ class WebFetchTool(BaseTool):
             )
         except (ValueError, UnicodeError):
             return ToolResult(success=False, error="WEB_FETCH_INVALID_RESPONSE: 无法解析网页响应")
+
+    @staticmethod
+    def _timeout(phase: str, description: str) -> ToolResult:
+        return ToolResult(
+            success=False,
+            error=f"WEB_FETCH_{phase}_TIMEOUT: {description}；若同站点持续失败请换来源，不要只修改focus或猜测路径",
+            retryable=True,
+        )
 
     async def _fetch(self, arguments: WebFetchArguments) -> ToolResult:
         current = self._public_url(arguments.url)
@@ -187,29 +221,7 @@ class WebFetchTool(BaseTool):
                 return ToolResult(
                     success=False, error="WEB_FETCH_BLOCKED_ADDRESS: 域名解析到了非公网地址"
                 )
-            # Pin the checked IP; original Host and SNI retain virtual hosting and
-            # certificate verification without a second hostname DNS lookup.
-            pinned = url.copy_with(host=addresses[0])
-            await reserve_http_attempt("web_fetch", "GET")
-            async with (
-                httpx.AsyncClient(
-                    transport=self._transport,
-                    timeout=10,
-                    trust_env=False,
-                    follow_redirects=False,
-                ) as client,
-                client.stream(
-                    "GET",
-                    pinned,
-                    headers={
-                        "Host": url.netloc.decode("ascii"),
-                        "User-Agent": "AtlasFlow/5.0 (public research page reader)",
-                        "Accept": "text/html,application/xhtml+xml,text/plain,text/markdown",
-                        "Accept-Encoding": "identity",
-                    },
-                    extensions={"sni_hostname": url.host},
-                ) as response,
-            ):
+            async with self._response(url, addresses) as response:
                 if response.status_code in {301, 302, 303, 307, 308}:
                     location = response.headers.get("location")
                     target = self._public_url(urljoin(current, location)) if location else None
@@ -267,6 +279,55 @@ class WebFetchTool(BaseTool):
                     document, media_type, arguments, requested_url, current, chain
                 )
         return ToolResult(success=False, error="WEB_FETCH_REDIRECT_LIMIT: 网页跳转超过 3 次")
+
+    @asynccontextmanager
+    async def _response(self, url: httpx.URL, addresses: list[str]) -> AsyncIterator[httpx.Response]:
+        """Try at most two pre-validated IPs on connection failure, never on HTTP/body failure.
+
+        Host/SNI and certificate verification remain intact. Do not enable ambient
+        proxies or re-resolve a hostname after the SSRF check. Each IP attempt is
+        charged to the evaluation HTTP budget, within run()'s overall deadline.
+        """
+        candidates = list(dict.fromkeys(addresses))[:self.max_ip_attempts]
+        timeout = httpx.Timeout(
+            self.read_timeout_seconds, connect=self.connect_timeout_seconds
+        )
+        async with AsyncExitStack() as stack:
+            client = await stack.enter_async_context(httpx.AsyncClient(
+                transport=self._transport, timeout=timeout, trust_env=False,
+                follow_redirects=False,
+            ))
+            connect_timeout: httpx.ConnectTimeout | None = None
+            for index, address in enumerate(candidates):
+                await reserve_http_attempt("web_fetch", "GET")
+                try:
+                    response = await stack.enter_async_context(client.stream(
+                        "GET", url.copy_with(host=address),
+                        headers={
+                            "Host": url.netloc.decode("ascii"),
+                            "User-Agent": "AtlasFlow/0.8.0 (public research page reader)",
+                            "Accept": "text/html,application/xhtml+xml,text/plain,text/markdown",
+                            "Accept-Encoding": "identity",
+                        },
+                        extensions={"sni_hostname": url.host},
+                    ))
+                    break
+                except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+                    if isinstance(exc, httpx.ConnectTimeout):
+                        connect_timeout = exc
+                    if index + 1 == len(candidates):
+                        raise connect_timeout or exc
+            yield response
+
+    @staticmethod
+    def transient_failure_scope(arguments: dict[str, Any]) -> str | None:
+        url = WebFetchTool.failure_scope(arguments)
+        if url is None:
+            return None
+        parts = urlsplit(url)
+        # Normalize default ports, but keep scheme/port and subdomains separate.
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        return f"{parts.scheme}://{parts.hostname}:{port}"
 
     def _evidence(
         self,

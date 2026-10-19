@@ -66,6 +66,9 @@ class BaseTool(ABC):
     # preflight. Re-running the whole aggregate with LLM-guessed parameters is
     # both expensive and unsafe, so they may opt into a per-stage execution cap.
     max_executions_per_stage: ClassVar[int | None] = None
+    # Opt in to a Run-scoped circuit for completed transient failures. Already
+    # in-flight requests are not cancelled; cached/replayed results are not health probes.
+    transient_failure_limit: ClassVar[int | None] = None
 
     def unavailable_reason(self) -> str | None:
         """Local configuration check only; never expose credentials or probe the network."""
@@ -74,6 +77,11 @@ class BaseTool(ABC):
     @staticmethod
     def failure_scope(arguments: dict[str, Any]) -> str | None:
         """Opt in to stopping repeated terminal failures for the same target."""
+        return None
+
+    @staticmethod
+    def transient_failure_scope(arguments: dict[str, Any]) -> str | None:
+        """A wider target (e.g. web origin) for consecutive retryable failures."""
         return None
 
     def validate_context(self, arguments: dict[str, Any], context: ToolContext) -> str | None:

@@ -1,0 +1,102 @@
+/* v0.8: an annotated dialogue beside a retained research document.
+   Reuse the product's Geist/CJK type and neutral/teal tokens; no chat gradients. */
+.conversationIndexLayout { display: grid; grid-template-columns: minmax(0,1fr) minmax(300px,360px); gap: 40px; align-items: start; }
+.conversationSectionHead, .conversationDialogueHeading, .conversationRunHeading, .conversationHeader, .conversationHeaderActions, .conversationReportHeading, .conversationMemoryHeading, .conversationActiveBar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.conversationSectionHead { padding: 0 0 16px; border-bottom: 1px solid var(--line); }
+.conversationSectionHead h2, .conversationCreate h2, .conversationDialogueHeading h2, .conversationReportHeading h2 { margin: 0; font-size: 16px; font-weight: 650; }
+.conversationSectionHead > span, .conversationNote, .conversationRow time { color: var(--muted); font-size: 12px; }
+.conversationRows { display: grid; }
+.conversationRowItem { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: start; gap: 14px; border-bottom: 1px solid var(--line); }
+.conversationRowItem .conversationRow { border-bottom: 0; }
+.conversationDeleteButton { min-height: 34px; white-space: nowrap; font-size: 12px; }
+.conversationRowItem > .conversationDeleteButton { margin-top: 20px; }
+.conversationRow { display: grid; grid-template-columns: 24px minmax(0,1fr) auto; align-items: start; gap: 16px; padding: 23px 4px; border-bottom: 1px solid var(--line); }
+.conversationRow > svg { margin-top: 4px; color: var(--primary); }
+.conversationRow strong { display: block; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.conversationRow p { margin: 5px 0 7px; color: var(--ink-soft); font-size: 12px; }
+.conversationRow > span { margin-top: 4px; color: var(--primary); font-size: 12px; white-space: nowrap; }
+.conversationRow:hover strong { color: var(--primary); }
+.conversationCreate { display: grid; gap: 20px; padding: 26px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.conversationCreate > p { margin: -11px 0 0; font-size: 12px; color: var(--muted); }
+.conversationCreate .field input, .conversationCreate .field select { width: 100%; height: 42px; padding: 9px 11px; background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 7px; }
+.conversationCreate .field small { color: var(--muted); font-size: 11px; }
+.conversationBudget { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.conversationAutoApprove { display: flex; align-items: flex-start; gap: 9px; font-size: 12px; }
+.conversationAutoApprove input { margin-top: 4px; accent-color: var(--primary); }
+.conversationAutoApprove small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+.conversationPagination { display: flex; align-items: center; justify-content: flex-end; gap: 16px; margin-top: 20px; color: var(--muted); font-size: 12px; }
+.conversationWorkspace { width: min(1510px,calc(100% - 64px)); }
+.conversationHeader { align-items: flex-end; margin-bottom: 25px; }
+.conversationHeader > div:first-child { min-width: 0; }
+.conversationHeader > div > a:first-child { font-size: 12px; color: var(--muted); }
+.conversationHeader h1 { max-width: 45ch; margin: 8px 0 0; font-size: clamp(24px,2.3vw,32px); line-height: 1.35; font-weight: 650; letter-spacing: -.03em; }
+.conversationHeaderActions { flex-shrink: 0; }
+.conversationConnection { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.conversationConnection::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
+.conversationConnection.is-live::before { background: var(--green); }
+.conversationMemory { margin-bottom: 24px; padding: 16px 0 17px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.conversationMemoryHeading { justify-content: flex-start; align-items: baseline; }
+.conversationMemoryHeading strong { font-size: 12px; font-weight: 600; }
+.conversationMemoryHeading span, .conversationMemory > p { color: var(--muted); font-size: 11px; }
+.conversationMemory > p { margin: 8px 0 0; }
+.conversationMemory dl { display: flex; flex-wrap: wrap; gap: 13px 28px; margin: 12px 0 0; }
+.conversationMemory dl > div { max-width: 42ch; }
+.conversationMemory dt { font-size: 11px; color: var(--muted); }
+.conversationMemory dd { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin: 2px 0 0; color: var(--ink); font-size: 13px; overflow-wrap: anywhere; }
+.conversationMemory dd small { font-size: 10px; color: var(--muted); }
+.conversationSplit { display: grid; grid-template-columns: minmax(340px,.85fr) minmax(0,1.15fr); align-items: start; gap: 24px; }
+.conversationDialogue { display: flex; flex-direction: column; min-width: 0; min-height: 560px; height: min(840px,calc(100dvh - 190px)); position: sticky; top: 24px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.conversationDialogueHeading { flex-shrink: 0; padding: 18px 22px; border-bottom: 1px solid var(--line); }
+.conversationDialogueHeading h2 { font-size: 14px; }
+.conversationDialogueHeading > span { color: var(--muted); font-size: 11px; }
+.conversationTranscript { flex: 1; min-height: 160px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 24px 22px; }
+.conversationWelcome { display: grid; align-content: center; justify-items: start; min-height: 240px; padding: 22px 4px; }
+.conversationWelcome > svg { color: var(--primary); }
+.conversationWelcome h3 { margin: 17px 0 8px; font-size: 20px; font-weight: 600; letter-spacing: -.025em; }
+.conversationWelcome p { max-width: 34ch; margin: 0 0 16px; font-size: 13px; color: var(--muted); line-height: 1.9; }
+.conversationWelcome button { padding-left: 0; font-size: 12px; color: var(--primary); }
+.conversationMessage { margin-bottom: 27px; }
+.conversationMessage > header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin-bottom: 9px; }
+.conversationMessage header strong { font-size: 12px; font-weight: 650; }
+.conversationMessage header time, .conversationMessage header > span { color: var(--muted); font-size: 10px; }
+.conversationMessageBody { font-size: 13px; line-height: 1.9; overflow-wrap: anywhere; }
+.conversationMessageBody > :first-child { margin-top: 0; }.conversationMessageBody > :last-child { margin-bottom: 0; }
+.conversationMessageBody p { margin: 10px 0; }.conversationMessageBody ul, .conversationMessageBody ol { padding-left: 20px; }
+.conversationMessageBody h1, .conversationMessageBody h2, .conversationMessageBody h3 { margin: 18px 0 10px; font-size: 15px; }
+.conversationMessageBody a { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
+.conversationMessageBody pre { overflow: auto; max-width: 100%; padding: 12px; background: var(--surface-soft); border-radius: 6px; font-size: 11px; }
+.conversationMessageBody blockquote { margin: 10px 0; padding: 9px 12px; border-left: 2px solid var(--amber); background: var(--amber-soft); color: var(--ink-soft); }
+.conversationMessage-user { margin-left: 20px; padding: 14px 17px; border-radius: 9px 9px 3px 9px; background: var(--surface-soft); }
+.conversationMessage-error .conversationMessageBody { color: var(--red); }
+.conversationMessage-proposal { padding: 0 0 18px; border-bottom: 1px solid var(--line); }
+.conversationProposalActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.conversationProposalActions .primaryButton { min-height: 36px; }
+.conversationSource { display: inline-flex; align-items: center; gap: 7px; margin-top: 10px; padding: 6px 0; color: var(--primary); font-size: 11px; border: 0; background: transparent; }
+.conversationTable { overflow: auto; max-width: 100%; }
+.conversationTable table { border-collapse: collapse; min-width: 100%; font-size: 11px; }.conversationTable :is(th,td) { padding: 8px; text-align: left; border-bottom: 1px solid var(--line); }
+.conversationRouting { display: flex; align-items: center; gap: 9px; margin: 16px 0; color: var(--muted); font-size: 12px; }
+.conversationRun { margin-top: 10px; padding: 16px; border: 1px solid var(--line); border-left: 2px solid var(--primary); border-radius: 7px; background: var(--surface-soft); }
+.conversationRunHeading strong { font-size: 13px; font-weight: 600; }.conversationRun > p { margin: 9px 0; color: var(--ink-soft); font-size: 12px; }
+.conversationRun .textButton { margin-top: 4px; padding-inline: 0; font-size: 11px; white-space: normal; justify-content: flex-start; text-align: left; }
+.conversationPlan { padding-left: 20px; margin: 16px 0; font-size: 12px; }.conversationPlan li { margin-bottom: 10px; padding-left: 3px; }.conversationPlan strong { font-weight: 600; }.conversationPlan span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+.conversationActiveBar { flex-shrink: 0; padding: 7px 19px; border-top: 1px solid var(--line); background: var(--surface-soft); font-size: 11px; color: var(--ink-soft); }.conversationActiveBar .textButton { min-height: 30px; font-size: 11px; }
+.conversationDialogue > .formError { flex-shrink: 0; margin: 8px 16px; }
+.conversationComposer { flex-shrink: 0; margin: 13px 16px 14px; border: 1px solid var(--line-strong); border-radius: 9px; overflow: hidden; background: var(--surface); }
+.conversationComposer:focus-within { border-color: var(--primary); }
+.conversationReplyBase { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; }.conversationReplyBase > span { flex-shrink: 0; }.conversationReplyBase select { min-width: 0; width: 100%; padding: 4px 0; border: 0; background: transparent; color: var(--ink-soft); font-size: 11px; }
+.conversationComposer textarea { display: block; width: 100%; max-height: 220px; min-height: 84px; resize: vertical; padding: 13px; border: 0; border-radius: 0; background: transparent; color: var(--ink); font-size: 13px; line-height: 1.8; outline-offset: -3px; }
+.conversationComposer textarea::placeholder { color: var(--muted); }.conversationComposer textarea:disabled { background: var(--surface-soft); }
+.conversationComposerFooter { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; padding: 6px 10px 10px 13px; }.conversationComposerFooter > span { max-width: 34ch; color: var(--muted); font-size: 10px; }.conversationComposerFooter small { display: block; margin-top: 3px; font-size: 10px; }.conversationComposerFooter button { min-height: 36px; padding-inline: 12px; font-size: 12px; }
+.conversationTrace { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 0 18px 12px; font-size: 10px; color: var(--muted); }.conversationTrace a { color: var(--primary); }
+.conversationReport { min-width: 0; }.conversationReportHeading { align-items: flex-start; margin-bottom: 19px; }.conversationReportHeading p { max-width: 38ch; margin: 5px 0 0; color: var(--muted); font-size: 11px; }.conversationReportHeading select { max-width: 190px; min-height: 36px; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: 12px; }
+.conversationReport > .emptyState { min-height: 500px; border: 1px dashed var(--line-strong); border-radius: 10px; }
+.conversationReportIdentity { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }.conversationReportIdentity .textButton { min-height: 32px; font-size: 11px; }
+.conversationReport .reportToolbar { flex-wrap: wrap; gap: 12px; }.conversationReport .reportActions { gap: 6px; flex-wrap: wrap; }.conversationReport .reportActions button { padding-inline: 10px; min-height: 34px; font-size: 11px; }
+.conversationReport .reportToolbar h2 { font-size: 13px; }.conversationReport .reportToolbar p { font-size: 11px; }.conversationReport .reportDownloadHint { font-size: 10px; }
+.conversationReport .reportPaper { padding: 28px 25px; }.conversationReport .reportPaperHeader h1 { font-size: clamp(23px,2vw,29px); line-height: 1.5; }.conversationReport .reportProse { font-size: 13px; line-height: 1.95; }.conversationReport .reportProse h2 { font-size: 19px; }.conversationReport .reportProse h3 { font-size: 16px; }
+.conversationReport .reportReader { display: block; }.conversationReport .reportPaperFooter { overflow-wrap: anywhere; }
+@media(max-width:1200px) { .conversationWorkspace { width: calc(100% - 48px); }.conversationSplit { grid-template-columns: minmax(310px,1fr) minmax(0,1fr); gap: 20px; }.conversationIndexLayout { gap: 26px; }.conversationReportHeading { flex-wrap: wrap; }.conversationTranscript { padding: 20px 17px; } }
+@media(max-width:1000px) { .conversationSplit { grid-template-columns: 1fr; gap: 32px; }.conversationDialogue { position: static; height: min(820px,78dvh); min-height: 560px; }.conversationReport > .emptyState { min-height: 260px; }.conversationIndexLayout { grid-template-columns: 1fr; }.conversationCreate { grid-row: 1; }.conversationReportHeading { flex-wrap: nowrap; } }
+@media(max-width:900px) { .mobileNav { grid-template-columns: repeat(7,minmax(0,1fr)); }.mobileNav a { min-width: 0; }.mobileNav a span { font-size: 9px; white-space: nowrap; } }
+@media(max-width:560px) { .conversationWorkspace { width: calc(100% - 28px); }.conversationHeader { align-items: flex-start; gap: 12px; }.conversationHeader h1 { font-size: 23px; }.conversationHeaderActions { flex-direction: column-reverse; align-items: flex-end; gap: 9px; }.conversationHeaderActions .secondaryButton { min-height: 34px; padding-inline: 10px; font-size: 11px; }.conversationMemoryHeading { flex-wrap: wrap; gap: 3px 12px; }.conversationMemory dl { gap: 12px 20px; }.conversationMemory dl > div { max-width: 100%; }.conversationDialogue { height: 75dvh; min-height: 540px; }.conversationDialogueHeading { padding: 15px; }.conversationTranscript { padding: 18px 14px; }.conversationComposer { margin-inline: 10px; }.conversationMessage-user { margin-left: 10px; }.conversationReportHeading { flex-wrap: wrap; }.conversationReport .reportPaper { padding: 24px 18px; }.conversationCreate { padding: 21px; }.conversationRow { gap: 11px; }.conversationRow > span { font-size: 11px; }.conversationComposerFooter > span { max-width: 25ch; } }
+@media print { .conversationHeader, .conversationMemory, .conversationDialogue, .conversationReportHeading, .conversationReportIdentity { display: none !important; }.conversationSplit { display: block; }.conversationWorkspace { width: 100%; padding: 0; } }

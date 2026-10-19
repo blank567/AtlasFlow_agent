@@ -202,7 +202,10 @@ async def test_itinerary_preflight_failure_does_not_trigger_llm_guess_loop():
         )
 
     assert len(model_requests) == 1
-    assert len(amap_requests) == 1
+    # Both stations are preflighted; each gets at most one bounded alternate
+    # provider search, without another model decision or speculative route.
+    assert len(amap_requests) == 4
+    assert all("/direction/" not in request.url.path for request in amap_requests)
     assert len(error.value.stage.records) == 1
     assert not error.value.stage.records[0].success
 

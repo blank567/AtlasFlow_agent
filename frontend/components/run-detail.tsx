@@ -84,6 +84,7 @@ export function RunDetail({ runId }: { runId: string }) {
   if (!run) return <main className="pageContent"><Panel><EmptyState title="运行记录读取失败" description={error ?? "记录不存在或后端暂不可用。"} /><Link className="secondaryButton inlineButton" href="/runs">返回运行记录</Link></Panel></main>;
   const activeRun = visualRun ?? run;
   const latestQuality = activeRun.quality_history.at(-1);
+  const acceptedPartialCount = new Set(run.research_results.filter((item) => item.outcome === "partial" && item.execution_accepted === true).map((item) => `${item.plan_version}:${item.task_id}`)).size;
   const isTerminal = TERMINAL_STATUSES.has(run.status);
   const tab = selectedTab ?? (run.status === "failed" ? "events" : isTerminal && run.report?.trim() ? "report" : "flow");
   const startedAt = run.started_at ? Date.parse(run.started_at) : NaN;
@@ -101,7 +102,7 @@ export function RunDetail({ runId }: { runId: string }) {
 
   return (
     <main className="pageContent runDetailPage">
-      <nav className="breadcrumb"><Link href="/runs">运行记录</Link><span>/</span><code>{compactId(run.id)}</code></nav>
+      <nav className="breadcrumb"><Link href="/runs">运行记录</Link>{run.conversation_id && <><span>/</span><Link href={`/conversations/${run.conversation_id}`}>返回研究会话</Link></>}<span>/</span><code>{compactId(run.id)}</code></nav>
       <header className="runHeader">
         <div><div className="runHeaderMeta"><StatusBadge status={run.status} /><span className={`streamIndicator ${streamState}`}><i />{streamState === "live" ? "实时连接" : streamState === "reconnecting" ? "正在重连" : streamState === "connecting" ? "连接中" : "快照模式"}</span></div><h1>{run.query}</h1><p><code title={run.id}>{compactId(run.id)}</code><button className="copyMini" type="button" aria-label="复制完整运行编号" onClick={() => void copyRunId()}>{copied ? "已复制" : "复制"}</button><span>{formatDate(run.created_at)}</span><span>知识库：{run.policy?.knowledge_mode === "off" ? "不使用" : run.policy?.knowledge_mode === "selected" ? run.policy.knowledge_space : "系统默认空间"}</span></p></div>
         <div className="headerActions"><button className="secondaryButton" type="button" onClick={showDiagnostics}>运行诊断</button>{!isTerminal && <button className="secondaryButton dangerText" disabled={actionBusy} onClick={() => setConfirmAction("cancel")}>取消运行</button>}<button className="primaryButton" disabled={actionBusy} onClick={() => setConfirmAction("rerun")}>重新运行</button></div>
@@ -111,7 +112,7 @@ export function RunDetail({ runId }: { runId: string }) {
       <RecoveryPanel key={run.id} run={run} onResumed={(value) => { setRun(value); void refresh(); }} />
 
       <div className="runSummary">
-        <MetricCard label="任务进度" value={`${run.metrics.successful_tasks} / ${run.metrics.total_tasks}`} note={isTerminal ? `${run.metrics.failed_tasks}个失败任务` : `当前节点${agentLabel}`} />
+        <MetricCard label="任务完成" value={`${run.metrics.successful_tasks} / ${run.metrics.total_tasks}`} note={run.execution_mode === "report_revision" ? "复用来源研究，本轮未重新执行任务" : isTerminal ? `${acceptedPartialCount ? `${acceptedPartialCount}项部分采纳 · ` : ""}${run.metrics.partial_tasks ?? 0}项待补全 · ${run.metrics.failed_tasks}项失败` : `当前节点${agentLabel}`} />
         <MetricCard label={isTerminal ? "运行时长" : "经过时间"} value={duration === undefined ? "未记录" : formatDuration(duration)} note={isTerminal ? "本次运行" : "从运行开始计算"} />
         <MetricCard label="质量评分" value={latestQuality?.score !== undefined ? `${latestQuality.score} / 100` : "未评估"} note={latestQuality?.decision ?? "报告生成后验收"} />
       </div>
@@ -122,9 +123,9 @@ export function RunDetail({ runId }: { runId: string }) {
         </div>
         <div className="tabContent" role="tabpanel" id={`run-panel-${tab}`} aria-labelledby={`run-tab-${tab}`}>
           {tab === "flow" && <><div className="tabIntro"><div><h2>Agent执行拓扑</h2><p>展示实际执行路径、补充任务、重新规划与稿件修订。</p></div><div className="graphLegend"><span><i className="legendDot running" />执行中</span><span><i className="legendDot completed" />已执行</span><span><i className="legendLine normal" />主线</span><span><i className="legendLine supplement" />补充</span><span><i className="legendLine replan" />重规划</span><span><i className="legendLine revise" />修订</span><span><i className="legendLine fallback" />决策改道</span></div></div><AgentFlow events={events} status={run.status} /></>}
-          {tab === "tasks" && <><div className="tabIntro"><div><h2>任务依赖与计划演进</h2><p>基础计划、补充批次和历史版本可独立追溯。</p></div></div><TaskGraph run={activeRun} events={events} /></>}
+          {tab === "tasks" && <><div className="tabIntro"><div><h2>任务依赖与计划演进</h2><p>{run.execution_mode === "report_revision" ? "本轮仅调整报告表达，来源计划和研究结果不代表重新执行。" : "基础计划、补充批次和历史版本可独立追溯。"}</p></div></div>{run.execution_mode === "report_revision" ? <><EmptyState title="本轮未执行研究任务" description="报告修订只执行合稿与验收。来源研究的任务、证据和执行记录保持独立。" />{run.source_run_id && <Link className="textButton" href={`/runs/${run.source_run_id}`}>查看来源研究记录</Link>}</> : <TaskGraph run={activeRun} events={events} />}</>}
           {tab === "events" && <div className="eventTab"><div className="tabIntro"><div><h2>事件时间线</h2><p>执行、工具调用与决策按实际发生顺序记录。</p></div><span className="panelHint">最新在前</span></div><EventTimeline events={events} /></div>}
-          {tab === "reviews" && <ReviewHistory run={activeRun} />}
+          {tab === "reviews" && <ReviewHistory run={activeRun} events={events} />}
           {tab === "report" && <ReportView run={run} />}
         </div>
       </Panel>
@@ -140,7 +141,7 @@ export function RunDetail({ runId }: { runId: string }) {
             <div className="toolCallHead"><strong>{call.tool_name}</strong><span className={`softBadge ${call.success ? "" : "amber"}`}>{call.success ? "已完成" : "失败"}</span><small>{call.agent}{call.task_id ? `·${call.task_id}` : ""}·{formatDuration(call.duration_ms)}</small></div>
             <p>{call.success ? call.summary ?? "结果摘要未记录" : call.error ?? call.summary ?? "错误详情未记录"}</p>
             {sources.length > 0 && <div className="toolSources">{sources.map((source) => source.uri?.startsWith("https://") || source.uri?.startsWith("http://") ? <a key={source.id} href={source.uri} target="_blank" rel="noreferrer">{source.title} ↗</a> : <span key={source.id}>{source.title}</span>)}</div>}
-            {navigationUrls.map((url, index) => <a key={`${index}-${url}`} className="toolNavigation" href={url} target="_blank" rel="noreferrer">{navigationUrls.length > 1 ? `第 ${index + 1} 段导航` : "打开高德导航"} ↗</a>)}
+            {navigationUrls.map((url, index) => <a key={`${index}-${url}`} className="toolNavigation" href={url} target="_blank" rel="noreferrer">{call.navigation_leg_indices?.[index] ? `第${call.navigation_leg_indices[index]}段导航` : navigationUrls.length > 1 ? `第${index + 1}段导航` : "打开高德导航"} ↗</a>)}
           </article>;
         })}</div>}
       </Panel>
@@ -171,9 +172,13 @@ export function RunDetail({ runId }: { runId: string }) {
   );
 }
 
-function ReviewHistory({ run }: { run: NonNullable<ReturnType<typeof useRunStream>["run"]> }) {
-  if (!run.critique_history.length && !run.quality_history.length) return <EmptyState title="暂无审查决策" description="Critic审查与质量验收结论按计划版本归档。" />;
-  return <div className="reviewColumns"><section><h2>Critic审查</h2>{run.critique_history.map((item, index) => <article className="reviewCard" key={`critic-${index}`}><div><span className={`decisionTag decision-${item.decision}`}>{item.decision}</span><small>计划v{item.plan_version}</small></div><p>{item.rationale}</p>{item.replan_reason && <code>重规划原因：{item.replan_reason}</code>}</article>)}</section><section><h2>质量验收</h2>{run.quality_history.map((item, index) => <article className="reviewCard" key={`quality-${index}`}><div><span className={`decisionTag decision-${item.decision}`}>{item.decision}</span><small>计划v{item.plan_version}，稿件v{item.draft_version}</small></div><strong>{item.score !== undefined ? `${item.score}/100` : "未评估"}</strong><p>{item.rationale}</p></article>)}</section></div>;
+function ReviewHistory({ run, events }: { run: NonNullable<ReturnType<typeof useRunStream>["run"]>; events: RunEvent[] }) {
+  const reviews = [...run.critique_history, ...events.filter((event) => event.event_type === "review_decided" && event.data.decision === "review_degraded").map((event) => ({
+    decision: "review_degraded", plan_version: event.plan_version ?? 1, replan_reason: null,
+    rationale: event.decision_reason ?? String(event.data.decision_reason ?? event.message), created_at: event.created_at,
+  }))].sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""));
+  if (!reviews.length && !run.quality_history.length) return <EmptyState title="暂无审查决策" description="Critic审查与质量验收结论按计划版本归档。" />;
+  return <div className="reviewColumns"><section><h2>Critic审查</h2>{reviews.map((item, index) => <article className="reviewCard" key={`critic-${index}`}><div><span className={`decisionTag decision-${item.decision}`}>{item.decision === "review_degraded" ? "审查降级" : item.decision}</span><small>计划v{item.plan_version}</small></div><p>{item.rationale}</p>{item.replan_reason && <code>重规划原因：{item.replan_reason}</code>}</article>)}</section><section><h2>质量验收</h2>{run.quality_history.map((item, index) => <article className="reviewCard" key={`quality-${index}`}><div><span className={`decisionTag decision-${item.decision}`}>{item.decision}</span><small>计划v{item.plan_version}，稿件v{item.draft_version}</small></div><strong>{item.score !== undefined ? `${item.score}/100` : "未评估"}</strong><p>{item.rationale}</p></article>)}</section></div>;
 }
 
 function deriveRunFromEvents(run: RunRecord, events: RunEvent[]): RunRecord {
@@ -199,7 +204,7 @@ function deriveRunFromEvents(run: RunRecord, events: RunEvent[]): RunRecord {
       next = { ...next, plan_lineage: rawLineage as PlanLineage };
     }
   }
-  const reviewEvents = events.filter((event) => event.event_type === "review_decided");
+  const reviewEvents = events.filter((event) => event.event_type === "review_decided" && event.data.decision !== "review_degraded");
   if (reviewEvents.length > next.critique_history.length) {
     const missing = reviewEvents.slice(next.critique_history.length).map((event) => ({
       decision: String(event.data.decision ?? "unknown"),

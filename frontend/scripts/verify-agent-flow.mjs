@@ -42,6 +42,7 @@ assert.equal(flow.edges.find((edge) => edge.kind === "replan")?.target, "planner
 assert.equal(flow.edges.find((edge) => edge.kind === "revise")?.target, "synthesizer");
 assert.equal(flow.edges.find((edge) => edge.source === "planner" && edge.target === "approval")?.routes.length, 2);
 assert.equal(buildAgentFlow([route(25, "critic", "synthesizer", "replan")], "completed").edges[0]?.kind, "fallback", "a requested replan is not an executed replan when policy diverts it");
+assert.equal(buildAgentFlow([route(25, "critic", "synthesizer", "review_degraded")], "completed").edges[0]?.kind, "fallback", "a degraded review is visible as a diversion, not a successful Critic verdict");
 assert.equal(buildAgentFlow([], "running").edges.length, 0, "do not draw routes that never happened");
 
 const overview = buildAgentOverview(flow);

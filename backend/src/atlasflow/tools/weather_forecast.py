@@ -23,6 +23,8 @@ class WeatherForecastArguments(BaseModel):
 
 class WeatherForecastTool(BaseTool):
     name = "weather_forecast"
+    # Same-stage identical forecast queries share one acquisition, not two HTTP trips.
+    cache_identical_calls = True
     description = (
         "查询指定城市未来 1–7 天的天气预报、气温和降水概率。"
         "结果来自 Open-Meteo，适用于非商业演示；报告需注明预测查询时间和来源。"

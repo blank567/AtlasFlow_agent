@@ -4,6 +4,7 @@ import asyncio
 import json
 import sqlite3
 from collections.abc import Sequence
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -69,6 +70,36 @@ class SQLiteRunStore:
     async def open(self) -> None:
         async with self._lock:
             self._open_sync()
+
+    @asynccontextmanager
+    async def transaction(self):
+        """Share one locked SQLite transaction with related business repositories."""
+        async with self._lock:
+            self._open_sync()
+            with self._connection:
+                yield self._connection
+
+    def insert_prepared(self, connection: sqlite3.Connection, record: RunRecord) -> None:
+        """Insert identity/projection inside an already-held business transaction."""
+        if connection is not self._connection:
+            raise ValueError("prepared Run must use this store's transaction")
+        connection.execute(
+            "INSERT INTO runs(id, query, source_run_id, created_at) VALUES (?, ?, ?, ?)",
+            (record.id, record.query, record.source_run_id, record.created_at.isoformat()),
+        )
+        self._insert_projection_sync(record)
+
+    async def ensure_conversation_writable(self, conversation_id: str) -> None:
+        """Fence direct Run commands while their parent deletion is pending."""
+        async with self.transaction() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversations'"
+            ).fetchone()
+            row = connection.execute(
+                "SELECT payload_json FROM conversations WHERE id=?", (conversation_id,)
+            ).fetchone() if exists else None
+            if row is None or json.loads(row[0]).get("deleting", False):
+                raise InvalidRunStateError("会话不存在或正在删除，不能启动、审批、恢复或重新运行")
 
     async def apply_outbox(self, payload: dict[str, Any], patch: dict[str, Any]) -> None:
         """Receipt/event and projection patch commit together, once per event UUID."""

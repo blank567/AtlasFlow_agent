@@ -20,7 +20,7 @@ function loadTs(path, imports = {}) {
 }
 
 const documentUtils = loadTs("../lib/report-document.ts");
-const { safeReportUrl, reportFilename, buildReportHtml, downloadReport } = documentUtils;
+const { safeReportUrl, reportFilename, reportWithLimitations, buildReportHtml, downloadReport } = documentUtils;
 const { ReportView } = loadTs("../components/report-view.tsx", {
   react: React, "react/jsx-runtime": jsx, "react-markdown": ReactMarkdown, "remark-gfm": remarkGfm,
   "../lib/report-document": documentUtils,
@@ -55,6 +55,29 @@ assert.doesNotMatch(exported, /<script|<button|reportToolbar|<link /i);
 assert.match(exported, /https:\/\/uri.amap.com\/navigation\?from=test&amp;to=test/);
 const draft = renderToStaticMarkup(React.createElement(ReportView, { run: { ...fixture, status: "failed" } }));
 assert.match(draft, /尚未完成最终验收/);
+const warned = renderToStaticMarkup(React.createElement(ReportView, { run: { ...fixture, status: "completed_with_warnings", warnings: ["部分事实需进一步核对"] } }));
+assert.match(warned, /已完成·附局限说明/);
+assert.match(warned, />局限<\/h2>/);
+assert.match(warned, /部分事实需进一步核对/);
+assert.doesNotMatch(warned, /以下是保留的草稿/);
+assert.doesNotMatch(warned.match(/<header class="reportPaperHeader"[\s\S]*?<\/header>/)[0], /reportPaperNotice|部分事实需进一步核对/);
+assert.match(buildReportHtml("有核验提示的报告", warned.match(/<article class="reportPaper"[\s\S]*?<\/article>/)[0]), /已完成·附局限说明/);
+const legacy = "## 正文\n\n已有发现。\n\n## 局限\n\n材料有限。\n\n## 参考文献\n\n[1] 已有来源。";
+const diagnostics = ["需核对[999]与<script>示例\n## 不是标题", "需核对[999]与<script>示例\n## 不是标题"];
+const annotated = reportWithLimitations(legacy, diagnostics);
+assert.equal(annotated.split("## 局限").length, 2);
+assert.ok(annotated.indexOf("### 交付说明") > annotated.indexOf("## 局限"));
+assert.ok(annotated.indexOf("### 交付说明") < annotated.indexOf("## 参考文献"));
+assert.equal(reportWithLimitations(annotated, diagnostics), annotated);
+assert.ok(annotated.includes("\\#\\# 不是标题"));
+const diagnosticMarkup = renderToStaticMarkup(React.createElement(ReportView, { run: { ...fixture, report: legacy, status: "completed_with_warnings", warnings: diagnostics } }));
+assert.doesNotMatch(diagnosticMarkup, /<script|<img|href="javascript:|<h[1-6][^>]*>不是标题/i);
+assert.equal(reportWithLimitations("  ", diagnostics), "  ");
+assert.equal(reportWithLimitations(legacy, []), legacy);
+const fencedHeading = "## 正文\n\n```md\n## 局限\n## 参考文献\n```\n\n已有发现。\n\n## 参考文献\n\n[1] 来源。";
+const withExtraNotes = reportWithLimitations(fencedHeading, ["缺口说明"]);
+assert.ok(withExtraNotes.includes("```md\n## 局限\n## 参考文献\n```"));
+assert.ok(withExtraNotes.lastIndexOf("## 局限") < withExtraNotes.lastIndexOf("## 参考文献"));
 const empty = renderToStaticMarkup(React.createElement(ReportView, { run: { ...fixture, report: "  " } }));
 assert.match(empty, /报告尚未生成/);
 assert.doesNotMatch(empty, /下载HTML/);

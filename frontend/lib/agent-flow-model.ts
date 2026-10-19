@@ -136,6 +136,7 @@ function routeKind(route: AgentRoute): RouteKind {
   if (decision === "supplement") return supplement ? "supplement" : "fallback";
   if (decision === "replan") return replan ? "replan" : "fallback";
   if (decision === "revise") return revise ? "revise" : "fallback";
+  if (["review_degraded", "delivery_fallback", "limited_delivery"].includes(decision ?? "")) return "fallback";
   if (supplement) return "supplement";
   if (replan) return "replan";
   if (revise) return "revise";

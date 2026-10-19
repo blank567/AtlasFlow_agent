@@ -210,6 +210,8 @@ async def resume_run(run_id: str, payload: ResumeRunRequest, request: Request) -
         return await container_from(request).run_service.resume(run_id, payload)
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Run not found") from exc
+    except InvalidRunStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ExecutionControlError as exc:
         raise _execution_error(exc) from exc
 
@@ -242,6 +244,8 @@ async def rerun(
         )
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Run not found") from exc
+    except InvalidRunStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ExecutionControlError as exc:
         raise _execution_error(exc) from exc
 

@@ -158,16 +158,14 @@ def create_postgres_execution(database_url: str, *, profile_hash: str = "researc
     from psycopg.rows import dict_row
     from psycopg_pool import AsyncConnectionPool
 
-    from atlasflow.execution.contracts import checkpoint_types
+    from atlasflow.execution.contracts import checkpoint_msgpack_modules
 
     repository = PostgresExecutionRepository(database_url, schema=schema)
     parsed = make_url(database_url).set(drivername="postgresql")
     pool = AsyncConnectionPool(parsed.render_as_string(hide_password=False), open=False,
         kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row,
                 "options": f"-c search_path={schema},public"}, min_size=1, max_size=5)
-    allowed = [(model.__module__, model.__name__) for model in checkpoint_types().values()]
-    allowed += [("atlasflow.agents.contracts", name) for name in
-                ("CritiqueRoute", "QualityRoute", "ReplanReason", "Severity")]
+    allowed = checkpoint_msgpack_modules()
 
     class SafePostgresSaver(AsyncPostgresSaver):
         async def aget_tuple(self, *args, **kwargs):

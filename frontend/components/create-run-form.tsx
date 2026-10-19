@@ -23,8 +23,8 @@ export function CreateRunForm() {
     required_supplement_rounds: 1,
     supplement_task_count: 1,
     replan_requires_critical_issue: true,
-    max_tool_calls_per_turn: 5,
-    max_tool_calls_per_run: 20,
+    max_tool_calls_per_turn: 10,
+    max_tool_calls_per_run: 40,
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,7 +53,7 @@ export function CreateRunForm() {
       return;
     }
     setBusy(true);
-    if ((policy.max_tool_calls_per_run ?? 20) < (policy.max_tool_calls_per_turn ?? 5)) {
+    if ((policy.max_tool_calls_per_run ?? 40) < (policy.max_tool_calls_per_turn ?? 10)) {
       setError("运行工具调用总额不得低于单轮Agent调用上限。");
       setBusy(false);
       runBudgetInput.current?.focus();
@@ -126,8 +126,8 @@ export function CreateRunForm() {
           <label className="field"><span>初始任务数</span><input type="number" min={2} max={5} disabled={busy} value={policy.initial_task_count ?? ""} onChange={(event) => updateNumber("initial_task_count", event.target.value)} placeholder="自动规划" /><small>2-5项，留空由Planner确定。</small></label>
           <label className="field"><span>强制补充轮次</span><select value={policy.required_supplement_rounds ?? 0} disabled={busy} onChange={(event) => updateNumber("required_supplement_rounds", event.target.value)}><option value={0}>按审查结果补充</option><option value={1}>至少补充一轮</option></select><small>由Critic执行补充决策。</small></label>
           <label className="field"><span>每轮补充任务数</span><input type="number" min={1} max={2} disabled={busy} value={policy.supplement_task_count ?? ""} onChange={(event) => updateNumber("supplement_task_count", event.target.value)} placeholder="按审查结果确定" /><small>1-2项，留空由Critic确定。</small></label>
-          <label className="field"><span>单轮Agent工具上限</span><input type="number" min={1} max={10} required disabled={busy} value={policy.max_tool_calls_per_turn ?? 5} onChange={(event) => updateNumber("max_tool_calls_per_turn", event.target.value)} /><small>1-10次工具调用。</small></label>
-          <label className="field"><span>运行工具调用总额</span><input ref={runBudgetInput} type="number" min={1} max={50} required disabled={busy} value={policy.max_tool_calls_per_run ?? 20} onChange={(event) => updateNumber("max_tool_calls_per_run", event.target.value)} /><small>1-50次，所有Agent共享。</small></label>
+          <label className="field"><span>单轮Agent工具上限</span><input type="number" min={1} max={10} required disabled={busy} value={policy.max_tool_calls_per_turn ?? 10} onChange={(event) => updateNumber("max_tool_calls_per_turn", event.target.value)} /><small>1-10次工具调用，默认10次。</small></label>
+          <label className="field"><span>运行工具调用总额</span><input ref={runBudgetInput} type="number" min={1} max={50} required disabled={busy} value={policy.max_tool_calls_per_run ?? 40} onChange={(event) => updateNumber("max_tool_calls_per_run", event.target.value)} /><small>1-50次，所有Agent共享，默认40次。</small></label>
         </div>
         <div className="configOptions">
           <label className="configOption"><input type="checkbox" disabled={busy} checked={policy.planner_allow_research ?? false} onChange={(event) => updateBoolean("planner_allow_research", event.target.checked)} /><span><strong>Planner背景调研</strong><small>每次规划至多一次背景查询。</small></span></label>

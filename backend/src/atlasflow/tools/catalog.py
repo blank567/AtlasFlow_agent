@@ -18,7 +18,14 @@ def build_tool_registry(settings: Settings, *, web_search: BaseTool | None) -> T
     )
     if web_search is not None:
         registry.register(web_search)
-    registry.register(WebFetchTool())
+    registry.register(WebFetchTool(
+        connect_timeout_seconds=settings.web_fetch_connect_timeout_seconds,
+        read_timeout_seconds=settings.web_fetch_read_timeout_seconds,
+        # Leave cleanup time so the reader, not wait_for(), describes a total timeout.
+        total_timeout_seconds=min(
+            settings.web_fetch_total_timeout_seconds, settings.tool_timeout_seconds * 0.95
+        ),
+    ))
     registry.register(CalculatorTool())
     amap_limiter = AmapRequestLimiter()
     registry.register(AmapRouteTool(settings.amap_api_key, request_limiter=amap_limiter))

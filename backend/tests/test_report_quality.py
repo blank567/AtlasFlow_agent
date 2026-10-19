@@ -90,7 +90,7 @@ def test_report_audit_rejects_fenced_fake_headings_and_fabricated_links() -> Non
     } <= codes
     decision = apply_report_audit(_accepted(), issues, threshold=80)
     assert decision.decision is QualityRoute.REVISE
-    assert decision.score < 80
+    assert decision.score == 92  # The route rejects; the reported score is not rewritten.
     assert decision.revision_instructions
 
 
@@ -107,7 +107,7 @@ def test_fresh_data_without_source_cannot_be_accepted() -> None:
     assert issues[0].severity is Severity.CRITICAL
     decision = apply_report_audit(_accepted(), issues, threshold=80)
     assert decision.decision is QualityRoute.REPLAN
-    assert decision.score < 80
+    assert decision.score == 92
 
 
 def test_numbered_citation_must_map_to_verified_catalog_and_reference_entry() -> None:

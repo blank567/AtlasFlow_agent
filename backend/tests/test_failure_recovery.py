@@ -92,6 +92,8 @@ async def test_json_truncation_retries_with_larger_budget_and_retains_finish_rea
                             "findings": ["结论"],
                             "limitations": [],
                             "confidence": 0.8,
+                            "assessments": [{"criterion_index": 1, "status": "met", "finding_indices": [1],
+                                             "source_ids": [], "reason": "已有对应结论"}],
                         }
                     )
                 },
@@ -106,14 +108,14 @@ async def test_json_truncation_retries_with_larger_budget_and_retains_finish_rea
         "原始问题", ResearchTask(**raw_task(), plan_version=1), tool_context="单独的证据"
     )
     assert result.summary == "已完成"
-    assert [item["max_tokens"] for item in requests] == [1600, 3200]
+    assert [item["max_tokens"] for item in requests] == [1820, 3640]
     assert [item.finish_reason for item in client.recent_calls] == ["length", "stop"]
     assert client.recent_calls[0].content_length > 0
     assert "单独的证据" in requests[0]["messages"][1]["content"]
 
 
 @pytest.mark.asyncio
-async def test_json_reasoning_exhaustion_disables_reasoning_without_growing_budget():
+async def test_json_reasoning_exhaustion_retries_without_growing_budget():
     requests = []
 
     def handler(request):
@@ -133,6 +135,8 @@ async def test_json_reasoning_exhaustion_disables_reasoning_without_growing_budg
                         "findings": ["结论"],
                         "limitations": [],
                         "confidence": 0.8,
+                        "assessments": [{"criterion_index": 1, "status": "met", "finding_indices": [1],
+                                         "source_ids": [], "reason": "已有对应结论"}],
                     }
                 )
             }, "stop"
@@ -145,8 +149,8 @@ async def test_json_reasoning_exhaustion_disables_reasoning_without_growing_budg
     )
 
     assert result.summary == "已精简完成"
-    assert [item["max_tokens"] for item in requests] == [1600, 1600]
-    assert [item["reasoning_effort"] for item in requests] == ["low", "none"]
+    assert [item["max_tokens"] for item in requests] == [1820, 1820]
+    assert [item["reasoning_effort"] for item in requests] == ["none", "none"]
 
 
 @pytest.mark.asyncio
@@ -189,7 +193,7 @@ async def test_tool_reasoning_exhaustion_never_executes_an_incomplete_call():
 
     assert not error.value.stage.records
     assert [item["max_tokens"] for item in requests] == [1600, 1600]
-    assert [item["reasoning_effort"] for item in requests] == ["minimal", "none"]
+    assert [item["reasoning_effort"] for item in requests] == ["none", "none"]
 
 
 @pytest.mark.asyncio
@@ -409,7 +413,8 @@ async def test_partial_itinerary_is_failure_not_complete_capability():
         ToolContext(run_id="partial", agent_name="researcher"),
     )
     assert not result.success and "预解析第 3 站" in result.error
-    assert len(result.data["navigation_urls"]) == 0
+    assert len(result.data["navigation_urls"]) == 1
+    assert result.data["verified_legs"] == [1]
     assert "distance_m" not in result.model_dump_json()
 
 

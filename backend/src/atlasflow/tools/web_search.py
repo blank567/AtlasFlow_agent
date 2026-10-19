@@ -25,7 +25,11 @@ class OpenRouterWebSearchTool(BaseTool):
     capabilities = (Capability("web_search", "检索公开网页及可引用来源，包括当前信息", True),)
     model_calls_per_execution = 1
     name = "web_search"
-    description = "Search current public web sources through OpenRouter server tools."
+    description = (
+        "优先搜索公开网页，返回带来源链接的事实摘要及可用片段。"
+        "适合一般介绍、历史背景及当前信息；材料充分时不必再调用web_fetch。"
+        "搜索摘要不等于已直接读取网页原文，关键细节或矛盾仍需按需核对。"
+    )
     risk_level = RiskLevel.LOW
     arguments_model = WebSearchArguments
 
@@ -115,6 +119,9 @@ class OpenRouterWebSearchTool(BaseTool):
             )
         return ToolResult(
             success=True,
-            data={"provider": "openrouter", "summary": answer},
+            data={
+                "provider": "openrouter", "summary": answer,
+                "notice": "搜索摘要及引用只代表本次检索材料；不等于已直接读取或全文核验来源网页。",
+            },
             evidence=evidence,
         )

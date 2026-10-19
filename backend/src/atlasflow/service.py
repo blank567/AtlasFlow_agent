@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter, defaultdict
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any, Literal, Protocol
 from uuid import uuid4
@@ -117,6 +118,8 @@ class RunStore(Protocol):
     async def records_since(self, since: datetime | None) -> list[RunRecord]: ...
 
     async def delete(self, run_id: str) -> None: ...
+
+    async def ensure_conversation_writable(self, conversation_id: str) -> None: ...
 
     async def upsert_trace_segment(self, run_id: str, segment: TraceSegment) -> None: ...
 
@@ -292,6 +295,11 @@ class InMemoryRunStore:
                 )
             del self._runs[run_id]
 
+    async def ensure_conversation_writable(self, conversation_id: str) -> None:
+        # This legacy store has no conversation repository. Fail closed rather
+        # than allowing an unverifiable conversation-owned execution to start.
+        raise InvalidRunStateError("Conversation execution requires SQLite conversation storage")
+
     def _get(self, run_id: str) -> RunRecord:
         record = self._runs.get(run_id)
         if record is None:
@@ -321,6 +329,10 @@ class RunService:
 
     def _run_lock(self, run_id: str) -> asyncio.Lock:
         return self._operation_locks.setdefault(run_id, asyncio.Lock())
+
+    async def _ensure_conversation_writable(self, run: RunRecord) -> None:
+        if run.conversation_id is not None:
+            await self.store.ensure_conversation_writable(run.conversation_id)
 
     async def _bind_new(self, run: RunRecord) -> None:
         snapshot = None
@@ -367,6 +379,7 @@ class RunService:
         policy: RunPolicy | None = None,
     ) -> RunRecord:
         source = await self.store.get(source_run_id)
+        await self._ensure_conversation_writable(source)
         resolved_query = query if query is not None else source.query
         resolved_auto_approve = auto_approve if auto_approve is not None else source.auto_approve
         resolved_policy = policy or source.policy
@@ -387,6 +400,25 @@ class RunService:
             ),
         )
         return run
+
+    async def launch_prepared(self, run_id: str) -> RunRecord:
+        """Dispatch a conversation-reserved Run; never allocate another identity."""
+        async with self._run_lock(run_id):
+            run = await self.store.get(run_id)
+            await self._ensure_conversation_writable(run)
+            if run.status is not RunStatus.PENDING or run_id in self._tasks:
+                return run
+            try:
+                await self._bind_new(run)
+            except ExecutionControlError as exc:
+                await self._interrupt_execution(run_id, exc)
+                return await self.store.get(run_id)
+            except Exception as exc:  # noqa: BLE001 - preserve the reserved Run on failure.
+                await self._fail(run_id, exc)
+                return await self.store.get(run_id)
+            self._track(run_id, self._execute_start(run_id, run.query,
+                auto_approve=run.auto_approve, policy=run.policy))
+            return await self.store.get(run_id)
 
     async def execute_and_wait(
         self,
@@ -416,6 +448,7 @@ class RunService:
 
     async def _resolve_approval_locked(self, run_id: str, request: ApprovalRequest) -> RunRecord:
         run = await self.store.get(run_id)
+        await self._ensure_conversation_writable(run)
         if self.execution is not None:
             request_id = request.request_id or str(uuid4())
             payload = {"kind": "approval", "action": request.action.value,
@@ -475,7 +508,14 @@ class RunService:
                 fresh = await self.store.get(run_id)
                 if fresh.status in RunStatus.terminal():
                     raise InvalidRunStateError("Run reached a terminal state before cancellation")
-                await self.execution.cancel(run_id, request_id=request_id, under_delivery_lock=True)
+                bundle = await self.execution.repository.read(run_id)
+                if bundle is not None:
+                    await self.execution.cancel(run_id, request_id=request_id, under_delivery_lock=True)
+                elif fresh.status not in {RunStatus.PENDING, RunStatus.INTERRUPTED}:
+                    raise ExecutionConflict("active Run execution binding missing; cancellation blocked")
+                # A reserved Run can be cancelled before its first binding, or
+                # after startup marked that never-dispatched reservation interrupted.
+                # There is no durable work/outbox to fence in that case.
 
         task = self._tasks.get(run_id)
         if task is not None and not task.done():
@@ -486,7 +526,7 @@ class RunService:
                 pass
 
         if self.workflow.tool_runtime is not None:
-            self.workflow.tool_runtime.budget.clear(run_id)
+            self.workflow.tool_runtime.clear_run(run_id)
         current = await self.store.get(run_id)
         if current.status in RunStatus.terminal():
             if current.status is RunStatus.CANCELLED:
@@ -520,6 +560,45 @@ class RunService:
                     # prevent startup after the SQLite cascade deletion.
                     await self.execution.cancel(run_id, deleted=True)
             await self.store.delete(run_id)
+
+    @asynccontextmanager
+    async def conversation_deletion(self, conversation_id: str, run_ids: Sequence[str]) -> AsyncIterator[None]:
+        """Stop and fence an exact owned set; keep Run locks through SQL commit.
+
+        Conversation storage performs the physical multi-Run delete atomically.
+        No source-run traversal: a separately rerun report is not owned here.
+        """
+
+        async with AsyncExitStack() as stack:
+            ids = sorted(set(run_ids))
+            for run_id in ids:
+                await stack.enter_async_context(self._run_lock(run_id))
+            for run_id in ids:
+                try:
+                    run = await self.store.get(run_id)
+                except RunNotFoundError:
+                    run = None  # A previously deleted linked Run is harmless.
+                if run is not None and run.conversation_id != conversation_id:
+                    raise InvalidRunStateError("Run ownership does not match the conversation; deletion blocked")
+                if run is not None and run.status not in RunStatus.terminal():
+                    try:
+                        await self._cancel_locked(run_id)
+                    except InvalidRunStateError:
+                        # Completion may race cancellation. Terminal is safe;
+                        # any other invalid state must abort physical deletion.
+                        if (await self.store.get(run_id)).status not in RunStatus.terminal():
+                            raise
+                task = self._tasks.get(run_id)
+                if task is not None and not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                if self.execution is not None:
+                    bundle = await self.execution.repository.read(run_id)
+                    if bundle is not None:
+                        await self.execution.cancel(run_id, deleted=True)
+                if self.workflow.tool_runtime is not None:
+                    self.workflow.tool_runtime.clear_run(run_id)
+            yield
 
     async def inspect_recovery(self, run_id: str) -> RecoveryInfo:
         if self.execution is None:
@@ -559,6 +638,7 @@ class RunService:
             raise ExecutionConflict("persistent execution is not enabled")
         async with self._run_lock(run_id):
             run = await self.store.get(run_id)
+            await self._ensure_conversation_writable(run)
             payload = {"kind": "resume", **request.model_dump()}
             bundle = await self.execution.repository.read(run_id)
             if bundle and request.request_id in bundle.commands:
@@ -715,7 +795,8 @@ class RunService:
         ]
         successful_tasks = sum(record.metrics.successful_tasks for record in records)
         failed_tasks = sum(record.metrics.failed_tasks for record in records)
-        attempted_tasks = successful_tasks + failed_tasks
+        partial_tasks = sum(record.metrics.partial_tasks for record in records)
+        attempted_tasks = successful_tasks + failed_tasks + partial_tasks
         quality_scores = [
             record.quality_history[-1].score for record in records if record.quality_history
         ]
@@ -748,6 +829,7 @@ class RunService:
                 total_tasks=sum(record.metrics.total_tasks for record in records),
                 successful_tasks=successful_tasks,
                 failed_tasks=failed_tasks,
+                partial_tasks=partial_tasks,
                 total_supplement_rounds=sum(record.metrics.supplement_rounds for record in records),
                 total_replans=sum(record.metrics.replan_count for record in records),
                 total_revisions=sum(record.metrics.revision_count for record in records),
@@ -817,6 +899,7 @@ class RunService:
                 auto_approve=auto_approve,
                 policy=policy,
                 retrieval_snapshot=run.retrieval_snapshot,
+                **({"continuation_input": run.continuation_input} if run.continuation_input else {}),
             )
             await self._apply_execution(run_id, execution)
             if self.execution is not None:
@@ -910,7 +993,7 @@ class RunService:
 
     async def _fail(self, run_id: str, exc: Exception) -> None:
         if self.workflow.tool_runtime is not None:
-            self.workflow.tool_runtime.budget.clear(run_id)
+            self.workflow.tool_runtime.clear_run(run_id)
         run = await self.store.get(run_id)
         if run.status in RunStatus.terminal():
             return
@@ -950,7 +1033,10 @@ class RunService:
             "report",
             "warnings",
         )
-        return {key: state[key] for key in keys if key in state}
+        changes = {key: state[key] for key in keys if key in state}
+        if state.get("final_status") and "final_warnings" in state:
+            changes["warnings"] = list(state["final_warnings"])
+        return changes
 
     @staticmethod
     def _failure_message(state: dict[str, Any]) -> str:

@@ -137,7 +137,8 @@ async def test_destination_error_and_multi_stop_error_identify_editable_input():
         CONTEXT,
     )
     assert not result.success and "预解析第 3 站" in result.error
-    assert len(result.data["navigation_urls"]) == 0
+    assert len(result.data["navigation_urls"]) == 1
+    assert result.data["verified_legs"] == [1]
     assert "poi-1" not in json.dumps(_sanitize_trace_outputs(result))
 
 
@@ -196,15 +197,15 @@ async def test_same_failed_map_request_is_suppressed_across_stages_but_refinemen
         ToolCallRecord.model_validate_json(row.model_dump_json())
         for row in first.value.stage.records
     ]
-    assert len(records) == len(requests) == 1
+    assert len(records) == 1 and len(requests) == 2
     assert len(records[0].failure_scope) == 64
     assert records[0].arguments == {"mode": "walking"}
     assert "同名馆" not in records[0].model_dump_json()
     with pytest.raises(RequiredToolError) as second:
         await runtime.gather(**options, prior_calls=records)
-    assert not second.value.stage.records and len(requests) == 1
+    assert not second.value.stage.records and len(requests) == 2
     stage = await runtime.gather(**options, prior_calls=records)
-    assert stage.records[0].success and len(requests) == 4
+    assert stage.records[0].success and len(requests) == 5
     assert sum(bool(event.data.get("suppressed")) for event in events) == 2
 
 

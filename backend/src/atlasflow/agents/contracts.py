@@ -55,8 +55,8 @@ class RunPolicy(ContractModel):
     required_supplement_rounds: int = Field(default=0, ge=0, le=1)
     supplement_task_count: int | None = Field(default=None, ge=1, le=2)
     replan_requires_critical_issue: bool = True
-    max_tool_calls_per_turn: int = Field(default=5, ge=1, le=10)
-    max_tool_calls_per_run: int = Field(default=20, ge=1, le=50)
+    max_tool_calls_per_turn: int = Field(default=10, ge=1, le=10)
+    max_tool_calls_per_run: int = Field(default=40, ge=1, le=50)
     planner_allow_research: bool = False
     # Older runs keep their configured default space; new UI runs choose off or selected.
     knowledge_mode: Literal["default", "selected", "off"] = "default"
@@ -82,6 +82,9 @@ class ResearchTask(ContractModel):
     success_criteria: list[str] = Field(min_length=1, max_length=10)
     priority: int = Field(ge=1, le=5)
     dependencies: list[str] = Field(default_factory=list, max_length=6)
+    # Supplemental repair ownership is distinct from scheduling dependencies:
+    # a repair must not depend on the failed result it is supposed to replace.
+    repairs_task_ids: list[str] = Field(default_factory=list, max_length=7)
     # Defaults read historical checkpoints; new model output must include both fields.
     requires_fresh_data: bool = Field(default=False, strict=True)
     required_capabilities: list[
@@ -109,6 +112,10 @@ class ResearchTask(ContractModel):
             raise ValueError("task dependencies must be unique")
         if self.task_id in self.dependencies:
             raise ValueError("a task cannot depend on itself")
+        if len(self.repairs_task_ids) != len(set(self.repairs_task_ids)) or self.task_id in self.repairs_task_ids:
+            raise ValueError("repair targets must be unique and cannot include the task itself")
+        if set(self.repairs_task_ids) & set(self.dependencies):
+            raise ValueError("a repair cannot depend on its repair target")
         return self
 
 
@@ -158,6 +165,8 @@ class ResearchPlan(ContractModel):
                 raise ValueError(
                     f"task {task.task_id!r} has unknown dependencies: {sorted(missing)}"
                 )
+            if set(task.repairs_task_ids) - known_ids:
+                raise ValueError("repair targets must belong to the same plan")
 
         dependencies = {task.task_id: set(task.dependencies) for task in self.tasks}
         visiting: set[str] = set()
@@ -286,6 +295,16 @@ class PlanLineage(ContractModel):
         )
 
 
+class CriterionAssessment(ContractModel):
+    """Compact, auditable links from one acceptance criterion to findings."""
+
+    criterion_index: int = Field(ge=1, le=10, strict=True)
+    status: Literal["met", "partial", "unmet"]
+    finding_indices: list[Annotated[int, Field(ge=1, le=20, strict=True)]] = Field(max_length=20)
+    source_ids: list[str] = Field(default_factory=list, max_length=8)
+    reason: str = Field(min_length=1, max_length=200)
+
+
 class ResearchResult(ContractModel):
     result_id: str = Field(default_factory=lambda: str(uuid4()))
     task_id: str = Field(min_length=1, max_length=64)
@@ -294,6 +313,15 @@ class ResearchResult(ContractModel):
     findings: list[str] = Field(min_length=1, max_length=20)
     limitations: list[str] = Field(default_factory=list, max_length=20)
     confidence: float = Field(ge=0.0, le=1.0)
+    # Defaults keep historical runs/checkpoints readable. Fresh model output is
+    # required to include assessments; the workflow owns the calibrated fields.
+    assessments: list[CriterionAssessment] = Field(default_factory=list, max_length=10)
+    outcome: Literal["unassessed", "complete", "partial"] = "unassessed"
+    # Execution acceptance is not evidence completeness or a confidence uplift.
+    # None preserves the interpretation of historical, pre-policy results.
+    execution_accepted: bool | None = None
+    reported_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    criteria_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
     attempt: int = Field(default=1, ge=1)
     duration_ms: int = Field(default=0, ge=0)
 
@@ -312,6 +340,13 @@ class ReviewIssue(ContractModel):
     message: str = Field(min_length=1, max_length=2_000)
     task_id: str | None = Field(default=None, max_length=64)
     recommendation: str = Field(min_length=1, max_length=2_000)
+    # Defaults preserve historical/Critic records. Unknown is never auto-waived.
+    scope: Literal["core", "local", "presentation", "unknown"] = "unknown"
+    paragraph_ids: list[str] = Field(default_factory=list, max_length=8)
+    source_numbers: list[Annotated[int, Field(ge=1, le=999, strict=True)]] = Field(
+        default_factory=list, max_length=8,
+    )
+    reported_severity: Severity | None = None
 
 
 class ReviewContext(ContractModel):
@@ -326,6 +361,9 @@ class ReviewContext(ContractModel):
     supplemental_task_ids: list[str] = Field(default_factory=list, max_length=2)
     completed_task_ids: list[str] = Field(default_factory=list, max_length=7)
     failed_task_ids: list[str] = Field(default_factory=list, max_length=7)
+    partial_task_ids: list[str] = Field(default_factory=list, max_length=7)
+    repaired_task_ids: list[str] = Field(default_factory=list, max_length=7)
+    blocked_task_ids: list[str] = Field(default_factory=list, max_length=7)
     supplement_rounds_used: int = Field(ge=0, le=1)
     supplement_rounds_remaining: int = Field(ge=0, le=1)
     current_task_count: int = Field(ge=2, le=7)
@@ -339,6 +377,9 @@ class ReviewContext(ContractModel):
             "supplemental": self.supplemental_task_ids,
             "completed": self.completed_task_ids,
             "failed": self.failed_task_ids,
+            "partial": self.partial_task_ids,
+            "repaired": self.repaired_task_ids,
+            "blocked": self.blocked_task_ids,
         }
         for label, ids in id_groups.items():
             if len(ids) != len(set(ids)):
@@ -353,9 +394,13 @@ class ReviewContext(ContractModel):
         failed_ids = set(self.failed_task_ids)
         if completed_ids & failed_ids:
             raise ValueError("completed and failed task ids must be disjoint")
+        if set(self.partial_task_ids) & (completed_ids | failed_ids):
+            raise ValueError("partial task ids must be disjoint from completed and failed ids")
+        if set(self.blocked_task_ids) & (completed_ids | failed_ids | set(self.partial_task_ids)):
+            raise ValueError("blocked tasks cannot also have a terminal result")
 
         active_ids = initial_ids | supplemental_ids
-        unknown_result_ids = (completed_ids | failed_ids) - active_ids
+        unknown_result_ids = set().union(*(set(ids) for ids in id_groups.values())) - active_ids
         if unknown_result_ids:
             raise ValueError(
                 f"review result ids must belong to the active plan: {sorted(unknown_result_ids)}"
@@ -473,6 +518,9 @@ class CritiqueDecision(ContractModel):
             expected_code = self.replan_reason.value if self.replan_reason else None
             if not any(issue.code == expected_code for issue in critical_issues):
                 raise ValueError("replan reason must be backed by a matching critical issue code")
+        if self.decision is CritiqueRoute.REPLAN and self.replan_reason is ReplanReason.DEPENDENCY_DEAD_END:
+            if not context.blocked_task_ids:
+                raise ValueError("dependency_dead_end requires actual blocked tasks; repair an isolated task locally")
         return self
 
 
@@ -481,6 +529,9 @@ class DraftVersion(ContractModel):
     plan_version: int = Field(ge=1)
     content: str = Field(min_length=1, max_length=200_000)
     based_on_task_ids: list[str] = Field(default_factory=list, max_length=7)
+    # Workflow-owned URL order: later review acquisitions must not renumber
+    # citations already used by this draft, particularly navigation sources.
+    citation_source_urls: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
 
     @model_validator(mode="after")
@@ -488,6 +539,40 @@ class DraftVersion(ContractModel):
         if len(self.based_on_task_ids) != len(set(self.based_on_task_ids)):
             raise ValueError("draft task ids must be unique")
         return self
+
+
+class ReportBaselineSection(ContractModel):
+    """Workflow-owned review units, not required output headings or new tasks."""
+
+    section_id: str = Field(pattern=r"^B[1-9][0-9]*$")
+    title: str = Field(min_length=1, max_length=400)
+    content: str = Field(min_length=1, max_length=200_000)
+
+
+class ReportUpdateContext(ContractModel):
+    """Separate cumulative delivery scope from incremental research scope."""
+
+    base_run_id: str = Field(min_length=1)
+    base_query: str
+    base_report: str = Field(min_length=1, max_length=200_000)
+    update_request: str = Field(min_length=1)
+    sections: list[ReportBaselineSection] = Field(min_length=1, max_length=12)
+    citation_source_urls: list[str] = Field(default_factory=list)
+    base_warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def unique_section_ids(self) -> Self:
+        ids = [item.section_id for item in self.sections]
+        if len(ids) != len(set(ids)):
+            raise ValueError("report baseline section_ids must be unique")
+        return self
+
+
+class BaselineCoverage(ContractModel):
+    section_id: str = Field(pattern=r"^B[1-9][0-9]*$")
+    status: Literal["retained", "updated", "removed", "missing"]
+    location: str = Field(default="", max_length=160)
+    reason: str = Field(min_length=1, max_length=200)
 
 
 class QualityDecision(ContractModel):
@@ -498,12 +583,27 @@ class QualityDecision(ContractModel):
     rationale: str = Field(min_length=1, max_length=4_000)
     issues: list[ReviewIssue] = Field(default_factory=list, max_length=20)
     revision_instructions: list[str] = Field(default_factory=list, max_length=20)
+    # Optional on historical/standalone decisions; required on new cumulative reviews.
+    baseline_coverage: list[BaselineCoverage] = Field(default_factory=list, max_length=12)
+
+    def validate_for_execution(self) -> Self:
+        """Validate fresh decisions, not historical records/checkpoints on read."""
+
+        if self.decision is not QualityRoute.ACCEPT and not self.issues:
+            raise ValueError("quality revise/replan requires concrete issues, not only a rationale")
+        if self.decision is QualityRoute.REVISE and not any(
+                instruction.strip() for instruction in self.revision_instructions):
+            raise ValueError("quality revise requires actionable revision_instructions")
+        if self.decision is QualityRoute.REPLAN and not any(
+                issue.severity is Severity.CRITICAL for issue in self.issues):
+            raise ValueError("quality replan requires a critical issue")
+        return self
 
     @model_validator(mode="after")
     def validate_acceptance_threshold(self) -> Self:
         if self.decision is QualityRoute.ACCEPT:
-            if self.score < 80:
-                raise ValueError("quality acceptance requires a score of at least 80")
+            if self.score < 50:
+                raise ValueError("quality acceptance requires a score of at least 50")
             if any(issue.severity is Severity.CRITICAL for issue in self.issues):
                 raise ValueError("quality acceptance cannot contain a critical issue")
         return self
@@ -538,6 +638,7 @@ class ExecutionMetrics(ContractModel):
     total_tasks: int = Field(default=0, ge=0, le=12)
     successful_tasks: int = Field(default=0, ge=0, le=12)
     failed_tasks: int = Field(default=0, ge=0, le=12)
+    partial_tasks: int = Field(default=0, ge=0, le=12)
     peak_concurrency: int = Field(default=0, ge=0, le=3)
     plan_versions: int = Field(default=1, ge=1, le=2)
     supplement_rounds: int = Field(default=0, ge=0, le=1)
@@ -548,7 +649,7 @@ class ExecutionMetrics(ContractModel):
 
     @model_validator(mode="after")
     def validate_task_counts(self) -> Self:
-        if self.successful_tasks + self.failed_tasks > self.total_tasks:
+        if self.successful_tasks + self.failed_tasks + self.partial_tasks > self.total_tasks:
             raise ValueError("successful and failed tasks cannot exceed total tasks")
         if self.finished_at is not None and self.finished_at < self.started_at:
             raise ValueError("finished_at cannot precede started_at")

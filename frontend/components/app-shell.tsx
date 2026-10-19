@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ReactNode, useEffect, useState } from "react";
-import { ChartLineUp, ClockCounterClockwise, Database, Desktop, Flask, GearSix, MoonStars, SquaresFour, Sun } from "@phosphor-icons/react";
+import { ChartLineUp, ChatsCircle, ClockCounterClockwise, Database, Desktop, Flask, GearSix, MoonStars, SquaresFour, Sun } from "@phosphor-icons/react";
 
 const NAV_ITEMS = [
   { href: "/", label: "工作台", icon: SquaresFour },
+  { href: "/conversations", label: "研究会话", icon: ChatsCircle },
   { href: "/runs", label: "运行记录", icon: ClockCounterClockwise },
   { href: "/analytics", label: "统计分析", icon: ChartLineUp },
   { href: "/knowledge", label: "知识库", icon: Database },
@@ -58,7 +59,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             );
           })}
         </nav>
-        <div className="sidebarUtilities">{themeControl}<div className="sidebarFoot"><Desktop size={16} aria-hidden="true" /><span>本地工作区</span><small>v0.7.0</small></div></div>
+        <div className="sidebarUtilities">{themeControl}<div className="sidebarFoot"><Desktop size={16} aria-hidden="true" /><span>本地工作区</span><small>v0.8.0</small></div></div>
       </aside>
       <div className="pageFrame">
         <header className="mobileHeader">

@@ -1,6 +1,6 @@
 {
   "name": "atlasflow-web",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -11,6 +11,7 @@
     "test:ui": "node scripts/verify-event-visuals.mjs",
     "test:report": "node scripts/verify-report.mjs",
     "test:report:browser": "node scripts/verify-report-browser.mjs",
+    "test:conversations:browser": "node scripts/verify-conversations-browser.mjs",
     "test:evaluation:browser": "node scripts/verify-evaluation-browser.mjs",
     "test:evaluations:v2:browser": "node scripts/verify-evaluations-v2-browser.mjs",
     "test:evaluations:chart": "node scripts/verify-evaluation-chart.mjs",

@@ -15,7 +15,9 @@ def _evidence(source_id: str, title: str, url: str, content: str = "证据正文
 def test_project_skill_loads_report_depth_and_citation_contract() -> None:
     instructions = academic_report_instructions()
 
-    assert "1,500–3,500" in instructions
+    assert "There is no minimum length" in instructions
+    assert "Consolidate unresolved details" in instructions
+    assert "### 待核实事项" in instructions
     assert "[1]" in instructions
     assert "Do not emit `[task:T1]`" in instructions
 

@@ -9,6 +9,8 @@ from atlasflow.agents.gateway import ModelGateway, OpenRouterModelGateway
 from atlasflow.agents.tool_runtime import ToolRuntime
 from atlasflow.agents.workflow import ResearchWorkflow
 from atlasflow.config import Settings
+from atlasflow.conversations.service import ConversationService
+from atlasflow.conversations.storage import SQLiteConversationStore
 from atlasflow.evaluation.common.service import V2EvaluationService
 from atlasflow.evaluation.runner import EvaluationService
 from atlasflow.evaluation_bindings import build_evaluation
@@ -51,6 +53,7 @@ class Container:
     registry: ToolRegistry
     store: SQLiteRunStore
     run_service: RunService
+    conversations: ConversationService | None = None
     execution: ExecutionRuntime | None = None
     evaluation: EvaluationService | None = None
     evaluation_v2: V2EvaluationService | None = None
@@ -144,6 +147,7 @@ def build_container(settings: Settings, providers: ProviderBundle | None = None)
         registry=registry,
         store=store,
         run_service=run_service,
+        conversations=ConversationService(SQLiteConversationStore(store), run_service, providers.model),
         execution=execution,
         evaluation=evaluation,
         evaluation_v2=build_evaluation_v2(settings, knowledge, registry, providers, workflow_options, evaluation),
@@ -156,12 +160,14 @@ def _workflow_options(settings: Settings) -> dict[str, Any]:
         "max_initial_tasks": settings.max_research_tasks,
         "max_research_attempts": settings.max_research_attempts,
         "quorum_ratio": settings.research_quorum_ratio,
+        "accept_partial_results": settings.research_accept_partial_results,
         "max_supplement_rounds": settings.max_supplement_rounds,
         "max_supplement_tasks": settings.max_supplement_tasks,
         "max_tasks_per_plan": settings.max_tasks_per_plan,
         "max_replans": settings.max_replans,
         "max_revisions": settings.max_report_revisions,
         "quality_threshold": settings.quality_threshold,
+        "quality_relaxed_review": settings.quality_relaxed_review,
     }
 
 
@@ -175,7 +181,9 @@ def _execution_profile(settings, knowledge, workflow_options) -> str:
                 for name in ("llm_base_url", "embedding_base_url", "rerank_base_url", "search_base_url")}
     return digest({"code": code, "models": models, "services": services,
                    "request_limits": {name: getattr(settings, name) for name in
-                       ("max_tool_retries", "tool_timeout_seconds", "provider_timeout_seconds")},
+                       ("max_tool_retries", "tool_timeout_seconds", "provider_timeout_seconds",
+                        "web_fetch_connect_timeout_seconds", "web_fetch_read_timeout_seconds",
+                        "web_fetch_total_timeout_seconds")},
                    "workflow": workflow_options, "query_pipeline": knowledge.describe_query_pipeline(),
                    "retrieval": knowledge.retrieval.profile.model_dump(mode="json")})
 
@@ -227,7 +235,12 @@ def build_openrouter_providers(settings: Settings) -> ProviderBundle:
 
     search_model = settings.search_model or settings.llm_model
     return ProviderBundle(
-        model=OpenRouterModelGateway(llm_client, settings.llm_model),
+        model=OpenRouterModelGateway(
+            llm_client, settings.llm_model,
+            quality_threshold=settings.quality_threshold,
+            accept_partial_results=settings.research_accept_partial_results,
+            relaxed_review=settings.quality_relaxed_review,
+        ),
         embedding=OpenRouterEmbeddingProvider(embedding_client, settings.embedding_model),
         reranker=OpenRouterRerankProvider(rerank_client, settings.rerank_model),
         web_search_tool=OpenRouterWebSearchTool(search_client, search_model),

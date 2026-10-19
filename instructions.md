@@ -811,3 +811,662 @@ npm run build
 ```
 
 本轮已通过51项后端相关测试、前端离线回归和生产构建；浏览器165次拦截请求、0异常，截图在build/evaluation-v2-browser/check-a5E5en。只验证测试Provider与内存夹具，不写真实实验库，不产生模型费用。所有临时文件均在E盘，3216验收服务已停止。
+
+## 26. 报告引用与验收警告修复（2026-10-17）
+
+本次仅处理报告引用、审核和警告状态，不实施上下文管理改造。版本仍为0.7.0，不修改.env，不需要数据库迁移、知识空间重建或前端重新构建。
+
+在运行后端的终端按Ctrl+C停止服务，再执行：
+
+```powershell
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+# 使用原langchain环境，直接加载本地backend/src；不占用C盘缓存。
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --reload --port 8000
+```
+
+重新创建的运行使用新规则。已有报告、旧Quality评分和终态不会因重启自动改变；不自动重跑付费任务，也不把历史警告直接清空。运行中的老检查点可读取，新分类以前没有标记的旧警告按保守原则保留；若另外启动了Studio进程，也应使用其原命令重启以加载新代码。
+
+本次变化：
+
+- 引用紧邻中文、英文或连续出现（如“结论[1][2]”）均可识别，正文与参考文献使用同一套规则；代码示例不算引用。文末允许已核验的访问链接，正文仍须使用编号引用。
+- QualityGate不能只返回“需要修订”而不给具体问题和修改指令。JSON契约修复复用原有有界重试与执行预算，仍不合法则节点失败、保留最后草稿，不消耗整轮报告修订去猜测意见。
+- 最新计划与最新草稿验收通过后，可选工具阶段的降级转为历史事件；时间线仍可查看，不等于删除错误。真正的任务失败、证据缺口、预算耗尽和修订耗尽仍显示警告，不能据此承诺所有报告都正常完成。
+- 工作流检查点warnings保留历史，final_warnings为终态有效清单；网页RunRecord使用终态清单。Finalizer事件同时记录historical_operational_warnings和active_warnings，方便排查，不新增数据表。
+
+完全离线的回归命令：
+
+```powershell
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+# 引用丢失、空审核修复、真实警告保留、陈旧验收与旧记录兼容：26项，不调用模型。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests/test_report_warning_regression.py --basetemp=E:\codex\agent\build\pytest-report-warning-manual -p no:cacheprovider -q
+# 全量后端回归；依赖外部基础设施的用例按原配置跳过，不自动启动服务。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests --basetemp=E:\codex\agent\build\pytest-report-warning-manual-full -p no:cacheprovider -q
+```
+
+本轮591项后端测试通过、5项跳过，前端typecheck、report/flow/ui通过。对三份历史报告仅在内存副本验证引用修复，缺失条目分别由10/8/7降至0；格式通过不代表已重新审核报告事实。详细原因与代码路径见本地docs/report-warning-fix.md，原数据库未写入。
+
+## 27. v0.8.0多轮研究会话（2026-10-17）
+
+本节追加新版本操作，不覆盖旧版本记录。无需新增依赖或修改.env，继续复用LLM_MODEL及已有工具、RAG、LangSmith连接。PostgreSQL与其他基础设施按原指令保持运行；会话表不在PostgreSQL里。
+
+### 启动与生效
+
+```powershell
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+# 先在旧后端终端按Ctrl+C，再启动v0.8.0；不要重复占用8000端口。
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --reload --port 8000
+```
+
+```powershell
+# 在另一个VSCode终端启动前端；已运行开发服务时刷新页面即可。
+Set-Location E:\codex\agent\frontend
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:NPM_CONFIG_CACHE = 'E:\codex\tmp\npm-cache'
+npm run dev
+# 生产前端使用原来的npm run build与npm run start流程。
+```
+
+浏览器打开http://localhost:3000/conversations，或从侧栏进入“研究会话”。创建会话本身不调用模型；发送消息会调用主模型进行路由，报告解释还会进行一次回答请求，结构化修复可能产生原有有界重试。研究与表达修订必须再次确认执行。默认不自动批准研究计划，确认研究后还需在计划卡片中批准，或进入Run详情修改计划。
+
+### 建议体验顺序
+
+1. 新建会话，选择本会话固定使用的知识空间或“不使用知识库”，设置每次研究的工具预算。
+2. 输入“帮我做一份旅游报告”，缺少必要条件时先澄清，不启动研究Run。
+3. 补充“北京，三天，两个人，预算3000元”，核验当前需求与执行建议，点击“确认执行”。
+4. 计划生成后批准或修改；研究完成后报告显示在右侧，保留独立运行详情。
+5. 追问“为什么第二天这样安排”，只解释已有报告，不创建新研究。
+6. 输入“改成五天，预算不变，补充交通核验”，确认后创建关联前版的新研究Run。
+7. 输入“内容不变，改成正式报告写法”，确认后仅修订表达与重新验收，不调用研究工具。
+8. 在“阅读报告版本”切换旧报告；“本轮依据”可明确选择要解释或修订的历史报告。前者只切换阅读，后者决定下一条消息明确使用的来源。
+
+同一会话只能有一个活跃处理轮次。待执行建议可通过新消息替代；实际研究/审批/中断阶段需先完成或停止，不能用聊天“好的”绕过审批，也不能在执行中热改条件。停止需要确认，已发生的模型请求仍可能计费。网络错误会保留输入；未知结果重试复用原request_id，版本冲突则刷新并重新核验。已结束Run不回退到运行态。
+
+### 数据在哪里
+
+本地.env的DATABASE_PATH仍为E:/codex/agent/data/atlasflow.sqlite3。启动新后端时在同一个SQLite文件中创建conversations、conversation_messages、conversation_turns及索引；无需运行PostgreSQL的Alembic迁移或重建知识空间。在VSCode的SQLite连接中刷新表列表，不是在PostgreSQL/public中查找这三张表。
+
+会话记录和大部分新增字段位于payload_json；conversation_turns额外保存request_id、status和run_id用于检索与约束。Run仍使用runs/run_projections/run_events；关联与续接材料进入Run投影JSON，不给旧表批量增加每个Pydantic字段。旧聊天原文不会自动进入知识库或Embedding。
+
+重启后端后从数据库恢复聊天记录。服务停止时结果未知的聊天处理不会自动重发；研究Run按原检查点机制恢复，需要用户明确批准恢复条件。版本代码变化可能使旧未完成Run的执行配置不兼容，应按原提示新建运行，不根据聊天记录猜测恢复。Studio仍管理单个研究图线程，不自动把Studio线程导入网页会话。
+
+### API与离线回归
+
+| API | 用途 |
+| --- | --- |
+| POST /api/v1/conversations | 创建会话，设置知识空间与预算 |
+| GET /api/v1/conversations?page=1 | 分页列出会话 |
+| GET /api/v1/conversations/{id} | 获取消息、轮次、需求、报告目录与活跃运行 |
+| POST /api/v1/conversations/{id}/messages | 提交content、request_id、expected_version，可显式指定base_run_id |
+| POST /api/v1/conversations/{id}/turns/{turn_id}/confirm | 确认执行，传confirmation_turn_id与expected_version |
+| POST /api/v1/conversations/{id}/turns/{turn_id}/cancel | 明确停止当前轮次，校验活跃Turn身份 |
+| GET /api/v1/conversations/{id}/events | 版本化SSE快照，支持Last-Event-ID重连 |
+
+```powershell
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+# 19项会话夹具测试，无真实模型或生产数据写入。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests/test_conversations.py --basetemp=E:\codex\agent\build\pytest-conversations-manual -p no:cacheprovider -q
+# 全量后端离线回归。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests --basetemp=E:\codex\agent\build\pytest-v080-manual-full -p no:cacheprovider -q
+```
+
+```powershell
+Set-Location E:\codex\agent\frontend
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+npm run typecheck
+npm run test:report
+npm run test:flow
+npm run test:ui
+# 可选浏览器验收：先按第18节隔离构建/启动前端；此脚本拦截全部API，不运行真实研究。
+# 浏览器配置、截图、诊断和下载均在E盘build/conversation-browser中。
+npm run test:conversations:browser -- http://127.0.0.1:3217
+```
+
+注意：RunPolicy的max_tool_calls_per_turn仍表示一次Agent工具决策，不是用户一条聊天消息；每个新研究Run独立使用工具总额，聊天路由请求单独记录在Turn追踪。LangSmith内容采集、脱敏和密钥配置沿用已有设置。本轮后端610通过、5跳过，前端回归与隔离构建通过，浏览器63次夹具请求、0异常。详细流程见本地docs/conversations-v080.md；首版不新增长期记忆、鉴权/多租户或跨进程写入能力。
+
+## 28. v0.8.0网页抓取超时与失败控制（2026-10-18）
+
+本地.env和.env.example新增以下参数，修改后重启后端即可，前端不需要重新构建：
+
+```dotenv
+# 所有工具的外层执行限制；不代表web_fetch的每个网络阶段都等待120秒。
+TOOL_TIMEOUT_SECONDS=120
+# 单个已核验公网IP的连接/TLS握手上限。
+WEB_FETCH_CONNECT_TIMEOUT_SECONDS=8
+# 等待响应头或下一段正文数据的上限，不是整页总时长。
+WEB_FETCH_READ_TIMEOUT_SECONDS=20
+# DNS、连接、备用IP、重定向和读取合计的整体上限。
+# 实际还会取与外层工具限制95%的较小值，给资源清理预留时间。
+WEB_FETCH_TOTAL_TIMEOUT_SECONDS=35
+```
+
+连接失败可在同一次工具调用内尝试最多两个经过公网校验的IP；每次实际HTTP派发都计入评测HTTP预算。不会自动使用系统/环境代理、关闭证书校验或把HTTPS降级为HTTP。连接仍不通时，新错误会注明WEB_FETCH_CONNECT_TIMEOUT；读取停滞是WEB_FETCH_READ_TIMEOUT，整体到期是WEB_FETCH_TOTAL_TIMEOUT。
+
+同一Run、同一源站连续两次明确可重试失败后，后续请求显示TOOL_CIRCUIT_OPEN，不实际访问、不占工具调用额度。修改focus或同源路径、换Task或重规划不会绕过；Agent可搜索其他可信来源。既有在途请求不会被强制取消，缓存结果不重置健康状态，历史retryable未知的记录不推断为临时失败。新Run独立计算，旧失败事件不删除。代码或超时参数变化会改变持久化执行配置指纹；若旧未完成Run提示配置不兼容，应新建运行，不强制恢复未知请求。
+
+```powershell
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+# 离线定向回归：包括模拟超时、备用IP、失败拦截与HTTP预算；不调用真实模型。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests/test_web_fetch.py backend/tests/test_web_fetch_reliability.py backend/tests/test_evaluation_http_guards.py backend/tests/test_tool_runtime.py --basetemp=E:\codex\agent\build\pytest-web-fetch-manual -p no:cacheprovider -q
+# 全量回归，所有测试临时产物仍放在E盘。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests --basetemp=E:\codex\agent\build\pytest-web-fetch-full-manual -p no:cacheprovider -q
+# 先在旧后端终端按Ctrl+C停止原进程，再使用langchain环境启动。
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --reload --port 8000
+```
+
+本次不需要Alembic迁移、不需要重建知识空间、不重跑历史任务。外部来源确实不可达时，修复的行为是明确失败阶段、限制重复请求并引导换源，而不是保证该网站能够抓取。
+
+## 29. v0.8.0QualityGate结构化验收修复（2026-10-18）
+
+如果报错包含quality revise/replan requires concrete issues，表示报告已生成，但验收模型要求修订/重规划时没有提供具体问题，不是web_fetch错误。REASONING_BUDGET_EXHAUSTED表示该次请求未返回JSON正文；CONTRACT_INVALID表示已得到输出但不能作为有效Agent决策。系统不会根据一句rationale伪造问题清单或强行放行报告。
+
+本次将QualityGate的模型输出Schema改为quality_decision_v04_verdict，根字段verdict内按accept/revise/replan分别约束。修订必须有非空issues与revision_instructions；重规划必须有问题清单，后端另校验critical问题。对外QualityDecision与数据库投影仍是原来的平铺结构，历史记录无需转换。QualityGate从第一次请求起使用reasoning_effort=none、max_tokens=1400，其他Agent设置不变，结构化失败仍有界重试。原失败Run、草稿和错误链保留，不自动重新判为通过。
+
+```powershell
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+# 离线回归：空问题清单、缺少修改指令、低分接受、重规划缺少critical及恢复链。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests/test_quality_output_recovery.py backend/tests/test_report_warning_regression.py backend/tests/test_openrouter.py --basetemp=E:\codex\agent\build\pytest-quality-manual -p no:cacheprovider -q
+# 全量回归；不依赖真实模型，临时产物均在E盘。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests --basetemp=E:\codex\agent\build\pytest-quality-full-manual -p no:cacheprovider -q
+# 停止旧后端后重新启动，新任务使用新的输出契约。
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --reload --port 8000
+```
+
+不需要修改.env密钥、前端构建、Alembic迁移或重建知识空间。代码更新会改变持久化执行指纹，旧未完成Run若提示配置不兼容，不应强制恢复；历史草稿仍可阅读和下载。一次短小合成算术报告的真实模型联调已确认当前配置端点支持新Schema，返回了1项问题和3项修改指令；没有重新发送原研究报告或自动重跑旧任务。该联调可能产生少量API费用，不属于上述离线回归命令。
+
+## 30. v0.8.0导航可靠性与任务验收（2026-10-18）
+
+本次同时更新后端任务契约与前端状态展示。先在原服务终端按Ctrl+C停止旧进程，再按下面的顺序重启；不需要修改密钥、迁移数据库或重建RAG空间。旧Run保留原状态与草稿，若执行指纹不一致应新建Run，不强行恢复未知的外部请求。
+
+```powershell
+# 后端终端：所有缓存、临时文件继续放在E盘。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --reload --port 8000
+```
+
+```powershell
+# 前端另开终端：重启后刷新页面，查看部分完成和逐项验收。
+Set-Location E:\codex\agent\frontend
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:NEXT_TELEMETRY_DISABLED = '1'
+$env:npm_config_cache = 'E:\codex\agent\build\npm-cache'
+npm.cmd run dev
+```
+
+```powershell
+# 离线导航/任务验收回归，不调用真实高德或模型，不重跑现有任务。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m pytest backend/tests/test_navigation_reliability.py backend/tests/test_task_acceptance.py backend/tests/test_poi_preflight.py backend/tests/test_map_disambiguation.py backend/tests/test_failure_recovery.py --basetemp=E:\codex\agent\build\pytest-navigation-manual -p no:cacheprovider -q
+# 全量后端验证。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests --basetemp=E:\codex\agent\build\pytest-navigation-full-manual -p no:cacheprovider -q
+# 前端类型与已有离线回归。
+Set-Location E:\codex\agent\frontend
+.\node_modules\.bin\tsc.cmd --noEmit --incremental false
+node scripts/verify-agent-flow.mjs
+node scripts/verify-event-visuals.mjs
+node scripts/verify-report.mjs
+```
+
+map_itinerary单日继续使用stops，多日使用days（最多3个日期组，每组2—6站），二选一；两者都不能填猜测的入口或地址。原有地点条件没有匹配候选时，系统只增加一次检索表达回退，仍严格验证全部已知限定。部分路段有效不代表整体能力成功，界面会保留已核验的原路段序号与真实错误。超过单次工具支持的行程范围，应在计划中拆成独立导航任务，不忽略日期或站点。
+
+新任务的“完整完成”要求全部成功标准通过、来源可核验且保守confidence至少0.6；partial展示为部分完成，独立统计，不是运行异常，也不是已满足全部需求。置信度只受上限约束，不被调高，不代表真实正确率。Critic补充任务必须用repairs_task_ids明确修复对象、保留原成功标准，并依赖其有效上游；不要把失败任务放入修复任务的dependencies。
+
+本轮真实联调仅使用合成算术任务和公开景点：1次模型请求、3次高德HTTP请求均通过，不属于上述离线命令；没有执行完整用户旅行研究，不能据此宣称所有真实Run都保证成功。后续遇到真实数据缺失、错误地点限定、凭据失效、服务故障或持续无效模型输出时仍会如实标记部分完成或失败，不伪造证据过关。
+
+## 31. v0.8.0会话与关联Run删除（2026-10-18）
+
+在“研究会话”列表或会话详情点击“删除会话”，核对标题和删除范围后再点击“永久删除”。当前运行会先停止，本地消息、报告和全部归属Run一并删除，无法通过本应用撤销。其他会话、独立重跑和知识库不受影响，LangSmith远端Trace不会删除。清理中断后请使用“重试删除”，不要通过重新运行绕过待删除状态。
+
+```powershell
+# 分别在原终端按Ctrl+C停止旧服务，再重启后端；不需要迁移数据库。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --reload --port 8000
+```
+
+```powershell
+# 前端另开终端：使用新删除按钮与确认弹窗。
+Set-Location E:\codex\agent\frontend
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:NEXT_TELEMETRY_DISABLED = '1'
+$env:npm_config_cache = 'E:\codex\agent\build\npm-cache'
+npm.cmd run dev
+```
+
+```powershell
+# 删除回归全部使用临时数据，不删除你的真实会话，也不调用真实模型。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m pytest backend/tests/test_conversation_delete.py backend/tests/test_conversations.py backend/tests/test_execution_recovery.py --basetemp=E:\codex\agent\build\pytest-conversation-delete-manual -p no:cacheprovider -q
+# 全量后端回归。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests --basetemp=E:\codex\agent\build\pytest-conversation-delete-full-manual -p no:cacheprovider -q
+# 前端类型与浏览器交互检查；浏览器脚本拦截API并使用离线夹具。
+Set-Location E:\codex\agent\frontend
+.\node_modules\.bin\tsc.cmd --noEmit --incremental false
+node scripts/verify-conversations-browser.mjs http://127.0.0.1:3000
+```
+
+接口：DELETE /api/v1/conversations/{conversation_id}。先通过GET读取会话，随后提交下列JSON；这里是接口格式说明，不会直接执行删除。必须手动选择目标ID和确认时版本，不要自动遍历历史会话。
+
+```json
+{
+  "confirmation_conversation_id": "与路径完全一致的目标会话ID",
+  "expected_version": 7
+}
+```
+
+200表示完成并返回本次实际删除的Run数量；404表示目标已不存在；409表示确认版本变化、归属校验失败或执行清理未完成，需核对错误并重新确认/重试；422表示请求体错误。网络错误或5xx不能直接判断是否已删除，可先GET核对；不要自动循环DELETE。清理失败后本地记录仍保留，但相关执行可能已停止。删除墓碑、执行审计与检查点保留以防旧消息重放，不是数据库重置功能。
+
+## 32. v0.8.0展示验收与10/40工具预算（2026-10-18）
+
+本地.env已配置展示验收，修改后重启后端生效；前端表单和RunPolicy的新默认工具预算为10/40。不要期待刷新页面会覆盖旧会话的5/20预算：请新建会话或在新建Run表单调整预算。提高上限不代表每次都调用满额，更多实际工具请求可能增加费用和耗时。
+
+```dotenv
+# 当前采用的展示验收：保留实际置信度与证据范围，采纳可用的部分结果。
+RESEARCH_ACCEPT_PARTIAL_RESULTS=true
+RESEARCH_QUORUM_RATIO=0.5
+QUALITY_THRESHOLD=60
+QUALITY_RELAXED_REVIEW=true
+MAX_REPORT_REVISIONS=1
+```
+
+上面是.env配置，不是终端命令。接受的部分任务计入成功，不因为未满足全部可选细节而重复研究或生成运行警告；任务详情仍有逐项覆盖与结果边界。完全失败、未知引用、关键事实缺失、服务故障不会被隐藏。质量分数至少60，无关键问题且核心回答可用即可接受；风格改进不要求反复revise，实质缺陷仍最多修订一次，未解决时保留真实状态。
+
+```powershell
+# 在原服务终端按Ctrl+C停止旧后端，再启动；不要并行启动第二个业务Worker。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --reload --port 8000
+```
+
+```powershell
+# 前端另开终端：重启后新建会话，可看到单次Agent10次、每次研究40次。
+Set-Location E:\codex\agent\frontend
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:NEXT_TELEMETRY_DISABLED = '1'
+$env:npm_config_cache = 'E:\codex\agent\build\npm-cache'
+npm.cmd run dev
+```
+
+```powershell
+# 离线展示验收回归：不调用真实模型，不操作原有Run。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m pytest backend/tests/test_presentation_acceptance.py backend/tests/test_task_acceptance.py backend/tests/test_quality_output_recovery.py backend/tests/test_agent_contracts.py --basetemp=E:\codex\agent\build\pytest-presentation-manual -p no:cacheprovider -q
+# 全量后端回归。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests --basetemp=E:\codex\agent\build\pytest-presentation-full-manual -p no:cacheprovider -q
+# 前端类型、流程及离线浏览器验收；先启动本地前端。
+Set-Location E:\codex\agent\frontend
+.\node_modules\.bin\tsc.cmd --noEmit --incremental false
+node scripts/verify-agent-flow.mjs
+node scripts/verify-event-visuals.mjs
+node scripts/verify-report.mjs
+node scripts/verify-conversations-browser.mjs http://127.0.0.1:3000
+```
+
+如需恢复严格研究验收，可手动将.env中的同名参数改为下面的值，再重启后端并新建Run；不要向同一.env重复追加同名键。工具预算不由这几个验收参数改变，仍需在新建表单设置。
+
+```dotenv
+RESEARCH_ACCEPT_PARTIAL_RESULTS=false
+RESEARCH_QUORUM_RATIO=0.6
+QUALITY_THRESHOLD=80
+QUALITY_RELAXED_REVIEW=false
+MAX_REPORT_REVISIONS=2
+```
+
+新字段保存在既有结果JSON中，不需要Alembic迁移或重新计算Embedding。旧Run状态与旧会话预算不自动重写；执行指纹不一致的中断Run应保留记录并新建执行，不强行恢复可能已经派发的外部请求。
+
+## 33. v0.8.0Critic契约修复与有条件降级（2026-10-18）
+
+本次修复“任务已采纳但Critic补充任务能力声明冲突导致整轮失败”。无需增加.env参数：保留第32节的展示配置即可；RESEARCH_ACCEPT_PARTIAL_RESULTS=false时不启用本次Critic降级。新的模型任务会规范化“必需A且A/B备选”的冗余声明，其他错误仍有界修复，外部API直接提交的非法计划仍应由调用方改正。
+
+```powershell
+# 停止原后端后重启，加载网关、工具预算与工作流修复。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --reload --port 8000
+```
+
+```powershell
+# 前端另开终端重启，用于显示“审查降级”和真实决策改道。
+Set-Location E:\codex\agent\frontend
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:NEXT_TELEMETRY_DISABLED = '1'
+$env:npm_config_cache = 'E:\codex\agent\build\npm-cache'
+npm.cmd run dev
+```
+
+```powershell
+# 本次专项回归：使用同形错误响应和临时数据，不重跑真实旅行任务。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m pytest backend/tests/test_critic_reliability.py backend/tests/test_capability_planning.py backend/tests/test_presentation_acceptance.py --basetemp=E:\codex\agent\build\pytest-critic-reliability-manual -p no:cacheprovider -q
+# 全量后端回归。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests --basetemp=E:\codex\agent\build\pytest-critic-reliability-full-manual -p no:cacheprovider -q
+# 前端离线与浏览器回归；浏览器脚本拦截API，下载与截图均在E盘。
+Set-Location E:\codex\agent\frontend
+.\node_modules\.bin\tsc.cmd --noEmit --incremental false
+node scripts/verify-agent-flow.mjs
+node scripts/verify-event-visuals.mjs
+node scripts/verify-report.mjs
+node scripts/verify-conversations-browser.mjs http://127.0.0.1:3000
+```
+
+Critic/QualityGate不再额外限制为2次工具，默认单轮10次、Run总额40次；Planner仍默认不调研，允许后保持1次轻量查询。更多工具上限可能增加实际费用和耗时，权限、熔断及单工具限制仍有效。
+
+若页面显示“审查降级”，表示Critic未形成有效结构化决策，不代表审查通过；只有任务均已显式采纳、候选输出无critical且指定补充轮次已完成时，才可能转交成稿和独立QualityGate。质量验收仍可拒收。无法读取issues、JSON不完整、关键问题、服务故障和存储错误不会作为该降级的放行依据。
+
+失败Run不会自动变为成功，也没有修改既有预算、会话或知识库数据。代码指纹已变化，应新建Run，避免强行恢复旧执行可能造成重复外部请求。
+
+## 34. v0.8.0报告交付优先与置信度分离（2026-10-18）
+
+本节覆盖第32、33节中与新策略冲突的旧说明，旧说明保留为版本记录。当前默认同时启用RESEARCH_ACCEPT_PARTIAL_RESULTS=true和QUALITY_RELAXED_REVIEW=true，即进入交付优先模式；本地.env已是这两个值，无需重复添加参数或修改密钥。
+
+新执行的置信度表示已给出结论的模型自评可靠性，不再被任务覆盖率和部分完成的0.69/0.49上限重复压低。例如模型自评0.9、覆盖0.5且结论有据时，可显示置信度90%、标准覆盖50%、完成·部分采纳；没有伪造100%覆盖或上调模型原始自评。实时结论仍需真实取得的来源/导航，无来源结果不启用这一宽松路径；低自评分不设置保底分。旧Run的分数不重算，严格模式继续使用原来的保守公式。
+
+交付优先时，Quorum不足但有结果则直接成稿，没有足够结果也生成明确说明缺口的有限范围报告。Critic请求重规划不再重新执行整套任务；已有审查问题会传给成稿Agent。QualityGate的replan收敛为局部修订，保留原评分与critical问题，不伪造accept；最多按MAX_REPORT_REVISIONS修订，修订复核复用已取得证据，不再额外启动一轮工具核查。默认仍是一次修订、单次Agent10次工具、Run共享40次，预算上限不是应当用满的额度。
+
+模型服务请求失败、结构化输出修复耗尽或合稿异常时，交付不依赖额外LLM调用的资料整理报告，并保留错误记录。完整验收通过可显示completed；未完全核验的交付显示completed_with_warnings，报告正文也明确范围。保底报告不是Mock，不编造实时数字、导航链接、质量评分或通过决策。已知关键冲突不重新发布为确定结论；无可用材料时明确不能形成可靠结论。程序错误、持久化错误、执行控制异常及用户取消仍按真实状态处理，不能承诺第三方服务完全不可用时仍获得完整研究结论。
+
+报告草稿新增citation_source_urls，保存这一稿的来源URL顺序；后续QualityGate获取网页只追加编号，不再把已有导航引用挤到后面。修订、会话追问和仅表达改写共同继承该顺序。字段保存在既有JSON记录，不新建表、不迁移或重建RAG。
+
+```powershell
+# 停止原后端后重启；使用原langchain环境，临时文件仍留在E盘。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --reload --port 8000
+```
+
+```powershell
+# 前端另开终端重启，更新置信度说明和有限范围交付路径。
+Set-Location E:\codex\agent\frontend
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:NEXT_TELEMETRY_DISABLED = '1'
+$env:npm_config_cache = 'E:\codex\agent\build\npm-cache'
+npm.cmd run dev
+```
+
+```powershell
+# 专项回归：离线服务异常、一次修订、引用编号、持久化与取消边界；不调用真实模型或地图。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m pytest backend/tests/test_report_delivery.py backend/tests/test_presentation_acceptance.py backend/tests/test_critic_reliability.py -q -p no:cacheprovider --basetemp=E:\codex\agent\build\pytest-report-delivery-manual
+```
+
+重启后新建Run验证。旧失败/已取消记录不改状态、不自动重跑；执行指纹变化的旧中断Run不要强行继续。前端和下载报告均可读到未核实范围，不将“有报告交付”误称为“所有事实已验证”。
+
+## 35. v0.8.0搜索优先、网页按需读取（2026-10-18）
+
+本次仅修改后端网页资料策略，不增加.env参数、数据库迁移、模型或前端配置。需要联网的一般景点/历史/背景介绍，Planner默认只要求web_search；Researcher根据具体缺口自行追加web_fetch，搜索证据足够时可以不抓取。用户明确要求阅读指定原文、核对原句/表格等任务仍可将web_fetch列为必需，运行时不会偷偷删除该要求。
+
+```powershell
+# 停止旧后端后重新启动；使用已有langchain环境，所有临时文件放在E盘。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --reload --port 8000
+# 若后端已经使用--reload，请等待自动重载完成，再创建新Run。
+```
+
+```powershell
+# 离线专项回归：搜索即可完成、按需读取、可选失败保留搜索、必需读取仍严格校验、来源类型和引用编号。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m pytest backend/tests/test_web_fetch_on_demand.py backend/tests/test_capability_planning.py backend/tests/test_report_skill.py backend/tests/test_tool_runtime.py -q -p no:cacheprovider --basetemp=E:\codex\agent\build\pytest-web-fetch-on-demand-manual
+```
+
+新建“介绍黄山景点和历史”这类任务后，检查Plan中的required_capabilities通常为web_search；没有web_fetch不意味着漏调工具，有具体原文核对需求时仍允许追加。可选web_fetch失败可继续交付已有有据内容，但不能写成已成功读取原文。工具次数为上限，不要求凑满10/40。
+
+旧计划/会话Run不会自动改写；旧任务若明确保存了web_fetch必需要求仍按原契约执行，应新建Run验证默认策略，不强行恢复代码指纹变化的旧中断任务。搜索摘要、搜索返回的来源片段、直接读取片段在内部上下文中分别标识；同一URL补读后优先展示实际读取片段，编号不变。网站封禁、DNS与PDF读取限制并未因此被绕过。
+
+## 36. v0.8.0研究输出清理与索引恢复（2026-10-19）
+
+本次只更新后端研究响应处理，不新增配置、表、Embedding或前端参数。含有效文字的发现混入冒号/逗号等空项时，清理空项并保持验收索引正确；全部占位符、非法编号或清理后无支撑的met/partial仍要求重新生成。不会增加置信度或伪造验收通过。
+
+```powershell
+# 停止旧后端后启动；已有--reload进程可等待重载完成，无需同时启动第二个。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --reload --port 8000
+```
+
+```powershell
+# 独立终端离线回归；仅使用合成响应与E盘临时数据，不读取或修改真实Run。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+$env:LANGSMITH_TRACING = 'false'
+E:\conda_envs\langchain\python.exe -m pytest backend/tests/test_research_output_recovery.py backend/tests/test_task_acceptance.py backend/tests/test_quality_output_recovery.py -q -p no:cacheprovider --basetemp=E:\codex\agent\build\pytest-research-output-manual
+# 如需全量后端回归；不需要启动真实模型或地图服务。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests -q -p no:cacheprovider --basetemp=E:\codex\agent\build\pytest-research-output-full-manual
+```
+
+新建研究Run验证即可，不强行恢复旧中断Run。LangSmith启用既有内容追踪时，成功清理可看到model.research-output.normalization，内容仅为任务ID、原始移除位置和保留数量；若关闭内容追踪则沿用既有脱敏策略。全占位符或非法索引仍在model.structured-output.validation显示CONTRACT_INVALID与有界重试，不伪装成已清理成功。无需重启前端、迁移数据库或更改API密钥。
+
+## 37. v0.8.0累计报告与增量研究（2026-10-19）
+
+更新后，补充研究只对新增要求规划任务，但成稿必须合并来源报告仍有效的内容。质量审查会收到同一基线，逐项核对保留、更新、按需求删除或遗漏；遗漏不能仅按篇幅偏好通过。无需新增.env参数、前端开关或数据库迁移，单Agent10次/Run40次工具上限及默认一次报告修订不变。
+
+```powershell
+# 停止旧后端后启动；已经使用--reload时等待自动重载，不要重复占用8000端口。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --reload --port 8000
+```
+
+手工验证可在新对话中先生成“黄山主要景点介绍”，再以报告1为本轮依据发送“还有黄山的历史文化”。第二份报告应同时覆盖景点与历史文化，研究任务可以只有历史文化两项；章节允许重组，不要求照抄旧标题。对预算、日期等明确变更，应采用新要求并处理受影响内容，而不是把新旧值并列当作有效结论。
+
+已有报告2不会自动回写。若它已经遗漏景点，应选择仍包含景点的报告1作为“本轮依据”再发起补充研究，而不是直接沿用不完整报告2；确认执行建议使用的来源报告正确。无关新主题可不关联旧报告。执行指纹已变化的旧中断Run不要强行恢复。
+
+```powershell
+# 离线专项回归：两轮合稿、遗漏修复、变更约束、来源选择与编号；不调用真实模型或工具。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+$env:LANGSMITH_TRACING = 'false'
+E:\conda_envs\langchain\python.exe -m pytest backend/tests/test_cumulative_reports.py backend/tests/test_report_catalog_selection.py backend/tests/test_report_delivery.py backend/tests/test_conversations.py -q -p no:cacheprovider --basetemp=E:\codex\agent\build\pytest-cumulative-report-manual
+# 全量后端回归；所有临时数据库与测试产物仍留在E盘。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests -q -p no:cacheprovider --basetemp=E:\codex\agent\build\pytest-cumulative-report-full-manual
+```
+
+启用既有内容追踪时，LangSmith的成稿、修订和质量节点可看到独立report_update；关闭内容追踪时沿用原脱敏策略，不会为本功能强制上传历史全文。质量输出包含baseline_coverage，不复用原任务作为本轮任务。不接受“仅有新主题却声称完整更新”的显式遗漏结果，但审查语义仍依赖模型判断。来源超过30条时会有完整编号索引与限量摘录，编号不连续是保留身份的正常表现，不应据此认定来源不存在。
+
+修订后仍有缺口时，只能作为completed_with_warnings交付，不伪装成完整验收；历史基线有清晰时点与适用范围说明。关键事实冲突或结论禁用时不会重新发布历史正文，需从报告历史查看原版本。
+
+## 38. v0.8.0检查点类型与字典恢复修复（2026-10-19）
+
+适用于成稿出现“dict object has no attribute citation_source_urls”。内存/Postgres检查点和安全JSON账本已共用模型登记；成稿、修订、审查和有限交付也会重新校验恢复出的字典。无需修改密钥、安装模型、重建表、清理检查点或执行数据库迁移。
+
+```powershell
+# 先停止旧后端，再以已有langchain环境启动；已有--reload进程等待自动重载即可。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --reload --port 8000
+```
+
+```powershell
+# 离线恢复专项：使用生产工厂创建的序列化器，但不连接任何Postgres服务器或真实模型。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+$env:LANGSMITH_TRACING = 'false'
+E:\conda_envs\langchain\python.exe -m pytest backend/tests/test_report_checkpoint_types.py backend/tests/test_execution_recovery.py backend/tests/test_cumulative_reports.py -q -p no:cacheprovider --basetemp=E:\codex\agent\build\pytest-report-checkpoint-manual
+# 完整后端回归，临时文件仍仅写入E盘。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests -q -p no:cacheprovider --basetemp=E:\codex\agent\build\pytest-report-checkpoint-full-manual
+```
+
+重载完成后，在原对话中选择仍可用的原报告作为依据，再确认一次补充研究。原失败Run不会自动继续，也不会自动改成成功；执行指纹不兼容的中断Run应新建执行，不强行重放。上述测试覆盖生产序列化器、执行账本回放及审批暂停后的图恢复，但不等同于已经对真实数据库或真实模型重跑本次研究。
+
+## 39. v0.8.0完整报告带警告交付（2026-10-19）
+
+含警告不再意味着把完整稿替换成资料摘录。已有完整稿时保留文章、标注待核实段落并附核验说明；状态仍是completed_with_warnings，不伪造质量通过。若根本没有有效成稿，则依据已有材料生成报告并如实说明缺口；程序异常、存储错误和用户取消仍真实保留。
+
+```powershell
+# 后端更新，已有--reload进程等待重载即可；不要重复启动占用8000端口。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --reload --port 8000
+```
+
+```powershell
+# 前端更新状态文案，刷新开发页面；若未启动则另开终端运行。
+Set-Location E:\codex\agent\frontend
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:npm_config_cache = 'E:\codex\agent\build\npm-cache'
+$env:NEXT_TELEMETRY_DISABLED = '1'
+npm.cmd run dev
+```
+
+```powershell
+# 离线交付回归：不调用真实模型或工具，不修改原Run。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+$env:LANGSMITH_TRACING = 'false'
+E:\conda_envs\langchain\python.exe -m pytest backend/tests/test_warning_publication.py backend/tests/test_report_delivery.py backend/tests/test_cumulative_reports.py -q -p no:cacheprovider --basetemp=E:\codex\agent\build\pytest-warning-publication-manual
+# 全量后端测试。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests -q -p no:cacheprovider --basetemp=E:\codex\agent\build\pytest-warning-publication-full-manual
+# 前端类型、报告渲染与下载校验。
+Set-Location E:\codex\agent\frontend
+.\node_modules\.bin\tsc.cmd --noEmit --incremental false
+node scripts/verify-report.mjs
+```
+
+后续新Run会按新策略输出完整报告。旧Run的状态、草稿和最终报告不自动改写；本次只读导出的完整HTML/Markdown位于E:\codex\agent\build\reports，可直接打开HTML阅读或打印为PDF，也可编辑Markdown。所有导出内容必须保留待核实标注，不能把文件“已生成”误认为研究事实“已全部确认”。
+
+## 40. v0.8.0局限集中展示与50分基础验收（2026-10-19）
+
+一般细节缺口与研究阶段的limitations统一放到报告的“局限”，不再在正文逐段重复警告。默认QUALITY_THRESHOLD由60改为50；有用的核心回答达到阈值、没有阻断问题即可完成。未知引用、关键事实冲突、核心实时数据缺失仍真实记录，不通过虚增分数来保证成功。
+
+```powershell
+# .env已有QUALITY_THRESHOLD=50；已有进程不保证重新读取.env，建议停止后端后重新启动。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --reload --port 8000
+# 如果VSCode终端单独设置过QUALITY_THRESHOLD等环境变量，它会覆盖.env；请同步检查该终端设置。
+```
+
+```powershell
+# 前端在现有开发进程刷新即可；未启动时另开终端运行。
+Set-Location E:\codex\agent\frontend
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:npm_config_cache = 'E:\codex\agent\build\npm-cache'
+$env:NEXT_TELEMETRY_DISABLED = '1'
+npm.cmd run dev
+```
+
+```powershell
+# 专项测试只使用离线模型响应和E盘临时目录，不读取或改写生产Run。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+$env:LANGSMITH_TRACING = 'false'
+E:\conda_envs\langchain\python.exe -m pytest backend/tests/test_report_limitations.py backend/tests/test_warning_publication.py backend/tests/test_presentation_acceptance.py -q -p no:cacheprovider --basetemp=E:\codex\agent\build\pytest-limitations-manual
+# 全量后端回归。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests -q -p no:cacheprovider --basetemp=E:\codex\agent\build\pytest-limitations-full-manual
+# 前端验证同一份正文用于阅读和下载，旧报告的警告也不在顶部重复显示。
+Set-Location E:\codex\agent\frontend
+.\node_modules\.bin\tsc.cmd --noEmit --incremental false
+node scripts/verify-report.mjs
+```
+
+重启后新建Run查看新报告。旧Run不会自动重新研究、改变状态或覆盖历史报告。需要严格验收时可显式提高QUALITY_THRESHOLD，并设置QUALITY_RELAXED_REVIEW=false；不要仅将阈值设为50却把结果理解为所有事实已核实。程序错误、存储异常或取消不会被隐藏为完成；该策略提高可用报告的交付率，不承诺所有外部服务永不失败。
+
+LANGSMITH_TRACING=false仅用于上面的离线测试终端。正式运行建议另开终端，按.env启用原有LangSmith追踪，避免测试时设置的进程环境变量覆盖正常配置。
+
+## 41. v0.8.0引用证据审查与局部交付修复（2026-10-19）
+
+本次不再继续降低分数，而是修复审查看不到来源、局部问题被当作全局critical，以及定位失败清空正文的问题。QualityGate/修订阶段使用引用专用证据包，相关片段最多60,000字符；已获用户明确确认，仅用于当前报告/任务相关材料。首次成稿的写作摘录策略不变，不上传整库或密钥，不自动重跑旧Run。
+
+```powershell
+# 停止旧后端后重启，保证加载新的质量Schema、段落索引及证据包；不要重复占用8000端口。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+E:\conda_envs\langchain\python.exe -m uvicorn atlasflow.main:create_app --factory --app-dir backend/src --reload --port 8000
+```
+
+```powershell
+# 独立测试终端执行；只使用合成模型响应，不调用真实OpenRouter或网页工具。
+Set-Location E:\codex\agent
+$env:TEMP = 'E:\codex\tmp'
+$env:TMP = 'E:\codex\tmp'
+$env:PYTHONPYCACHEPREFIX = 'E:\codex\tmp\pycache'
+$env:LANGSMITH_TRACING = 'false'
+E:\conda_envs\langchain\python.exe -m pytest backend/tests/test_report_review.py backend/tests/test_report_catalog_selection.py backend/tests/test_report_delivery.py backend/tests/test_report_checkpoint_types.py backend/tests/test_cumulative_reports.py -q -p no:cacheprovider --basetemp=E:\codex\agent\build\pytest-review-packet-manual
+# 全量后端回归。
+E:\conda_envs\langchain\python.exe -m pytest backend/tests -q -p no:cacheprovider --basetemp=E:\codex\agent\build\pytest-review-packet-full-manual
+# 前端无需新增配置；验证报告仍可阅读和下载。
+Set-Location E:\codex\agent\frontend
+node scripts/verify-report.mjs
+.\node_modules\.bin\tsc.cmd --noEmit --incremental false
+```
+
+正式运行另开终端，使用.env中的原有LangSmith设置，避免测试终端的LANGSMITH_TRACING=false覆盖追踪。重启后在对话中选择原报告，再创建一次补充研究来验证新链路；旧Run的completed_with_warnings和49分不会自动消失，也不通过改写数据库冒充已经修复历史研究。当前分数保留模型实际返回值，decision、核心不变量和是否完成验收仍独立判断，高分不等于一定通过。

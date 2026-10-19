@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Sequence
 from urllib.parse import quote
@@ -14,7 +15,8 @@ from atlasflow.agents.contracts import (
     ReviewIssue,
     Severity,
 )
-from atlasflow.agents.report_skill import build_citation_catalog, cited_numbers
+from atlasflow.agents.report_skill import build_citation_catalog, cited_numbers, report_prose
+from atlasflow.agents.report_structure import report_paragraphs
 from atlasflow.schemas import Evidence, ToolCallRecord
 
 _TASK_REFERENCE = re.compile(r"\[task:([A-Za-z0-9][A-Za-z0-9_.-]*)\]")
@@ -23,23 +25,96 @@ _REFERENCE_ENTRY = re.compile(r"^\[(\d{1,3})\]\s+", re.MULTILINE)
 _REFERENCE_SECTION = re.compile(r"^##\s+(?:来源|参考文献)\s*$", re.MULTILINE)
 _REQUIRED_HEADINGS = {"摘要", "结论", "局限", "参考文献"}
 _LINK_SAFE_CHARS = "/:#?&=@%+;,"
+# Presentation and declared optional gaps do not invalidate a supported core answer.
+# Unknown citations, unknown URLs, missing sources and critical facts still block.
+_NON_BLOCKING_ISSUES = frozenset(
+    {
+        "report_missing_sections",
+        "report_internal_task_reference",
+        "report_nonacademic_inline_link",
+        "report_too_brief",
+        "presentation_style",
+        "presentation_completeness",
+        "report_limitation_note",
+        "report_optional_detail",
+    }
+)
+
+_CORE_INVARIANTS = {"report_missing_fresh_evidence", "report_update_missing_content"}
 
 
-def _without_fenced_code(report: str) -> str:
-    lines: list[str] = []
-    fence: str | None = None
-    for line in report.splitlines():
-        marker = re.match(r"^\s{0,3}(`{3,}|~{3,})", line)
-        if marker:
-            character = marker.group(1)[0]
-            if fence is None:
-                fence = character
-            elif fence == character:
-                fence = None
-            continue
-        if fence is None:
-            lines.append(line)
-    return "\n".join(lines)
+def calibrate_review_scope(
+    decision: QualityDecision, report: str, *, relaxed_review: bool,
+) -> QualityDecision:
+    """Calibrate explicit materiality, never infer it from a code or regex.
+
+    Unknown/legacy scope stays conservative. Only already-declared, non-core
+    limitations can be nonblocking; a local body error still needs correction.
+    Original model severity remains in the audit record.
+    """
+    if not relaxed_review:
+        return decision
+    paragraphs = {paragraph.id: paragraph for paragraph in report_paragraphs(report)}
+    issues: list[ReviewIssue] = []
+    changed = False
+    for issue in decision.issues:
+        severity = issue.severity
+        locations = [paragraphs[key] for key in issue.paragraph_ids if key in paragraphs]
+        if issue.code not in _CORE_INVARIANTS and issue.scope == "local" and locations:
+            if all(paragraph.in_limitations for paragraph in locations):
+                severity = Severity.INFO
+            elif severity is Severity.CRITICAL:
+                severity = Severity.WARNING
+        if severity is not issue.severity:
+            issue = issue.model_copy(update={
+                "severity": severity, "reported_severity": issue.reported_severity or issue.severity,
+            })
+            changed = True
+        issues.append(issue)
+    if not changed:
+        return decision
+    route = decision.decision
+    instructions = list(decision.revision_instructions)
+    if route is QualityRoute.REPLAN and not any(item.severity is Severity.CRITICAL for item in issues):
+        route = QualityRoute.REVISE
+        instructions = list(dict.fromkeys([
+            *instructions, *(item.recommendation for item in issues if item.recommendation.strip()),
+        ]))[:20]
+    return QualityDecision.model_validate({
+        **decision.model_dump(mode="python"), "issues": issues, "decision": route,
+        "revision_instructions": instructions,
+        "rationale": (decision.rationale + "；按显式影响范围区分局部缺陷与核心阻断，保留原始严重度")[:4000],
+    })
+
+
+def _nonblocking(issue: ReviewIssue) -> bool:
+    return issue.severity is not Severity.CRITICAL and issue.code not in _CORE_INVARIANTS and (
+        issue.code in _NON_BLOCKING_ISSUES
+        or (issue.scope == "local" and issue.severity is Severity.INFO and issue.paragraph_ids
+            and all(key.startswith("L") for key in issue.paragraph_ids))
+    )
+
+
+def report_audit_context(report: str, issues: Sequence[ReviewIssue]) -> str:
+    """Give QualityGate exact formatting facts, never a semantic pass verdict."""
+
+    prose = report_prose(report)
+    section = _REFERENCE_SECTION.search(prose)
+    entries = {
+        int(number)
+        for number in _REFERENCE_ENTRY.findall(prose[section.end() :] if section else "")
+    }
+    used = cited_numbers(report)
+    return "\n系统生成的报告格式核验（不证明论断真实或引用支持语义）：\n" + json.dumps(
+        {
+            "body_citations": sorted(used),
+            "reference_entries": sorted(entries),
+            "missing_reference_entries": sorted(used - entries),
+            "format_issues": [item.model_dump(mode="json") for item in issues],
+            "bibliography_policy": "文末允许[访问链接](URL)，只列正文实际使用的来源；正文不得用来源链接代替编号引用。",
+        },
+        ensure_ascii=False,
+    )
 
 
 def audit_report(
@@ -48,13 +123,18 @@ def audit_report(
     results: Sequence[ResearchResult],
     evidence: Sequence[Evidence],
     records: Sequence[ToolCallRecord],
+    *,
+    source_order: Sequence[str] = (),
+    relaxed_review: bool = False,
 ) -> list[ReviewIssue]:
     """Check section and reference contracts, not the truth of prose claims."""
 
-    prose = _without_fenced_code(report)
+    prose = report_prose(report)
     issues: list[ReviewIssue] = []
 
     def issue(severity: Severity, code: str, message: str, recommendation: str) -> None:
+        if relaxed_review and severity is not Severity.CRITICAL and code in _NON_BLOCKING_ISSUES:
+            severity = Severity.INFO
         issues.append(
             ReviewIssue(
                 severity=severity,
@@ -88,9 +168,7 @@ def audit_report(
         )
 
     source_urls = {
-        item.uri
-        for item in evidence
-        if item.uri and item.uri.startswith(("https://", "http://"))
+        item.uri for item in evidence if item.uri and item.uri.startswith(("https://", "http://"))
     }
     source_urls.update(
         url
@@ -118,7 +196,7 @@ def audit_report(
             "将正文链接替换为与系统引用目录对应的 [数字]，URL 仅保留在参考文献",
         )
 
-    catalog = build_citation_catalog(list(evidence), list(records))
+    catalog = build_citation_catalog(list(evidence), list(records), source_order=source_order)
     known_numbers = {item.number for item in catalog}
     used_numbers = cited_numbers(prose)
     unknown_numbers = used_numbers - known_numbers
@@ -172,40 +250,94 @@ def audit_report(
 
 
 def apply_report_audit(
-    decision: QualityDecision, issues: Sequence[ReviewIssue], *, threshold: int
+    decision: QualityDecision,
+    issues: Sequence[ReviewIssue],
+    *,
+    threshold: int,
+    relaxed_review: bool = False,
 ) -> QualityDecision:
     """Preserve model judgment unless a check proves acceptance impossible."""
 
-    if not issues:
+    if not issues and not relaxed_review:
         return decision
-    existing = {item.code for item in decision.issues}
-    merged = [*decision.issues, *(item for item in issues if item.code not in existing)][:20]
+    merged = list(decision.issues)
+    rank = {Severity.INFO: 0, Severity.WARNING: 1, Severity.CRITICAL: 2}
+    for audit_issue in issues:
+        previous = next((index for index, item in enumerate(merged)
+                         if item.code == audit_issue.code and item.task_id == audit_issue.task_id), None)
+        if previous is None:
+            merged.append(audit_issue)
+        elif rank[audit_issue.severity] > rank[merged[previous].severity]:
+            # A model label must not suppress a stronger deterministic invariant.
+            merged[previous] = audit_issue
+    merged = merged[:20]
     critical = any(item.severity is Severity.CRITICAL for item in merged)
+    blocking = [
+        item
+        for item in issues
+        if not (
+            relaxed_review and _nonblocking(item)
+        )
+    ]
     route = decision.decision
+    if (
+        relaxed_review
+        and route is QualityRoute.REVISE
+        and decision.score >= threshold
+        and merged
+        and all(
+            _nonblocking(item)
+            for item in merged
+        )
+    ):
+        route = QualityRoute.ACCEPT
     if critical:
         route = QualityRoute.REPLAN
-    elif route is QualityRoute.ACCEPT:
+    elif blocking and route is QualityRoute.ACCEPT:
         route = QualityRoute.REVISE
     instructions = list(decision.revision_instructions)
     for item in issues:
         if item.recommendation not in instructions and len(instructions) < 20:
             instructions.append(item.recommendation)
-    score = decision.score
-    if critical:
-        score = min(score, 59)
-    elif route is QualityRoute.REVISE:
-        score = min(score, threshold - 1)
     return QualityDecision.model_validate(
         {
             **decision.model_dump(mode="python"),
             "decision": route,
-            "score": score,
+            "score": decision.score,
             "rationale": (
                 decision.rationale
-                + "；确定性报告检查发现："
-                + "、".join(item.code for item in issues)
+                + (
+                    "；展示验收保留非阻断改进项，不要求额外修订"
+                    if route is QualityRoute.ACCEPT and merged
+                    else "；确定性报告检查发现：" + "、".join(item.code for item in issues)
+                    if issues
+                    else ""
+                )
             )[:4000],
             "issues": merged,
             "revision_instructions": instructions,
         }
     )
+
+
+def limit_to_report_repair(decision: QualityDecision) -> QualityDecision:
+    """Keep rejection/severity/score, but repair or remove claims locally.
+
+    Used only by presentation delivery. A critical citation or opening-hours
+    problem does not justify re-running every research task. If one bounded
+    revision cannot fix it, deliver the complete manuscript with unverified
+    passages explicitly marked; only use a source summary when no manuscript exists.
+    """
+
+    if decision.decision is not QualityRoute.REPLAN:
+        return decision
+    instructions = list(dict.fromkeys([
+        *decision.revision_instructions,
+        *(item.recommendation for item in decision.issues if item.recommendation.strip()),
+        "只依据已有材料局部修正；无法核实的具体断言必须删除或明确标为未核实，不得编造来源。",
+    ]))[:20]
+    return decision.model_copy(update={
+        "decision": QualityRoute.REVISE,
+        "rationale": (decision.rationale + "；交付优先：改为一次局部修订，不重启整轮研究")[:4000],
+        "revision_instructions": instructions,
+    })

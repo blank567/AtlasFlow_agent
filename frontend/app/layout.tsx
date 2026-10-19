@@ -7,6 +7,7 @@ import "./report.css";
 import "./visual-system.css";
 import "./evaluations.css";
 import "./evaluation-detail-dialog.css";
+import "./conversations.css";
 
 const geist = localFont({
   src: "../node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2",

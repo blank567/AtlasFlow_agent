@@ -521,12 +521,14 @@ async def test_non_writing_agents_use_concise_output_contracts() -> None:
                         for index in (1, 2)
                     ],
                 }
-            elif name == "research_result_v03_concise":
+            elif name == "research_result_v04_acceptance":
                 payload = {
                     "summary": "任务完成。",
                     "findings": ["得到一个可核验结论。"],
                     "limitations": [],
                     "confidence": 0.9,
+                    "assessments": [{"criterion_index": 1, "status": "met", "finding_indices": [1],
+                                     "source_ids": [], "reason": "该发现覆盖本项标准"}],
                 }
             elif name == "critique_decision_v03_concise":
                 payload = {
@@ -536,14 +538,14 @@ async def test_non_writing_agents_use_concise_output_contracts() -> None:
                     "issues": [],
                     "supplemental_tasks": [],
                 }
-            elif name == "quality_decision_v03_concise":
-                payload = {
+            elif name == "quality_decision_v04_verdict":
+                payload = {"verdict": {
                     "decision": "accept",
                     "score": 90,
                     "rationale": "报告满足验收标准。",
                     "issues": [],
                     "revision_instructions": [],
-                }
+                }}
             else:  # pragma: no cover - makes an unexpected schema obvious.
                 raise AssertionError(name)
             return {"content": json.dumps(payload, ensure_ascii=False)}
@@ -576,18 +578,18 @@ async def test_non_writing_agents_use_concise_output_contracts() -> None:
     await gateway.synthesize_report("测试精简输出", plan, results)
 
     planning = client.requests["research_plan_v03_concise"]
-    research = client.requests["research_result_v03_concise"]
+    research = client.requests["research_result_v04_acceptance"]
     review = client.requests["critique_decision_v03_concise"]
-    quality = client.requests["quality_decision_v03_concise"]
+    quality = client.requests["quality_decision_v04_verdict"]
     assert planning["max_tokens"] == 2400
-    assert research["max_tokens"] == 1600
+    assert research["max_tokens"] == 1820
     assert review["max_tokens"] == 2200
-    assert quality["max_tokens"] == 1400
+    assert quality["max_tokens"] == 1800
     assert client.text_requests[-1]["max_tokens"] == 7000
-    assert planning["reasoning_effort"] == "low"
-    assert research["reasoning_effort"] == "low"
-    assert review["reasoning_effort"] == "low"
-    assert quality["reasoning_effort"] == "minimal"
+    assert planning["reasoning_effort"] == "none"
+    assert research["reasoning_effort"] == "none"
+    assert review["reasoning_effort"] == "none"
+    assert quality["reasoning_effort"] == "none"
     assert client.text_requests[-1]["reasoning_effort"] == "low"
 
     plan_schema = planning["response_format"]["json_schema"]["schema"]
@@ -601,7 +603,8 @@ async def test_non_writing_agents_use_concise_output_contracts() -> None:
     assert research_schema["properties"]["findings"]["maxItems"] == 8
     assert research_schema["properties"]["limitations"]["maxItems"] == 5
     assert review["response_format"]["json_schema"]["schema"]["properties"]["issues"]["maxItems"] == 8
-    assert quality["response_format"]["json_schema"]["schema"]["properties"]["revision_instructions"]["maxItems"] == 8
+    quality_branches = quality["response_format"]["json_schema"]["schema"]["properties"]["verdict"]["anyOf"]
+    assert all(branch["properties"]["revision_instructions"]["maxItems"] == 8 for branch in quality_branches)
 
 
 @pytest.mark.asyncio
@@ -620,6 +623,8 @@ async def test_researcher_retries_output_that_exceeds_local_concise_limit() -> N
                         "findings": ["必要事实。"],
                         "limitations": [],
                         "confidence": 0.8,
+                        "assessments": [{"criterion_index": 1, "status": "met", "finding_indices": [1],
+                                         "source_ids": [], "reason": "该发现覆盖本项标准"}],
                     },
                     ensure_ascii=False,
                 )

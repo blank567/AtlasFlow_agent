@@ -40,6 +40,7 @@ export type ResearchTask = {
   requires_fresh_data?: boolean;
   required_capabilities?: string[];
   capability_alternatives?: string[][];
+  repairs_task_ids?: string[];
   plan_version: number;
   provenance?: "initial" | "supplement" | "replan" | string;
 };
@@ -70,6 +71,13 @@ export type ResearchResult = {
   plan_version: number;
   summary: string;
   confidence?: number;
+  outcome?: "unassessed" | "complete" | "partial";
+  execution_accepted?: boolean | null;
+  reported_confidence?: number | null;
+  criteria_coverage?: number | null;
+  findings?: string[];
+  limitations?: string[];
+  assessments?: Array<{ criterion_index: number; status: "met" | "partial" | "unmet"; finding_indices: number[]; source_ids?: string[]; reason: string }>;
   attempt?: number;
   duration_ms?: number;
 };
@@ -133,6 +141,7 @@ export type ExecutionMetrics = {
   total_tasks: number;
   successful_tasks: number;
   failed_tasks: number;
+  partial_tasks?: number;
   peak_concurrency: number;
   plan_versions: number;
   supplement_rounds: number;
@@ -192,6 +201,7 @@ export type ToolCallRecord = {
   summary?: string | null;
   navigation_url?: string | null;
   navigation_urls?: string[];
+  navigation_leg_indices?: number[];
   error?: string | null;
   created_at: string;
 };
@@ -221,6 +231,9 @@ export type RunRecord = {
   auto_approve?: boolean;
   policy?: RunPolicy;
   source_run_id?: string;
+  conversation_id?: string;
+  conversation_turn_id?: string;
+  execution_mode?: "research" | "report_revision";
   recovery?: RecoveryInfo;
   retrieval_snapshot?: Record<string, unknown> | null;
   created_at?: string;
@@ -263,6 +276,7 @@ export type AnalyticsData = {
     task_success_rate?: number;
     successful_tasks?: number;
     failed_tasks?: number;
+    partial_tasks?: number;
     avg_quality_score?: number;
     total_supplement_rounds?: number;
     total_replans?: number;

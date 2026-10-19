@@ -131,6 +131,8 @@ class AmapRouteTool(BaseTool):
         # A narrow safety check for explicit departure gates, NOT semantic tool routing.
         gates = re.findall(r"从([^，。；\n,;]{1,40}?(?:东|西|南|北)(?:[一二三四五六七八九0-9])?门)出发", context.user_query)
         places = arguments.get("stops", [arguments.get("origin"), arguments.get("destination")])
+        if arguments.get("days") and not arguments.get("stops"):
+            places = arguments["days"][0]
         for gate in gates:
             expected = self._place_name(gate.replace("北大", "北京大学"))
             expected = self._local_name(expected, arguments.get("city", ""), None)
@@ -168,6 +170,9 @@ class AmapRouteTool(BaseTool):
                 AmapPlace(name=item).model_dump() if isinstance(item, str) else item
                 for item in normalized["stops"]
             ]
+        if isinstance(normalized.get("days"), list):
+            normalized["days"] = [[AmapPlace(name=item).model_dump() if isinstance(item, str) else item
+                                   for item in day] for day in normalized["days"]]
         value = json.dumps(normalized, ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(value.encode()).hexdigest()
 
@@ -314,7 +319,8 @@ class AmapRouteTool(BaseTool):
                         }
                     )
         if not any(
-            isinstance(item.get("location"), str)
+            isinstance(item, dict)
+            and isinstance(item.get("location"), str)
             and self._valid_location(item["location"])
             and self._poi_score(item, place, city) is not None
             for item in pois
@@ -333,6 +339,33 @@ class AmapRouteTool(BaseTool):
             )
             raw = data.get("pois", [])
             pois.extend(raw if isinstance(raw, list) else [])
+        # A long combination of address, district and name can suppress an
+        # otherwise correct POI in the provider's keyword index. Broaden only
+        # the SEARCH expression, never the local identity/qualifier checks.
+        # At most one extra query; no LLM guessing loop or pagination sweep.
+        if not any(
+            isinstance(item, dict)
+            and isinstance(item.get("location"), str)
+            and self._valid_location(item["location"])
+            and self._poi_score(item, place, city) is not None
+            for item in pois
+        ):
+            if keywords != target:
+                fallback = await self._get_json(client, "/v5/place/text", {
+                    "key": self._api_key, "keywords": target, "region": city,
+                    "city_limit": "true", "page_size": "25", "page_num": "1",
+                })
+                raw = fallback.get("pois", [])
+                pois.extend(raw if isinstance(raw, list) else [])
+            elif not re.search(r"(?:东|西|南|北)(?:[一二三四五六七八九0-9])?门$", self._place_name(target)):
+                fallback = await self._get_json(client, "/v3/assistant/inputtips", {
+                    "key": self._api_key, "keywords": target, "city": city,
+                    "citylimit": "true", "datatype": "all",
+                })
+                tips = fallback.get("tips", [])
+                if isinstance(tips, list):
+                    pois.extend({**tip, "adname": self._district_name(tip.get("district"))}
+                                for tip in tips if isinstance(tip, dict))
         pois = [
             item
             for item in pois

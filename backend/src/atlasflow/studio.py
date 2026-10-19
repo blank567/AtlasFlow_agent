@@ -60,6 +60,8 @@ def build_studio_graph(*, settings: Settings, model: ModelGateway):
         max_replans=settings.max_replans,
         max_revisions=settings.max_report_revisions,
         quality_threshold=settings.quality_threshold,
+        accept_partial_results=settings.research_accept_partial_results,
+        quality_relaxed_review=settings.quality_relaxed_review,
         studio_mode=True,
     )
     return workflow.graph
@@ -81,5 +83,10 @@ def create_studio_graph():
         app_name=settings.app_name,
         max_retries=settings.max_tool_retries,
     )
-    model = OpenRouterModelGateway(client, settings.llm_model)
+    model = OpenRouterModelGateway(
+        client, settings.llm_model,
+        quality_threshold=settings.quality_threshold,
+        accept_partial_results=settings.research_accept_partial_results,
+        relaxed_review=settings.quality_relaxed_review,
+    )
     return build_studio_graph(settings=settings, model=model)

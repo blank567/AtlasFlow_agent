@@ -137,10 +137,23 @@ def decode_safe(value: Any) -> Any:
 def checkpoint_types() -> dict[str, type[BaseModel]]:
     from atlasflow.agents import contracts
     from atlasflow.schemas import Evidence, ToolCallRecord
-    names = ("AgentError", "CritiqueDecision", "DraftVersion", "ExecutionMetrics",
-             "PlanLineage", "QualityDecision", "ResearchPlan", "ResearchResult",
+    names = ("AgentError", "BaselineCoverage", "CritiqueDecision", "CriterionAssessment",
+             "DraftVersion", "ExecutionMetrics", "PlanLineage", "QualityDecision",
+             "ReportBaselineSection", "ReportUpdateContext", "ResearchPlan", "ResearchResult",
              "ResearchTask", "ReviewContext", "ReviewIssue", "RouteRecord", "RunPolicy",
              "SupplementBatch")
     return {**{name: getattr(contracts, name) for name in names},
             "Evidence": Evidence, "ToolCallRecord": ToolCallRecord,
             "RecoveryInfo": RecoveryInfo, "UnknownCall": UnknownCall}
+
+
+def checkpoint_msgpack_modules() -> list[tuple[str, str]]:
+    """One explicit allowlist for memory and PostgreSQL checkpoints, never pickle.
+
+    Keep model registration shared with the durable JSON journal. Adding a new
+    Agent contract must not work in tests while decoding as dict in production.
+    """
+    modules = [(model.__module__, model.__name__) for model in checkpoint_types().values()]
+    modules.extend(("atlasflow.agents.contracts", name) for name in
+                   ("CritiqueRoute", "QualityRoute", "ReplanReason", "Severity"))
+    return list(dict.fromkeys(modules))

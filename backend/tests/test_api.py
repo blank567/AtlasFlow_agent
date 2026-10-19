@@ -195,8 +195,8 @@ def test_run_api_propagates_structured_policy_to_the_workflow() -> None:
         assert created.status_code == 202
         assert created.json()["policy"] == {
             **policy,
-            "max_tool_calls_per_turn": 5,
-            "max_tool_calls_per_run": 20,
+            "max_tool_calls_per_turn": 10,
+            "max_tool_calls_per_run": 40,
             "planner_allow_research": False,
             "knowledge_mode": "default",
             "knowledge_space": None,
@@ -210,8 +210,8 @@ def test_run_api_propagates_structured_policy_to_the_workflow() -> None:
     assert final["status"] == "completed"
     assert final["policy"] == {
         **policy,
-        "max_tool_calls_per_turn": 5,
-        "max_tool_calls_per_run": 20,
+        "max_tool_calls_per_turn": 10,
+        "max_tool_calls_per_run": 40,
         "planner_allow_research": False,
         "knowledge_mode": "default",
         "knowledge_space": None,
@@ -226,8 +226,8 @@ def test_run_api_propagates_structured_policy_to_the_workflow() -> None:
     assert gateway.plan_policies[0] is not None
     assert gateway.plan_policies[0].model_dump(mode="json") == {
         **policy,
-        "max_tool_calls_per_turn": 5,
-        "max_tool_calls_per_run": 20,
+        "max_tool_calls_per_turn": 10,
+        "max_tool_calls_per_run": 40,
         "planner_allow_research": False,
         "knowledge_mode": "default",
         "knowledge_space": None,

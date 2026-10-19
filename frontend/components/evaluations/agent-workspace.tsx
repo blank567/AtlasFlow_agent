@@ -7,7 +7,7 @@ import { AgentVariant, EvaluationArtifact, EvaluationBudget, EvaluationCase, Eva
 import { KnowledgeSpace, KnowledgeSpaceVersion } from "../../lib/types";
 import { BudgetFields, CaseSelection, CheckList, ExecutionOptions, ExperimentHistory, ExperimentResultHeader, GoldDetails, LaunchExperiment, MarkdownArtifact, ModelSelection, ResultCells, ResultDetails, WithinExperimentComparison, budgetError } from "./evaluation-common";
 
-const DEFAULT_POLICY = { planner_allow_research: false, replan_requires_critical_issue: true, max_tool_calls_per_turn: 5, max_tool_calls_per_run: 20 };
+const DEFAULT_POLICY = { planner_allow_research: false, replan_requires_critical_issue: true, max_tool_calls_per_turn: 10, max_tool_calls_per_run: 40 };
 
 export function AgentEvaluationWorkspace() {
   const catalog = useEvaluationCatalog("agent");

@@ -89,6 +89,44 @@ export function safeReportUrl(url?: string): string | undefined {
   return undefined;
 }
 
+// Legacy reports may not include execution warnings in their Markdown. Keep
+// reading, Markdown download and HTML export consistent, without changing a Run.
+export function reportWithLimitations(report: string, warnings: readonly string[]): string {
+  if (!report.trim() || !warnings.length) return report;
+  const compact = (value: string) => value.replace(/\s+/g, "");
+  const plain = (value: string) => value.replace(/[\\`*_[\]<>#]/g, "\\$&");
+  const normalizedReport = compact(report);
+  const missing = [...new Set(warnings.map((item) => item.replace(/[\r\n]+/g, " ").trim()))]
+    .filter((item) => item && !normalizedReport.includes(compact(item)) && !normalizedReport.includes(compact(plain(item))));
+  if (!missing.length) return report;
+
+  const headings: { title: string; start: number }[] = [];
+  let offset = 0;
+  let fence: { marker: string; length: number } | undefined;
+  for (const line of report.match(/[^\n]*\n|[^\n]+$/g) ?? []) {
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})([^\r\n]*)/);
+    if (fence) {
+      if (marker && marker[1][0] === fence.marker && marker[1].length >= fence.length && !marker[2].trim()) fence = undefined;
+    } else if (marker) {
+      fence = { marker: marker[1][0], length: marker[1].length };
+    } else {
+      const heading = line.match(/^##[ \t]+(.+?)[ \t]*#*[ \t]*\r?\n?$/);
+      if (heading) headings.push({ title: heading[1].trim(), start: offset });
+    }
+    offset += line.length;
+  }
+  const references = headings.findIndex(({ title }) => title === "参考文献" || title === "来源");
+  const boundary = references >= 0 ? headings[references].start : report.length;
+  const limitations = headings.findIndex(({ title, start }) => start < boundary && ["局限", "局限与待核实事项", "局限与不确定性"].includes(title));
+  const insertion = limitations >= 0 ? (headings[limitations + 1]?.start ?? report.length) : boundary;
+  // Escape Markdown controls so a diagnostic cannot create headings, citations,
+  // images or executable links. Actual report Markdown is left untouched.
+  const notes = (limitations >= 0 ? "### 交付说明" : "## 局限\n\n### 交付说明")
+    + "\n\n以下事项作为本报告的核验边界保留，不代表相关内容已获确认。\n\n"
+    + missing.map((item) => `- ${plain(item)}`).join("\n\n");
+  return `${report.slice(0, insertion).trimEnd()}\n\n${notes}\n\n${report.slice(insertion).trimStart()}`;
+}
+
 export function reportFilename(query: string, runId: string): string {
   const title = query.replace(/[\u0000-\u001f\u007f<>:"/\\|?*]/g, " ").replace(/\s+/g, " ").trim().slice(0, 60).replace(/[. ]+$/g, "");
   const id = runId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 8) || "export";

@@ -111,6 +111,8 @@ class ToolCallRecord(BaseModel):
     summary: str | None = None
     navigation_url: str | None = None
     navigation_urls: list[str] = Field(default_factory=list)
+    # Original itinerary leg numbers, not re-numbered after partial failures.
+    navigation_leg_indices: list[int] = Field(default_factory=list)
     error: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
@@ -189,6 +191,11 @@ class RunRecord(BaseModel):
 
     id: str = Field(default_factory=lambda: str(uuid4()))
     source_run_id: str | None = None
+    # Internal conversation seed; public create/rerun requests cannot supply it.
+    conversation_id: str | None = None
+    conversation_turn_id: str | None = None
+    execution_mode: Literal["research", "report_revision"] = "research"
+    continuation_input: dict[str, Any] | None = None
     query: str
     auto_approve: bool = True
     policy: RunPolicy = Field(default_factory=RunPolicy)
@@ -234,6 +241,9 @@ class RunRecord(BaseModel):
 class RunListItem(BaseModel):
     id: str
     source_run_id: str | None = None
+    conversation_id: str | None = None
+    conversation_turn_id: str | None = None
+    execution_mode: Literal["research", "report_revision"] = "research"
     query: str
     auto_approve: bool
     policy: RunPolicy
@@ -251,12 +261,15 @@ class RunListItem(BaseModel):
         return cls(
             id=record.id,
             source_run_id=record.source_run_id,
+            conversation_id=record.conversation_id,
+            conversation_turn_id=record.conversation_turn_id,
+            execution_mode=record.execution_mode,
             query=record.query,
             auto_approve=record.auto_approve,
             policy=record.policy,
             status=record.status,
             plan_version=record.plan.plan_version if record.plan else None,
-            task_count=(len(record.plan.tasks) if record.plan else record.metrics.total_tasks),
+            task_count=(0 if record.execution_mode == "report_revision" else len(record.plan.tasks) if record.plan else record.metrics.total_tasks),
             quality_score=(record.quality_history[-1].score if record.quality_history else None),
             duration_ms=record.metrics.duration_ms,
             model_calls=record.metrics.model_calls,
@@ -283,6 +296,7 @@ class AnalyticsSummary(BaseModel):
     total_tasks: int = Field(ge=0)
     successful_tasks: int = Field(ge=0)
     failed_tasks: int = Field(ge=0)
+    partial_tasks: int = Field(default=0, ge=0)
     total_supplement_rounds: int = Field(ge=0)
     total_replans: int = Field(ge=0)
     total_revisions: int = Field(ge=0)

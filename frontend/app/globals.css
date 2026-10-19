@@ -384,6 +384,7 @@ progress::-webkit-progress-value { background: var(--primary); } progress::-moz-
 .flowNode.node-running, .taskNode.node-running { border-color: var(--primary) !important; box-shadow: 0 0 0 3px rgba(79,103,216,.1) !important; }
 .flowNode.node-completed, .taskNode.node-completed { border-color: #a8d9c5 !important; }
 .flowNode.node-failed, .taskNode.node-failed { border-color: #e8aeb0 !important; }
+.taskNode.node-partial { border-color: #d5b078 !important; }
 .flowNodeLabel { display: flex; align-items: center; gap: 10px; text-align: left; }
 .flowNodeLabel > div { display: grid; gap: 3px; }
 .flowNodeLabel strong { font-size: 11px; }
@@ -393,6 +394,14 @@ progress::-webkit-progress-value { background: var(--primary); } progress::-moz-
 .nodeState.running { background: var(--primary); box-shadow: 0 0 0 4px var(--primary-soft); animation: pulse 1.2s infinite; }
 .nodeState.completed { background: var(--green); box-shadow: 0 0 0 4px var(--green-soft); }
 .nodeState.failed { background: var(--red); box-shadow: 0 0 0 4px var(--red-soft); }
+.nodeState.partial { background: #ad762b; box-shadow: 0 0 0 4px #f6eddf; }
+.taskAcceptanceList { margin-top: 10px !important; }
+.taskAcceptanceList li::before { content: "·" !important; color: var(--muted) !important; }
+.taskAcceptanceList li[data-status="met"]::before { content: "✓" !important; color: var(--green) !important; }
+.taskAcceptanceList li[data-status="partial"]::before { content: "~" !important; color: #ad762b !important; }
+.taskAcceptanceList li[data-status="unmet"]::before { content: "–" !important; color: var(--red) !important; }
+.taskAcceptanceList small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
+.taskAcceptanceList li, .taskAcceptanceList small { overflow-wrap: anywhere; }
 .drawerBackdrop { position: fixed; z-index: 120; inset: 0; background: rgba(20, 28, 40, .3); backdrop-filter: blur(2px); }
 .detailDrawer { position: absolute; inset: 0 0 0 auto; width: min(440px, 92vw); overflow-y: auto; background: white; box-shadow: -20px 0 60px rgba(25, 34, 50, .15); animation: drawerIn .18s ease-out; }
 @keyframes drawerIn { from { transform: translateX(24px); opacity: .7; } }

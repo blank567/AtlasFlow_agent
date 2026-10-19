@@ -14,6 +14,7 @@ from atlasflow.agents.contracts import (
     QualityDecision,
     QualityRoute,
     ReplanReason,
+    ReportUpdateContext,
     ResearchPlan,
     ResearchResult,
     ResearchTask,
@@ -264,17 +265,20 @@ class FakeModelGateway:
         draft_version: int = 1,
         *,
         tool_context: str = "",
+        report_update: ReportUpdateContext | None = None,
     ) -> DraftVersion:
         self._called("synthesize_report")
         self._maybe_fail("synthesize_report")
         citation = " [1]" if "\n[1] " in tool_context else ""
+        baseline = "\n\n".join(item.content for item in report_update.sections) if report_update else ""
         return DraftVersion(
             version=draft_version,
             plan_version=plan.plan_version,
             content=(
                 f"## 摘要\n\n{query}。{citation}\n\n"
                 "## 分析\n\n研究任务已完成。\n\n"
-                "## 结论\n\n测试结论成立。\n\n"
+                + baseline + "\n\n"
+                + "## 结论\n\n测试结论成立。\n\n"
                 "## 局限\n\n离线测试结果，不代表实时资料。\n\n"
                 "## 参考文献\n\n本测试不使用外部来源。"
             ),
@@ -288,6 +292,7 @@ class FakeModelGateway:
         results: Sequence[ResearchResult],
         *,
         tool_context: str = "",
+        report_update: ReportUpdateContext | None = None,
     ) -> QualityDecision:
         del query, results
         index = self._called("evaluate_report") - 1
@@ -322,6 +327,11 @@ class FakeModelGateway:
             revision_instructions=(
                 ["补充缺失分析并改善结构"] if route is QualityRoute.REVISE else []
             ),
+            baseline_coverage=[
+                {"section_id": item.section_id, "status": "retained", "location": item.title,
+                 "reason": "离线夹具已把基线主题保留到报告；不代表真实模型的语义评测"}
+                for item in report_update.sections
+            ] if report_update else [],
         )
 
     async def revise_report(
@@ -332,18 +342,21 @@ class FakeModelGateway:
         results: Sequence[ResearchResult],
         *,
         tool_context: str = "",
+        report_update: ReportUpdateContext | None = None,
     ) -> DraftVersion:
         del decision
         self._called("revise_report")
         self._maybe_fail("revise_report")
         citation = " [1]" if "\n[1] " in tool_context else ""
+        baseline = "\n\n".join(item.content for item in report_update.sections) if report_update else ""
         return DraftVersion(
             version=draft.version + 1,
             plan_version=draft.plan_version,
             content=(
                 f"## 摘要\n\n{query}。{citation}\n\n"
                 "## 分析\n\n按质量意见修订后的测试结论。\n\n"
-                "## 结论\n\n修订后的结论成立。\n\n"
+                + baseline + "\n\n"
+                + "## 结论\n\n修订后的结论成立。\n\n"
                 "## 局限\n\n离线测试结果，不代表实时资料。\n\n"
                 "## 参考文献\n\n本测试不使用外部来源。"
             ),
@@ -415,6 +428,13 @@ def make_test_settings() -> Settings:
         database_path=":memory:",
         knowledge_backend="memory",
         knowledge_worker_enabled=False,
+        # Existing regression scenarios intentionally retain the strict profile.
+        # Presentation tests explicitly exercise the new production defaults.
+        research_quorum_ratio=0.6,
+        research_accept_partial_results=False,
+        quality_relaxed_review=False,
+        quality_threshold=80,
+        max_report_revisions=2,
         tool_timeout_seconds=2,
     )
 
@@ -424,6 +444,7 @@ def make_test_container(
     include_web: bool = True,
     model: FakeModelGateway | None = None,
     scenario: GatewayScenario | None = None,
+    settings: Settings | None = None,
 ):
     if model is not None and scenario is not None:
         raise ValueError("pass model or scenario, not both")
@@ -434,4 +455,4 @@ def make_test_container(
         reranker=FakeRerankProvider(),
         web_search_tool=FakeWebSearchTool() if include_web else None,
     )
-    return build_container(make_test_settings(), providers=providers)
+    return build_container(settings or make_test_settings(), providers=providers)

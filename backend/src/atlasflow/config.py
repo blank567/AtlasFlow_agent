@@ -1,6 +1,6 @@
+import re
 from functools import lru_cache
 from pathlib import Path
-import re
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -86,15 +86,22 @@ class Settings(BaseSettings):
     max_research_tasks: int = Field(default=5, ge=2, le=5)
     max_research_concurrency: int = Field(default=3, ge=1, le=3)
     max_research_attempts: int = Field(default=2, ge=1, le=2)
-    research_quorum_ratio: float = Field(default=0.6, gt=0.0, le=1.0)
+    research_quorum_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
+    # Presentation: reliability is distinct from coverage; no artificial score floor.
+    research_accept_partial_results: bool = True
     max_supplement_rounds: int = Field(default=1, ge=0, le=1)
     max_supplement_tasks: int = Field(default=2, ge=1, le=2)
     max_tasks_per_plan: int = Field(default=7, ge=5, le=7)
     max_replans: int = Field(default=1, ge=0, le=1)
-    max_report_revisions: int = Field(default=2, ge=0, le=2)
-    quality_threshold: int = Field(default=80, ge=80, le=100)
+    max_report_revisions: int = Field(default=1, ge=0, le=2)
+    quality_threshold: int = Field(default=50, ge=50, le=100)
+    quality_relaxed_review: bool = True
     max_tool_retries: int = 2
     tool_timeout_seconds: float = 120.0
+    # Independent network phases, bounded again by the outer tool execution limit.
+    web_fetch_connect_timeout_seconds: float = Field(default=8.0, gt=0, le=60)
+    web_fetch_read_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    web_fetch_total_timeout_seconds: float = Field(default=35.0, gt=0, le=300)
     provider_timeout_seconds: float = 90.0
     rag_top_k: int = 5
 

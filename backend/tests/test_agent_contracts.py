@@ -40,19 +40,19 @@ def test_research_plan_rejects_cycles() -> None:
         )
 
 
-def test_default_tool_budgets_allow_five_per_decision_and_twenty_per_run() -> None:
+def test_default_tool_budgets_allow_ten_per_decision_and_forty_per_run() -> None:
     policy = RunPolicy()
-    assert policy.max_tool_calls_per_turn == 5
-    assert policy.max_tool_calls_per_run == 20
+    assert policy.max_tool_calls_per_turn == 10
+    assert policy.max_tool_calls_per_run == 40
 
 
-def test_quality_accept_requires_score_at_least_eighty() -> None:
-    with pytest.raises(ValidationError, match="at least 80"):
+def test_quality_accept_requires_score_at_least_fifty() -> None:
+    with pytest.raises(ValidationError, match="at least 50"):
         QualityDecision(
             decision=QualityRoute.ACCEPT,
             plan_version=1,
             draft_version=1,
-            score=79,
+            score=49,
             rationale="分数不足",
             issues=[],
             revision_instructions=[],

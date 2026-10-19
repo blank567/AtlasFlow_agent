@@ -59,7 +59,7 @@ function AnalyticsContent({ data }: { data: AnalyticsData }) {
         <dl className="analyticsDefinition">
           <div><dt>模型调用</dt><dd>{summary.total_model_calls ?? "未记录"}</dd></div>
           <div><dt>研究任务</dt><dd>{summary.total_tasks ?? "未记录"}</dd></div>
-          <div><dt>任务完成</dt><dd>{summary.successful_tasks ?? "未记录"}成功 / {summary.failed_tasks ?? "未记录"}失败</dd></div>
+          <div><dt>任务验收</dt><dd>{summary.successful_tasks ?? "未记录"}完成 / {summary.partial_tasks ?? 0}部分完成 / {summary.failed_tasks ?? "未记录"}失败</dd></div>
           <div><dt>任务成功率</dt><dd>{formatPercent(summary.task_success_rate)}</dd></div>
           <div><dt>平均质量评分</dt><dd>{quality}{quality !== "未评估" && <span>/100</span>}</dd></div>
         </dl>
